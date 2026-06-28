@@ -19,6 +19,9 @@ from .pipeline import detect_scenes, DetectResult, Scene, DetectionMethod
 # -- Video object -------------------------------------------------------
 from .core.amverge_video import AmvergeVideo
 
+# -- Scene detector -----------------------------------------------------
+from .core.scene_detector import SceneDetector
+
 # -- Binaries -----------------------------------------------------------
 from .core.binaries import get_binary, get_ffmpeg, get_ffprobe
 
@@ -110,6 +113,8 @@ __all__ = [
     "detect_scenes", "DetectResult", "Scene", "DetectionMethod",
     # Video object
     "AmvergeVideo",
+    # Scene detector
+    "SceneDetector",
     # Binaries
     "get_binary", "get_ffmpeg", "get_ffprobe",
     # Video

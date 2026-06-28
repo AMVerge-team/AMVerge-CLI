@@ -77,6 +77,9 @@ class DetectResult:
         similar_pairs: Pairs of scene indices flagged as visually similar.
         output_dir: Directory where clip files and JSON were written.
         scenes_json: Path to the saved ``scenes.json`` file.
+        detection_time: Seconds the detection took (set by :class:`SceneDetector`).
+        method: Detection method used.
+        video_path: Source video path (set by :class:`SceneDetector`).
     """
     scenes: list[Scene]
     similar_pairs: list[tuple[int, int]]
@@ -92,6 +95,100 @@ class DetectResult:
             "output_dir": self.output_dir,
             "scenes_json": self.scenes_json,
         }
+
+    def to_json(self, path: str | Path) -> str:
+        """Save result as JSON to the given path.
+
+        Returns the path written to.
+        """
+        p = Path(path)
+        p.write_text(json.dumps(self.to_dict(), indent=2))
+        return str(p)
+
+    def filter(self, min_duration: float = 1.0) -> "DetectResult":
+        """Return a new result with scenes shorter than ``min_duration`` removed.
+
+        Adjacent scenes are merged (end time extended) when a short scene
+        is removed from between them.
+        """
+        kept = [s for s in self.scenes if s.duration >= min_duration]
+        if len(kept) == len(self.scenes):
+            return self
+
+        reindexed: list[Scene] = []
+        for i, s in enumerate(kept):
+            reindexed.append(Scene(
+                index=i,
+                start=s.start,
+                end=s.end,
+                duration=s.duration,
+                path=s.path,
+                thumbnail=s.thumbnail,
+                original_file=s.original_file,
+            ))
+
+        old_to_new = {s.index: i for i, s in enumerate(kept)}
+        pairs = [
+            (old_to_new[a], old_to_new[b])
+            for a, b in self.similar_pairs
+            if a in old_to_new and b in old_to_new
+        ]
+
+        return DetectResult(
+            scenes=reindexed,
+            similar_pairs=pairs,
+            output_dir=self.output_dir,
+            scenes_json=self.scenes_json,
+        )
+
+    def merge_similar(self, threshold: float = 0.1) -> "DetectResult":
+        """Return a new result where similar pairs are merged into single scenes.
+
+        Two similar scenes become one with ``start`` of the first and
+        ``end`` of the second.
+        """
+        if not self.similar_pairs:
+            return self
+
+        merge_set: set[int] = set()
+        for a, b in self.similar_pairs:
+            merge_set.add(a)
+            merge_set.add(b)
+
+        merged: list[Scene] = []
+        skip_until = -1
+        for i, s in enumerate(self.scenes):
+            if i < skip_until:
+                continue
+            if i in merge_set:
+                for j in range(i + 1, len(self.scenes)):
+                    if j in merge_set and (i, j) in self.similar_pairs:
+                        merged.append(Scene(
+                            index=len(merged),
+                            start=s.start,
+                            end=self.scenes[j].end,
+                            duration=round(self.scenes[j].end - s.start, 3),
+                            path=s.path,
+                            thumbnail=s.thumbnail,
+                            original_file=s.original_file,
+                        ))
+                        skip_until = j + 1
+                        break
+                else:
+                    merged.append(s)
+            else:
+                merged.append(Scene(
+                    index=len(merged),
+                    start=s.start, end=s.end, duration=s.duration,
+                    path=s.path, thumbnail=s.thumbnail, original_file=s.original_file,
+                ))
+
+        return DetectResult(
+            scenes=merged,
+            similar_pairs=[],
+            output_dir=self.output_dir,
+            scenes_json=self.scenes_json,
+        )
 
 
 def detect_scenes(

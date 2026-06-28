@@ -8,6 +8,7 @@ All public functions and classes are re-exported here for convenience::
 from .amverge_video import AmvergeVideo
 from .binaries import get_binary, get_ffmpeg, get_ffprobe
 from .codec_utils import check_if_hevc
+from .scene_detector import SceneDetector
 from .detection.keyframe import detect_cuts_by_keyframe
 from .detection.edge import detect_cuts_by_edge
 from .diagnostics import get_gpu_info, get_versions
