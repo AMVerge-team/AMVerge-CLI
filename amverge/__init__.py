@@ -65,7 +65,11 @@ from .core.thumbnails import make_thumbnail, generate_thumbnails
 from .core.similarity import check_pair_similar, find_similar_pairs
 
 # -- Codec detection ----------------------------------------------------
-from .core.codec_utils import check_if_hevc
+from .core.codec_utils import (
+    check_if_hevc,
+    VALID_CODECS, VALID_AUDIO, VALID_CONTAINERS, VALID_HARDWARE,
+    CODEC_ALIASES, CODEC_PROFILES, PRORES_CODECS, AUDIO_FFMPEG,
+)
 from .core.hevc import is_hevc
 
 # -- Image --------------------------------------------------------------
@@ -123,6 +127,8 @@ __all__ = [
     "check_pair_similar", "find_similar_pairs",
     # Codec
     "check_if_hevc", "is_hevc",
+    "VALID_CODECS", "VALID_AUDIO", "VALID_CONTAINERS", "VALID_HARDWARE",
+    "CODEC_ALIASES", "CODEC_PROFILES", "PRORES_CODECS", "AUDIO_FFMPEG",
     # Image
     "CropData", "crop_image",
     # IPC

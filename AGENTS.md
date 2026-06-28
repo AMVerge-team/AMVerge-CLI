@@ -91,7 +91,7 @@ AMVerge-CLI/
 │       ├── ipc.py                   emit_progress(), emit_event(), log(), check_if_path_exists(), build_video_cache_prefix()
 │       ├── probe_utils.py           probe_video_fps/duration/dimensions/total_frames via ffprobe
 │       ├── scene_utils.py           scenes_to_objects(), scenes_frames_to_seconds()
-│       ├── codec_utils.py           check_if_hevc() via ffprobe
+│       ├── codec_utils.py           check_if_hevc(), CODEC_PROFILES, AUDIO_FFMPEG, CODEC_ALIASES, PRORES_CODECS, _resolve_gpu()
 │       ├── keyframe_align.py        get_keyframe_timestamps_pyav(), classify_scenes_by_keyframe_alignment()
 │       ├── smart_cut.py             cut_scene(), cut_all_scenes() - lossless copy / smartcut / reencode
 │       ├── nelux_runtime.py         _get_nelux_video_reader() - Windows DLL config for Nelux
@@ -190,14 +190,15 @@ for scene in result.scenes:
 | `core/segmenter.py` | Windows 32,767-char command line limit. If video has >1500 cut points, chunks into multiple ffmpeg passes. Do not remove this chunking. |
 | `core/keyframes.py` | Fast path reads packet metadata only (no frame decode). Falls back to full decode for pathological encodes. Deduplicates I-frames within short windows. |
 | `core/detection/edge.py` | `import cv2` is inside the function body, not at module level. Raises clear `ImportError` pointing to `pip install amverge[edge]` if OpenCV missing. Keep it this way - edge is an optional dep. |
-| `wizard.py` | `_credits_table()` is imported from `commands/credits.py` to avoid duplication. `_wizard_export()` imports `CODEC_PROFILES`, `AUDIO_FFMPEG`, `CODEC_ALIASES`, `PRORES_CODECS`, `_resolve_gpu` from `commands/export.py` - single source of truth for codec mappings. |
+| `wizard.py` | `_credits_table()` is imported from `commands/credits.py` to avoid duplication. `_wizard_export()` imports `CODEC_PROFILES`, `AUDIO_FFMPEG`, `CODEC_ALIASES`, `PRORES_CODECS`, `_resolve_gpu` from `core/codec_utils.py` - single source of truth for codec mappings. |
 | `ui.py` | `err` console (stderr) used for all interactive/wizard output. `console` (stdout) for command results. Do not mix them. `ok()`/`warn()`/`fail()` use ASCII-safe marker `>` - Python `●`/`→` crash on CP1252 Windows terminals. |
 | `core/similarity.py` | `find_similar_pairs()` accepts both `scene_index` and `index` keys for V1 (collect_scenes) / V2 (Scene.to_dict()) compat. |
-| `commands/export.py` | `CODEC_PROFILES` maps 14 codec names to CPU/GPU ffmpeg encoders. `AUDIO_FFMPEG` maps 10 audio choices. `CODEC_ALIASES` maps `h264`/`hevc`/`h265` to `*_main` profiles. `PRORES_CODECS` set for mov-container enforcement. `_resolve_gpu()` handles auto/gpu/cpu hardware choice. Wizard imports these to avoid duplication. |
+| `commands/export.py` | `CODEC_PROFILES`/`AUDIO_FFMPEG`/`CODEC_ALIASES`/`PRORES_CODECS`/`_resolve_gpu` imported from `core/codec_utils.py`. |
 | `pipeline.py` | `DetectionMethod` is `Literal["keyframe", "edge", "transnetv2"]`. TransNetV2 path uses `decode_and_detect_scenes()` + `cut_all_scenes()` (V2 pipeline). Monkey-patches `emit_progress` on `scene_detection`/`smart_cut` module-local refs (not `ipc` module) to route IPC progress to Rich callback. |
 | `core/ipc.py` | IPC protocol for Tauri app. V2 events: `PROGRESS\|pct\|msg`, `INITIAL_CLIPS_READY\|json`, `CLIP_READY\|idx\|path\|mode`, `PHASE1_COMPLETE`, `REENCODE_PROGRESS\|done\|total`. stdout reserved for final JSON. Never mix IPC output with Rich output. |
 | `core/scene_detection.py` | TransNetV2 inference. Requires `[ml]` extra. `TRANSNET_AVAILABLE` flag guards import at module level - raises clear `ImportError` if missing. Do not import torch at module level in other files. |
 | `core/smart_cut.py` | Four cut modes: `copy` (start on keyframe), `snapped_copy` (HEVC CPU - snaps to nearest keyframe within 5s), `smartcut` (H.264 - encode tiny head + lossless tail), `reencode` (full fallback). Never remove the HEVC CPU path - HEVC re-encode without CUDA takes 10+ minutes. |
+| `core/codec_utils.py` | `check_if_hevc()` via ffprobe. Also contains `CODEC_PROFILES` (14 codec -> ffmpeg encoder mappings), `AUDIO_FFMPEG` (10 audio choices), `CODEC_ALIASES`, `PRORES_CODECS`, `_resolve_gpu()`. Single source of truth - `commands/export.py` and `wizard.py` import from here. Do not duplicate these dicts. |
 | `core/nelux_runtime.py` | Windows DLL setup for Nelux video reader. Set `AMVERGE_FFMPEG_BIN` env var to FFmpeg shared DLL directory. Idempotent - safe to call multiple times. |
 | `core/keyframe_align.py` | `get_keyframe_timestamps_pyav` uses PyAV demux with `type(stream.discard).nonkey` enum (PyAV 17.x; was `"NONKEY"` string in older PyAV). `classify_scenes_by_keyframe_alignment` partitions scenes for Phase 1 vs Phase 2 cutting. |
 | `core/thumbnails_streaming.py` | V1 backend mode only. Emits events as each thumbnail completes. Not used in V2 backend. |

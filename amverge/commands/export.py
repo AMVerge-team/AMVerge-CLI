@@ -12,86 +12,14 @@ import typer
 
 from ..core.binaries import get_ffmpeg
 from ..core.discord_rpc import RPC_AVAILABLE, DiscordRPC
+from ..core.codec_utils import (
+    VALID_CODECS, VALID_AUDIO, VALID_CONTAINERS, VALID_HARDWARE,
+    CODEC_ALIASES, CODEC_PROFILES, PRORES_CODECS, AUDIO_FFMPEG,
+    _resolve_gpu,
+)
 from ..ui import banner, console, err, make_progress, make_table, ok, fail, dim
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
-VALID_CODECS = {
-    "copy",
-    "h264", "hevc", "h265",
-    "h264_main", "h264_high", "h264_high10", "h264_high422",
-    "h265_main", "h265_main10", "h265_main12", "h265_main422_10",
-    "av1_main",
-    "prores_422_lt", "prores_422", "prores_422_hq", "prores_4444", "prores_4444_xq",
-}
-VALID_AUDIO = {"copy", "aac", "aac_320", "pcm16", "pcm24", "flac", "alac", "opus", "mp3", "none"}
-VALID_CONTAINERS = {"mp4", "mkv", "mov"}
-VALID_HARDWARE = {"auto", "gpu", "cpu"}
-
-CODEC_ALIASES: dict[str, str] = {
-    "h264": "h264_main",
-    "hevc": "h265_main",
-    "h265": "h265_main",
-}
-
-CODEC_PROFILES: dict[str, dict[str, str | None]] = {
-    "h264_main":       {"cpu": "libx264",   "gpu": "h264_nvenc",      "args": "-profile:v main"},
-    "h264_high":       {"cpu": "libx264",   "gpu": "h264_nvenc",      "args": "-profile:v high"},
-    "h264_high10":     {"cpu": "libx264",   "gpu": None,              "args": "-profile:v high10"},
-    "h264_high422":    {"cpu": "libx264",   "gpu": None,              "args": "-profile:v high422"},
-    "h265_main":       {"cpu": "libx265",   "gpu": "hevc_nvenc",      "args": "-profile:v main"},
-    "h265_main10":     {"cpu": "libx265",   "gpu": "hevc_nvenc",      "args": "-profile:v main10"},
-    "h265_main12":     {"cpu": "libx265",   "gpu": None,              "args": "-profile:v main12"},
-    "h265_main422_10": {"cpu": "libx265",   "gpu": None,              "args": "-profile:v main422-10"},
-    "av1_main":        {"cpu": "libsvtav1", "gpu": "av1_nvenc",       "args": ""},
-    "prores_422_lt":   {"cpu": "prores_ks", "gpu": None,              "args": "-profile:v 0"},
-    "prores_422":      {"cpu": "prores_ks", "gpu": None,              "args": "-profile:v 1"},
-    "prores_422_hq":   {"cpu": "prores_ks", "gpu": None,              "args": "-profile:v 2"},
-    "prores_4444":     {"cpu": "prores_ks", "gpu": None,              "args": "-profile:v 3"},
-    "prores_4444_xq":  {"cpu": "prores_ks", "gpu": None,              "args": "-profile:v 4"},
-}
-
-PRORES_CODECS = {k for k in CODEC_PROFILES if k.startswith("prores")}
-
-AUDIO_FFMPEG: dict[str, list[str]] = {
-    "copy":     ["-c:a", "copy"],
-    "aac":      ["-c:a", "aac"],
-    "aac_320":  ["-c:a", "aac", "-b:a", "320k"],
-    "pcm16":    ["-c:a", "pcm_s16le"],
-    "pcm24":    ["-c:a", "pcm_s24le"],
-    "flac":     ["-c:a", "flac"],
-    "alac":     ["-c:a", "alac"],
-    "opus":     ["-c:a", "libopus"],
-    "mp3":      ["-c:a", "libmp3lame"],
-    "none":     ["-an"],
-}
-
-
-def _parse_select(select: str, max_index: int) -> list[int]:
-    indices: set[int] = set()
-    for part in select.split(","):
-        part = part.strip()
-        if "-" in part:
-            lo, hi = part.split("-", 1)
-            indices.update(range(int(lo), int(hi) + 1))
-        else:
-            indices.add(int(part))
-    return sorted(i for i in indices if 0 <= i <= max_index)
-
-
-def _resolve_gpu(hardware: str, codec: str) -> bool:
-    if codec == "copy":
-        return False
-    if codec in PRORES_CODECS:
-        return False
-    if hardware == "cpu":
-        return False
-    if hardware == "gpu":
-        return True
-    try:
-        import torch
-        return torch.cuda.is_available()
-    except ImportError:
-        return False
 
 
 def export(
