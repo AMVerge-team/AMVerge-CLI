@@ -129,10 +129,9 @@ Wraps: `build_video_cache_prefix()`, manual .npy file I/O.
 ~~`TransNetConfig` class~~ Done. `core/transnet_config.py`, frozen dataclass exported from `amverge`.
 ---
 
-## 10. Clean Up Examples
+## 10. Clean Up Examples ✅
 
-- `examples/custom-pipeline/full_pipeline.py`: uses `import torch`, `import numpy as np`
-- Should use `AmvergeVideo` or helper functions
+~~`full_pipeline.py` uses `AmvergeVideo`, `SceneCache`, `ThumbnailGenerator`, `SimilarityChecker`. No more raw `torch`/`numpy` imports.~~
 
 ---
 
@@ -149,4 +148,4 @@ Wraps: `build_video_cache_prefix()`, manual .npy file I/O.
 | 7 | `ImageCrop` rename | ✅ done |
 | 8 | `check_environment()` | ✅ done |
 | 9 | `TransNetConfig` | ✅ done |
-| 10 | Clean examples | pending |
+| 10 | Clean examples | ✅ done |
