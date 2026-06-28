@@ -65,9 +65,9 @@ Wraps: manual ffmpeg concat, `CODEC_PROFILES`, `AUDIO_FFMPEG`, `resolve_gpu()`.
 
 ---
 
-## 4. Similarity / Comparison
+## 4. Similarity / Comparison ✅
 
-### `SimilarityChecker` class
+~~`SimilarityChecker` class~~ Done. `core/similarity_checker.py`, exported from `amverge`.
 
 ```python
 from amverge import SimilarityChecker
@@ -172,7 +172,7 @@ config = TransNetConfig()
 | 3 | `SceneExporter` | ✅ done |
 | 4 | `SceneCache` | ✅ done |
 | 5 | `ThumbnailGenerator` | ✅ done |
-| 6 | `SimilarityChecker` | pending |
+| 6 | `SimilarityChecker` | ✅ done |
 | 7 | `ImageCrop` rename | pending |
 | 8 | `check_environment()` | pending |
 | 9 | `TransNetConfig` | pending |
