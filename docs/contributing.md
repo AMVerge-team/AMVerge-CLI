@@ -7,7 +7,7 @@ Contributions are welcome. Bug fixes, new features, and improvements to detectio
 ## Setup
 
 ```bash
-git clone https://github.com/moongetsu/AMVerge-CLI
+git clone https://github.com/AMVerge-team/AMVerge-CLI
 cd AMVerge-CLI
 pip install -e ".[ml,edge,discord]"
 ```

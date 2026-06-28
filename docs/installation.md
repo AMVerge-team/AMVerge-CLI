@@ -96,7 +96,7 @@ amverge version   # all dependency versions
 ## Development Install
 
 ```bash
-git clone https://github.com/moongetsu/AMVerge-CLI
+git clone https://github.com/AMVerge-team/AMVerge-CLI
 cd AMVerge-CLI
 pip install -e .
 pip install -e ".[ml,edge,discord]"
