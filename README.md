@@ -117,6 +117,14 @@ for scene in result.scenes:
 
 ---
 
+## AI Agents
+
+An [AGENTS.md](AGENTS.md) file is included for AI coding assistants (OpenCode, Claude Code, Cursor, etc.).
+
+That said - using AI to work on this without understanding the codebase is not recommended. You can save time with AI tools, but you need to know what you are doing first. Read the code, understand the architecture, then use the agents file if it helps your workflow.
+
+---
+
 ## Credits
 
 Built by [Moongetsu](https://github.com/Moongetsu) as a standalone port of the [AMVerge](https://github.com/crptk/AMVerge) backend.
