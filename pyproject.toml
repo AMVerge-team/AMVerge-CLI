@@ -10,10 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 authors = [
-    { name = "Moongetsu", email = "moongetsu@proton.me" },
+    { name = "Moongetsu", email = "moongetsu1@gmail.com" },
+
 ]
 maintainers = [
-    { name = "Moongetsu", email = "moongetsu@proton.me" },
+    { name = "Moongetsu", email = "moongetsu1@gmail.com" },
+
     { name = "Crptk", url = "https://github.com/crptk" },
 ]
 keywords = [
