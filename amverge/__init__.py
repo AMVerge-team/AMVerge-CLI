@@ -22,6 +22,9 @@ from .core.amverge_video import AmvergeVideo
 # -- Scene detector -----------------------------------------------------
 from .core.scene_detector import SceneDetector
 
+# -- Scene exporter -----------------------------------------------------
+from .core.scene_exporter import SceneExporter
+
 # -- Binaries -----------------------------------------------------------
 from .core.binaries import get_binary, get_ffmpeg, get_ffprobe
 
@@ -115,6 +118,8 @@ __all__ = [
     "AmvergeVideo",
     # Scene detector
     "SceneDetector",
+    # Scene exporter
+    "SceneExporter",
     # Binaries
     "get_binary", "get_ffmpeg", "get_ffprobe",
     # Video
