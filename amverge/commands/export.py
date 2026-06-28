@@ -140,6 +140,10 @@ def export(
         fail("No scenes in JSON.")
         raise typer.Exit(1)
 
+    for s in all_scenes:
+        if "scene_index" not in s and "index" in s:
+            s["scene_index"] = s["index"]
+
     max_idx = max(s["scene_index"] for s in all_scenes)
     selected = (
         [s for s in all_scenes if s["scene_index"] in _parse_select(select, max_idx)]
@@ -206,7 +210,7 @@ def _export_individual(scenes: list[dict], output: Path, ff: str, codec: str, au
             progress.advance(task)
             progress.update(task, description=f"Exported scene_{idx:04d}")
 
-    ok(f"{len(scenes)} clips → {output}")
+    ok(f"{len(scenes)} clips -> {output}")
 
 
 def _export_merged(scenes: list[dict], output: Path, ff: str, codec: str, audio: str, container: str, use_gpu: bool) -> None:
@@ -242,4 +246,4 @@ def _export_merged(scenes: list[dict], output: Path, ff: str, codec: str, audio:
 
         progress.update(task, completed=1)
 
-    ok(f"Merged → {dst}")
+    ok(f"Merged -> {dst}")

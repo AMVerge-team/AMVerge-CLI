@@ -122,13 +122,13 @@ def make_table(*columns: tuple[str, str | None, dict], title: str | None = None)
 
 def ok(msg: str) -> None:
     """Print a success line to stdout."""
-    console.print(f"[accent]●[/] {msg}")
+    console.print(f"[accent]>[/] {msg}")
 
 def warn(msg: str) -> None:
-    console.print(f"[warn]●[/] {msg}")
+    console.print(f"[warn]>[/] {msg}")
 
 def fail(msg: str) -> None:
-    err.print(f"[error]●[/] {msg}")
+    err.print(f"[error]>[/] {msg}")
 
 def dim(msg: str) -> None:
     console.print(f"[muted]{msg}[/]")

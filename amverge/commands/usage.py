@@ -13,11 +13,12 @@ def usage() -> None:
         ("note",     "bright_black", {}),
         title="Workflow commands",
     )
-    t.add_row("detect",  "VIDEO  [--output DIR] [--method keyframe|edge]",  "split video into scenes")
+    t.add_row("detect",  "VIDEO  [--output DIR] [--method keyframe|edge|transnetv2]",  "split video into scenes")
     t.add_row("",        "[--min-duration 0.25] [--workers 4]",             "")
     t.add_row("",        "[--no-thumbnails] [--no-similarity] [--ipc]",     "")
-    t.add_row("export",  "VIDEO  --scenes JSON  [--output DIR]",            "export scenes to disk")
-    t.add_row("",        "[--select 0,2,5-8]  [--merge]  [--codec copy]",  "")
+    t.add_row("export",  "VIDEO  --scenes JSON  [--output DIR]",               "export scenes to disk")
+    t.add_row("",        "[--select 0,2,5-8]  [--merge]  [--codec copy]",     "")
+    t.add_row("",        "[--audio copy] [--container mp4] [--hardware auto]", "")
     t.add_row("merge",   "CLIP CLIP ...  --output FILE",                    "concat clips")
     console.print(t)
 

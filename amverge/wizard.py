@@ -222,7 +222,7 @@ def _wizard_detect() -> None:
         )
     console.print(t)
     ok(f"{len(result.scenes)} scenes  ·  {len(result.similar_pairs)} similar pairs")
-    dim(f"scenes.json → {result.scenes_json}")
+    dim(f"scenes.json -> {result.scenes_json}")
 
 
 def _wizard_export() -> None:
@@ -305,7 +305,7 @@ def _wizard_export() -> None:
             finally:
                 os.unlink(cfile)
             progress.update(task, completed=1)
-        ok(f"Merged → {dst}")
+        ok(f"Merged -> {dst}")
     else:
         with make_progress(show_count=True) as progress:
             task = progress.add_task(f"Exporting {len(selected)} clips", total=len(selected))
@@ -319,7 +319,7 @@ def _wizard_export() -> None:
                     subprocess.run([ff, "-y", "-i", s["path"], "-c:v", codec, "-c:a", "aac", dst],
                                    capture_output=True, creationflags=CREATE_NO_WINDOW, check=True)
                 progress.advance(task)
-        ok(f"{len(selected)} clips → {output_path}")
+        ok(f"{len(selected)} clips -> {output_path}")
 
 
 def _wizard_merge() -> None:
@@ -386,7 +386,7 @@ def _wizard_merge() -> None:
             os.unlink(cfile)
         progress.update(task, completed=1)
 
-    ok(f"{len(clips)} clips → {out}")
+    ok(f"{len(clips)} clips -> {out}")
 
 
 def _wizard_info() -> None:
