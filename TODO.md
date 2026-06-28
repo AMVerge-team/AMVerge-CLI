@@ -86,19 +86,9 @@ Wraps: `check_pair_similar()`, `find_similar_pairs()`.
 ~~`ImageCrop` class~~ Done. `core/image_crop.py`, extends `CropData` with `apply()`. Exported as `ImageCrop` and `CropData`.
 ---
 
-## 6. Diagnostics
+## 6. Diagnostics ✅
 
-Already done: `get_gpu_info()`, `get_versions()`.
-
-### Missing: `check_environment()`
-
-```python
-from amverge import check_environment
-result = check_environment()
-```
-
-Wraps `amverge doctor` logic. Already exists in commands/doctor.py.
-
+~~`check_environment()`~~ Done. `core/diagnostics.py`. Returns structured `EnvironmentCheck` with `CheckResult` dataclasses. `amverge doctor` now delegates to this.
 ---
 
 ## 7. Thumbnails ✅
@@ -163,6 +153,6 @@ config = TransNetConfig()
 | 5 | `ThumbnailGenerator` | ✅ done |
 | 6 | `SimilarityChecker` | ✅ done |
 | 7 | `ImageCrop` rename | ✅ done |
-| 8 | `check_environment()` | pending |
+| 8 | `check_environment()` | ✅ done |
 | 9 | `TransNetConfig` | pending |
 | 10 | Clean examples | pending |
