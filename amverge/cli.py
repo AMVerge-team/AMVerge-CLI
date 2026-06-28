@@ -4,6 +4,7 @@ from .commands.detect import detect
 from .commands.export import export
 from .commands.merge import merge
 from .commands.info import info
+from .commands.probe import probe
 from .commands.about import about
 from .commands.credits import credits
 from .commands.changelog import changelog
@@ -23,6 +24,7 @@ app.command()(detect)
 app.command()(export)
 app.command()(merge)
 app.command()(info)
+app.command()(probe)
 
 # App backend replacement (hidden - called by Rust sidecar)
 app.command(hidden=True)(backend)

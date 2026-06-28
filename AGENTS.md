@@ -72,7 +72,8 @@ AMVerge-CLI/
 │   │   ├── detect.py        amverge detect
 │   │   ├── export.py        amverge export
 │   │   ├── merge.py         amverge merge
-│   │   ├── info.py          amverge info
+│   │   ├── info.py          amverge info  (stream metadata via PyAV)
+│   │   ├── probe.py         amverge probe  (V2 diagnostics: codec/HEVC/keyframes/scene cache)
 │   │   ├── usage.py         amverge usage  (CLI reference page)
 │   │   ├── about.py         amverge about
 │   │   ├── credits.py       amverge credits  (exports _credits_table() for wizard reuse)
