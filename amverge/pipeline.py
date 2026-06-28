@@ -28,11 +28,33 @@ from .core.similarity import find_similar_pairs
 from .core.video import get_video_duration
 
 DetectionMethod = Literal["keyframe", "edge", "transnetv2"]
+"""Valid detection methods for :func:`detect_scenes`.
+
+- ``"keyframe"``  fast, cuts at I-frame boundaries (lossless)
+- ``"edge"``      Canny edge + cosine similarity (needs OpenCV)
+- ``"transnetv2"``  ML scene detection via TransNetV2 (needs PyTorch)
+"""
+
 ProgressCb = Callable[[str, int, str], None]
+"""Progress callback signature: ``(stage: str, percent: int, message: str)``.
+
+Stages: ``"detect"``, ``"segment"``, ``"thumbnails"``, ``"similarity"``.
+"""
 
 
 @dataclass
 class Scene:
+    """A detected scene with timing and file path information.
+
+    Attributes:
+        index: Zero-based scene number.
+        start: Start time in seconds from video start.
+        end: End time in seconds from video start.
+        duration: Scene length in seconds (``end - start``).
+        path: Absolute path to the output clip file (``.mp4``).
+        thumbnail: Absolute path to the thumbnail JPEG, or None.
+        original_file: Stem of the source video file.
+    """
     index: int
     start: float
     end: float
@@ -42,17 +64,28 @@ class Scene:
     original_file: str
 
     def to_dict(self) -> dict:
+        """Serialize to a plain dict with keys matching attribute names."""
         return asdict(self)
 
 
 @dataclass
 class DetectResult:
+    """Result of a :func:`detect_scenes` call.
+
+    Attributes:
+        scenes: List of detected :class:`Scene` objects.
+        similar_pairs: Pairs of scene indices flagged as visually similar.
+        output_dir: Directory where clip files and JSON were written.
+        scenes_json: Path to the saved ``scenes.json`` file.
+    """
     scenes: list[Scene]
     similar_pairs: list[tuple[int, int]]
     output_dir: str
     scenes_json: str
 
     def to_dict(self) -> dict:
+        """Serialize to a dict with ``scenes``, ``similar_pairs``,
+        ``output_dir``, and ``scenes_json`` keys."""
         return {
             "scenes": [s.to_dict() for s in self.scenes],
             "similar_pairs": [list(p) for p in self.similar_pairs],

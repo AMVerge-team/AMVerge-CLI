@@ -1,11 +1,47 @@
 from __future__ import annotations
 
+"""Keyframe extraction and scene-to-keyframe alignment.
+
+Extracts keyframe timestamps via PyAV packet demux (no frame decode) and
+classifies scenes by whether their boundaries align with a keyframe. This
+determines which scenes can use lossless copy vs. need re-encoding.
+
+Usage:
+    >>> from amverge.core.keyframe_align import (
+    ...     get_keyframe_timestamps_pyav,
+    ...     classify_scenes_by_keyframe_alignment,
+    ... )
+    >>> keyframes = get_keyframe_timestamps_pyav("episode.mp4")
+    >>> scenes = [(0.0, 5.0), (5.2, 10.0)]
+    >>> copy, reencode = classify_scenes_by_keyframe_alignment(scenes, keyframes)
+    >>> print(f"{len(copy)} lossless, {len(reencode)} re-encode")
+"""
+
 from bisect import bisect_left, bisect_right
 
 import av
 
 
 def get_keyframe_timestamps_pyav(video_path: str) -> list[float]:
+    """Extract keyframe timestamps using PyAV packet demux.
+
+    Uses ``stream.discard = nonkey`` to skip non-keyframe packets at the
+    demux level - no frame decoding occurs. Returns deduplicated, sorted
+    timestamps in seconds rounded to 2 decimal places.
+
+    Uses ``av.Discard.nonkey`` enum (PyAV 17.x) with fallback to older
+    ``"NONKEY"`` string for backward compatibility.
+
+    Args:
+        video_path: Path to the source video file.
+
+    Returns:
+        Sorted list of unique keyframe timestamps in seconds.
+
+    Example:
+        >>> kf = get_keyframe_timestamps_pyav("episode.mp4")
+        >>> print(f"{len(kf)} keyframes, first at {kf[0]}s")
+    """
     keyframe_times: list[float] = []
     with av.open(video_path) as container:
         stream = container.streams.video[0]
@@ -46,6 +82,38 @@ def classify_scenes_by_keyframe_alignment(
     keyframe_timestamps: list[float],
     threshold: float = 0.2,
 ) -> tuple[list[dict], list[dict]]:
+    """Partition scenes into lossless-copy and re-encode candidates.
+
+    A scene is a copy candidate if its start time aligns with a keyframe
+    within ``threshold`` seconds (default 0.2s).
+
+    Args:
+        scenes_secs: List of ``(start, end)`` tuples in seconds.
+        keyframe_timestamps: Sorted keyframe timestamps from
+            :func:`get_keyframe_timestamps_pyav`.
+        threshold: Max allowed gap between scene start and nearest keyframe
+            for copy eligibility.
+
+    Returns:
+        Tuple of ``(copy_candidates, reencode_candidates)``. Each candidate
+        dict contains:
+        - ``scene_id``: int, index in input list
+        - ``orig_start``: float, original scene start
+        - ``orig_end``: float, original scene end
+        - ``start``: float, snapped or original start
+        - ``start_snapped``: bool, whether start was aligned
+        - ``start_diff_sec``: float, gap to nearest keyframe
+        - ``mode``: ``"copy_candidate"`` or ``"reencode_candidate"``
+
+    Example:
+        >>> scenes = [(0.0, 5.0), (5.2, 10.0), (10.0, 15.0)]
+        >>> kf = [0.0, 5.0, 10.0, 15.0]
+        >>> copy, reencode = classify_scenes_by_keyframe_alignment(scenes, kf)
+        >>> len(copy)     # scenes 0 and 2 start on keyframes
+        2
+        >>> len(reencode) # scene 1 starts at 5.2s, no keyframe within 0.2s
+        1
+    """
     if threshold < 0:
         raise ValueError(f"Cannot have negative threshold ({threshold})")
 

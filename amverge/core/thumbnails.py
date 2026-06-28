@@ -14,6 +14,24 @@ THUMB_QUALITY = 95
 
 
 def make_thumbnail(clip_path: str, thumb_path: str) -> bool:
+    """Generate a JPEG thumbnail from the first keyframe of a video clip.
+
+    Opens the clip with PyAV, skips to the first keyframe, decodes one
+    frame, resizes to ``THUMB_WIDTH`` (960px) preserving aspect ratio, and
+    saves as a progressive JPEG.
+
+    Args:
+        clip_path: Path to the source video clip (any FFmpeg-supported format).
+        thumb_path: Output path for the thumbnail JPEG.
+
+    Returns:
+        True if thumbnail was generated successfully, False otherwise
+        (no video stream, decode error, etc.).
+
+    Example:
+        >>> make_thumbnail("scene_0001.mp4", "scene_0001.jpg")
+        True
+    """
     try:
         with av.open(clip_path) as container:
             if not container.streams.video:
@@ -44,7 +62,24 @@ def generate_thumbnails(
     workers: int = 4,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> None:
-    """Generate thumbnails for all scenes. progress_cb(done, total)."""
+    """Generate thumbnails for all scenes using a thread pool.
+
+    Scenes dicts must have a ``"scene_index"`` key. Thumbnail files are
+    named ``{file_name}_{index:04d}.jpg`` in ``output_dir``. Clips are
+    expected at ``{output_dir}/{file_name}_{index:04d}.mp4``.
+
+    Args:
+        scenes: List of scene dicts with ``"scene_index"`` key.
+        output_dir: Directory containing clip files and output thumbnails.
+        file_name: Base name for thumbnails (usually the video stem).
+        workers: Max thread count, capped at ``os.cpu_count() or 4``.
+        progress_cb: Optional ``callback(done: int, total: int)`` called
+            after each thumbnail completes.
+
+    Example:
+        >>> scenes = [{"scene_index": 0}, {"scene_index": 1}]
+        >>> generate_thumbnails(scenes, "./out", "episode", workers=4)
+    """
     total = len(scenes)
     if total == 0:
         return

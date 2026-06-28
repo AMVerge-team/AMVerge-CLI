@@ -26,6 +26,24 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def check_pair_similar(path_a: str, path_b: str, threshold: float = DISSIM_THRESHOLD) -> bool:
+    """Check if two thumbnail images look similar.
+
+    Loads both images, average-pools them to 8x8 blocks, computes cosine
+    similarity. Returns True if dissimilarity (1 - cosine) falls below
+    ``threshold``. Lower threshold = stricter comparison.
+
+    Args:
+        path_a: Path to first thumbnail JPEG.
+        path_b: Path to second thumbnail JPEG.
+        threshold: Dissimilarity threshold (default 0.10).
+
+    Returns:
+        True if the images are considered similar.
+
+    Example:
+        >>> check_pair_similar("thumb_0001.jpg", "thumb_0002.jpg")
+        False
+    """
     try:
         a = np.array(Image.open(path_a).convert("RGB"))
         b = np.array(Image.open(path_b).convert("RGB"))
@@ -40,7 +58,34 @@ def find_similar_pairs(
     threshold: float = DISSIM_THRESHOLD,
     progress_cb=None,
 ) -> list[tuple[int, int]]:
-    """Return list of (pos_a, pos_b) pairs that look similar."""
+    """Find adjacent scene pairs with visually similar thumbnails.
+
+    Iterates through consecutive scene pairs and calls
+    :func:`check_pair_similar` on their thumbnails. Scene dicts must have a
+    ``"thumbnail"`` key with the path to a JPEG file, and either
+    ``"scene_index"`` or ``"index"`` for scene numbering.
+
+    Args:
+        scenes: List of scene dicts with ``thumbnail`` and
+            ``scene_index`` (or ``index``) keys.
+        threshold: Dissimilarity threshold passed to
+            :func:`check_pair_similar`.
+        progress_cb: Optional ``callback(done: int, total: int)`` called
+            after each pair check.
+
+    Returns:
+        List of ``(scene_a, scene_b)`` index pairs that look similar.
+        Empty list if no similar pairs found.
+
+    Example:
+        >>> scenes = [
+        ...     {"scene_index": 0, "thumbnail": "th_0000.jpg"},
+        ...     {"scene_index": 1, "thumbnail": "th_0001.jpg"},
+        ...]
+        >>> pairs = find_similar_pairs(scenes)
+        >>> for a, b in pairs:
+        ...     print(f"Scenes {a} and {b} look similar")
+    """
     pairs: list[tuple[int, int]] = []
     total = max(len(scenes) - 1, 0)
 

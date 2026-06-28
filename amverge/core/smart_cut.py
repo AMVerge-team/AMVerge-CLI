@@ -1,5 +1,37 @@
 from __future__ import annotations
 
+"""Smart scene cutting with lossless copy, smartcut, and re-encode fallback.
+
+Four cut modes depending on scene boundary alignment with keyframes:
+
+    copy         - start is on a keyframe: lossless stream copy
+    snapped_copy - HEVC CPU, nearest keyframe within 5s: lossless from snap
+    smartcut     - H.264, next keyframe within 90%: encode head + lossless tail
+    reencode     - fallback: full re-encode with NVENC (GPU) or CPU encoder
+
+Usage:
+    >>> from amverge.core.smart_cut import cut_all_scenes
+    >>> from amverge.core.keyframe_align import get_keyframe_timestamps_pyav
+    >>> from amverge.core.codec_utils import check_if_hevc
+    >>> from pathlib import Path
+    >>>
+    >>> keyframes = get_keyframe_timestamps_pyav("episode.mp4")
+    >>> is_hevc = check_if_hevc("episode.mp4")
+    >>> scenes = [{"scene_index": 0, "start_sec": 0.0, "end_sec": 5.0}]
+    >>>
+    >>> results = cut_all_scenes(
+    ...     input_file=Path("episode.mp4"),
+    ...     scenes=scenes,
+    ...     keyframes=keyframes,
+    ...     out_dir=Path("./scenes"),
+    ...     use_cuda=True,
+    ...     is_hevc=is_hevc,
+    ...     on_ready=lambda r: print(r["clip_mode"]),
+    ... )
+    >>> for r in results:
+    ...     print(f"Scene {r['scene_index']}: {r['clip_mode']}")
+"""
+
 import os
 import subprocess
 from bisect import bisect_left, bisect_right
@@ -121,6 +153,32 @@ def cut_scene(
     use_cuda: bool,
     is_hevc: bool,
 ) -> tuple[str, str]:
+    """Cut a single scene using the best available method.
+
+    Chooses cut mode automatically:
+    - ``copy`` if start aligns with a keyframe (within 0.2s).
+    - ``snapped_copy`` for HEVC on CPU if a keyframe exists within 5s.
+    - ``smartcut`` for H.264 when next keyframe is within 90% of the scene.
+    - ``reencode`` as fallback.
+
+    Args:
+        input_file: Source video file.
+        start_sec: Scene start time in seconds.
+        end_sec: Scene end time in seconds.
+        scene_idx: Scene number, used for output filename ``scene_{idx:04d}.mp4``.
+        out_dir: Directory for output clips.
+        keyframes: Sorted list of keyframe timestamps.
+        use_cuda: If True, use NVENC for re-encode (GPU). CPU fallback if
+            encoder not available.
+        is_hevc: Whether the source video is HEVC-encoded.
+
+    Returns:
+        Tuple of ``(clip_path, mode)`` where ``mode`` is one of
+        ``"copy"``, ``"snapped_copy"``, ``"smartcut"``, or ``"reencode"``.
+
+    Raises:
+        ValueError: If ``start_sec >= end_sec`` (non-positive duration).
+    """
     out_path = out_dir / f"scene_{scene_idx:04d}.mp4"
     duration = end_sec - start_sec
 
@@ -183,6 +241,31 @@ def cut_all_scenes(
     progress_range: tuple[int, int] = (82, 97),
     emit_progress_updates: bool = True,
 ) -> list[dict]:
+    """Cut multiple scenes in parallel using a thread pool.
+
+    Each scene dict must have ``"scene_index"``, ``"start_sec"``,
+    and ``"end_sec"`` keys. Cutting happens via :func:`cut_scene`.
+
+    Args:
+        input_file: Source video file.
+        scenes: List of scene dicts with ``scene_index``, ``start_sec``,
+            ``end_sec``.
+        keyframes: Sorted keyframe timestamps from
+            :func:`~amverge.core.keyframe_align.get_keyframe_timestamps_pyav`.
+        out_dir: Directory for output clips.
+        use_cuda: Enable NVENC GPU encode for re-encode fallback.
+        is_hevc: Source video codec. Enables HEVC snapped-copy path.
+        max_workers: Thread pool size. Phase 1 uses 8, Phase 2 uses 2.
+        on_ready: Called per completed scene with
+            ``{"scene_index": int, "clip_path": str, "clip_mode": str}``.
+        progress_range: ``(start, end)`` tuple for IPC progress percentage
+            during cutting.
+        emit_progress_updates: If True, emit ``PROGRESS|pct|msg`` IPC events.
+
+    Returns:
+        List of result dicts, each containing ``scene_index``,
+        ``clip_path``, and ``clip_mode``.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     total = len(scenes)
     results: list[dict] = []

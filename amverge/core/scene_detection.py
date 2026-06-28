@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+"""TransNetV2 scene detection.
+
+Decodes video frames and runs TransNetV2 CNN inference to detect scene
+boundaries. Supports two decode paths: Nelux (Windows native, optional) and
+FFmpeg pipe (cross-platform).
+
+Usage:
+    >>> from amverge.core.scene_detection import decode_and_detect_scenes
+    >>> scenes_secs, scenes_frames = decode_and_detect_scenes("episode.mp4")
+    >>> print(f"Detected {len(scenes_secs)} scenes")
+"""
+
 import subprocess
 import sys
 from pathlib import Path
@@ -69,6 +81,27 @@ def _run_model_batch(
 def decode_and_detect_scenes(
     input_video: str | Path,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Decode video frames and detect scenes with TransNetV2 in one call.
+
+    Uses FFmpeg to pipe raw RGB frames (48x27) into a TransNetV2 model.
+    Works cross-platform without Nelux DLLs.
+
+    Args:
+        input_video: Path to the source video file.
+
+    Returns:
+        Tuple of ``(scenes_secs, scenes_frames)`` - both are ``(N, 2)``
+        ndarrays where each row is ``[start, end]`` in seconds or frames.
+
+    Raises:
+        ImportError: If ``transnetv2_pytorch`` is not installed.
+            Run ``pip install amverge[ml]``.
+
+    Example:
+        >>> scenes_secs, scenes_frames = decode_and_detect_scenes("ep.mp4")
+        >>> for start, end in scenes_secs:
+        ...     print(f"Scene: {start:.1f}s - {end:.1f}s")
+    """
     if not TRANSNET_AVAILABLE:
         raise ImportError(
             "transnetv2_pytorch not installed. Run: pip install amverge[ml]"
@@ -143,7 +176,25 @@ def decode_and_detect_scenes(
 
 
 def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
-    log("Running nelux video decode...")
+    """Decode all video frames into a numpy array using Nelux (Windows only).
+
+    Reads every frame at TransNetV2 input resolution (48x27 RGB).
+    Uses NVDEC hardware acceleration when CUDA is available.
+
+    Args:
+        input_video: Path to the source video file.
+
+    Returns:
+        ndarray of shape ``(num_frames, 27, 48, 3)`` with dtype ``uint8``.
+
+    Raises:
+        ImportError: If Nelux is not installed or FFmpeg DLLs are not found.
+            Set ``AMVERGE_FFMPEG_BIN`` to the directory containing the DLLs.
+
+    Example:
+        >>> frames = decode_video_frames_nelux("episode.mp4")
+        >>> print(frames.shape)  # (378, 27, 48, 3)
+    """
 
     VideoReader = _get_nelux_video_reader()
     decode_accelerator = "nvdec" if torch.cuda.is_available() else None
@@ -204,6 +255,33 @@ def run_model_one_pass(
     batch_size: int = 100,
     overlap: int = 50,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Run TransNetV2 inference on pre-decoded frames.
+
+    Splits the frame array into overlapping windows of ``batch_size`` frames
+    (default 100), runs the model on each batch, and averages overlapping
+    predictions. GPU-accelerated when CUDA is available.
+
+    Args:
+        frames: Frame array of shape ``(N, 27, 48, 3)`` with dtype ``uint8``.
+        input_file: Path to the source video (used for FPS probe).
+        batch_size: Number of frames per inference batch.
+        overlap: Overlap between consecutive batches (default 50 frames).
+
+    Returns:
+        Tuple of ``(scenes_secs, scenes_frames)`` - both ``(N, 2)`` ndarrays.
+
+    Raises:
+        ImportError: If ``transnetv2_pytorch`` is not installed.
+            Run ``pip install amverge[ml]``.
+
+    Example:
+        >>> from amverge.core.scene_detection import (
+        ...     decode_video_frames_nelux, run_model_one_pass
+        ... )
+        >>> frames = decode_video_frames_nelux("episode.mp4")
+        >>> secs, frm = run_model_one_pass(frames, "episode.mp4")
+        >>> print(f"{len(secs)} scenes detected")
+    """
     if not TRANSNET_AVAILABLE:
         raise ImportError(
             "transnetv2_pytorch not installed. Run: pip install amverge[ml]"
