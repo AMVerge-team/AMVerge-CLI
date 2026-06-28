@@ -1,7 +1,7 @@
-"""Keyframe-based cut detection (primary method).
+﻿"""Keyframe-based cut detection (primary method).
 
 Cuts the video at I-frame boundaries extracted via PyAV.
-Fast and lossless — no re-encoding needed.
+Fast and lossless - no re-encoding needed.
 """
 from __future__ import annotations
 

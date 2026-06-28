@@ -1,10 +1,10 @@
-"""Shared Rich UI components styled to match the AMVerge app.
+﻿"""Shared Rich UI components styled to match the AMVerge app.
 
 Color palette (from frontend/src/styles/variables.css):
-  accent       #22c55e  — main green
-  accent.bright #00f07a  — bright green (hover/active states)
-  muted        dim grey  — secondary text
-  bg           #001a00   — app background tint (not applicable in terminal)
+  accent       #22c55e  - main green
+  accent.bright #00f07a  - bright green (hover/active states)
+  muted        dim grey  - secondary text
+  bg           #001a00   - app background tint (not applicable in terminal)
 """
 from __future__ import annotations
 

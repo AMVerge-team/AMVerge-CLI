@@ -1,4 +1,4 @@
-import typer
+﻿import typer
 
 from .commands.detect import detect
 from .commands.export import export
@@ -11,7 +11,7 @@ from .commands.usage import usage
 
 app = typer.Typer(
     name="amverge",
-    help="AMVerge CLI — scene detection and clip management.",
+    help="AMVerge CLI - scene detection and clip management.",
     no_args_is_help=False,
     pretty_exceptions_show_locals=False,
 )

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import typer
 
@@ -27,7 +27,7 @@ def about() -> None:
         "[accent]AMVerge[/] desktop app into a standalone Python library and CLI tool.\n\n"
         "Use it to split anime episodes (or any video) into scenes at cut boundaries, "
         "browse the results, export only the clips you want, and merge fragments back "
-        "together — all from a terminal or your own Python scripts.\n\n"
+        "together - all from a terminal or your own Python scripts.\n\n"
         "Built on [accent]FFmpeg[/] and [accent]PyAV[/]. No GUI required."
     )
     console.print(Panel(blurb, border_style="bright_black", padding=(1, 2)))

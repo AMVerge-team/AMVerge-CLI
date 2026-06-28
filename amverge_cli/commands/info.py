@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -10,7 +10,7 @@ from ..ui import banner, console, make_table, dim
 
 def _fmt_bitrate(bps: int | None) -> str:
     if not bps:
-        return "—"
+        return "-"
     if bps >= 1_000_000:
         return f"{bps / 1_000_000:.1f} Mbps"
     return f"{bps / 1_000:.0f} kbps"

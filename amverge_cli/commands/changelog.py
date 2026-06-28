@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from ..ui import banner, console, make_table
 
@@ -28,7 +28,7 @@ _ENTRIES = [
         "Backend merges clips with similar thumbnails to fix awkward cuts",
         "Export profiles with customizable icons",
         "Quick download buttons per clip",
-        "Audio hover — plays audio when hovering clips",
+        "Audio hover - plays audio when hovering clips",
         "Discord Rich Presence support",
         "General settings: change episode storage path, reset to defaults",
         "Appearance: GIF background support, built-in cropper, accent → bg sync",

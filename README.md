@@ -1,6 +1,6 @@
-# AMVerge CLI
+﻿# AMVerge CLI
 
-**Scene detection and clip management — as a CLI tool and Python library.**  
+**Scene detection and clip management - as a CLI tool and Python library.**  
 Port of the AMVerge desktop app backend. Split videos into scenes, export clips, merge fragments, and build your own tools on top of it.
 
 ---
@@ -106,7 +106,7 @@ Requires **ffmpeg** and **ffprobe** on your PATH (or drop them in the working di
 amverge
 ```
 
-Launches a full wizard session — pick a command, fill in options step by step.
+Launches a full wizard session - pick a command, fill in options step by step.
 
 ### Direct commands
 
@@ -139,7 +139,7 @@ amverge changelog  # version history
 | `--output / -o` | `<name>_scenes/` | Output directory |
 | `--method / -m` | `keyframe` | `keyframe` or `edge` |
 | `--format / -f` | `table` | `table`, `json`, or `paths` |
-| `--json-output` | — | Also write JSON to a file |
+| `--json-output` | - | Also write JSON to a file |
 | `--no-thumbnails` | false | Skip thumbnail generation |
 | `--no-similarity` | false | Skip similarity check |
 | `--min-duration` | `0.25` | Merge scenes shorter than N seconds |

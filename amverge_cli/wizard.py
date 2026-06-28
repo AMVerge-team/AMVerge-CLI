@@ -1,4 +1,4 @@
-"""Interactive wizard session — launched when amverge is run with no arguments."""
+﻿"""Interactive wizard session - launched when amverge is run with no arguments."""
 from __future__ import annotations
 
 import json
@@ -147,8 +147,8 @@ def _wizard_detect() -> None:
 
     _section("detection", "03/05")
     method = _ask_choice("method", ["keyframe", "edge"], "keyframe")
-    err.print(f"  [muted]  keyframe — fast, cuts at I-frame boundaries[/]")
-    err.print(f"  [muted]  edge     — accurate, needs opencv  [pip install amverge-cli[edge]][/]\n")
+    err.print(f"  [muted]  keyframe - fast, cuts at I-frame boundaries[/]")
+    err.print(f"  [muted]  edge     - accurate, needs opencv  [pip install amverge-cli[edge]][/]\n")
     min_dur = _ask_float("min scene duration (s)", 0.25, 0.01, 60.0)
     err.print()
 
@@ -167,7 +167,7 @@ def _wizard_detect() -> None:
         ("min dur",    f"{min_dur}s"),
         ("thumbnails", "yes" if thumbs else "no"),
         ("similarity", "yes" if similarity else "no"),
-        ("workers",    str(workers) if thumbs else "—"),
+        ("workers",    str(workers) if thumbs else "-"),
     ])
 
     if not _ask_yn("run detect", True):
@@ -410,7 +410,7 @@ def _wizard_info() -> None:
     dur_str = (f"{h}h {m:02d}m {s:05.2f}s" if h else f"{m}m {s:05.2f}s" if m else f"{s:.2f}s")
 
     def _br(bps):
-        if not bps: return "—"
+        if not bps: return "-"
         return f"{bps/1_000_000:.1f} Mbps" if bps >= 1_000_000 else f"{bps/1_000:.0f} kbps"
 
     console.print(f"\n[label]{Path(video).name}[/]  [muted]{dur_str}[/]\n")
@@ -518,7 +518,7 @@ def _wizard_about() -> None:
         "[accent]AMVerge[/] desktop app into a standalone Python library and CLI tool.\n\n"
         "Use it to split anime episodes (or any video) into scenes at cut boundaries, "
         "browse the results, export only the clips you want, and merge fragments back "
-        "together — all from a terminal or your own Python scripts.\n\n"
+        "together - all from a terminal or your own Python scripts.\n\n"
         "Built on [accent]FFmpeg[/] and [accent]PyAV[/]. No GUI required."
     )
     console.print(Panel(blurb, border_style="muted", padding=(1, 2)))
@@ -593,7 +593,7 @@ def _wizard_changelog() -> None:
             "Backend merges clips with similar thumbnails to fix awkward cuts",
             "Export profiles with customizable icons",
             "Quick download buttons per clip",
-            "Audio hover — plays audio when hovering clips",
+            "Audio hover - plays audio when hovering clips",
             "Discord Rich Presence support",
             "General settings: change episode storage path, reset to defaults",
             "Appearance: GIF background support, built-in cropper, accent → bg sync",

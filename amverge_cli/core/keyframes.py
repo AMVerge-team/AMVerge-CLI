@@ -1,4 +1,4 @@
-"""Keyframe timestamp extraction via PyAV."""
+﻿"""Keyframe timestamp extraction via PyAV."""
 from __future__ import annotations
 
 import time
@@ -137,6 +137,6 @@ def generate_keyframes(
 
     normalized = sorted(set(round(t, 6) for t in keyframes if t is not None and t >= 0.0))
     done_pct = int(progress_base) + max(0, int(progress_range))
-    safe_progress(done_pct, f"Keyframes done — found {len(normalized)}")
+    safe_progress(done_pct, f"Keyframes done - found {len(normalized)}")
 
     return normalized

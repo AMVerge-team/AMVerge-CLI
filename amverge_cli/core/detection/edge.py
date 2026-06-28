@@ -1,4 +1,4 @@
-"""Edge-detection scene scanner (alternative method).
+﻿"""Edge-detection scene scanner (alternative method).
 
 Uses Canny edge maps + average-pooled cosine similarity to find hard cuts
 inside keyframe windows. More frame-accurate than keyframe-only detection
@@ -164,5 +164,5 @@ def detect_cuts_by_edge(
         boundaries = [0.0] + cut_points
         cut_points = merge_short_scenes(boundaries, min_duration=min_duration)[1:]
 
-    _cb(100, f"Edge detection done — {len(cut_points)} cuts")
+    _cb(100, f"Edge detection done - {len(cut_points)} cuts")
     return cut_points

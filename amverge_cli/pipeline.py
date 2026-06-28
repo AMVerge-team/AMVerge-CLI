@@ -1,4 +1,4 @@
-"""High-level scene detection API.
+﻿"""High-level scene detection API.
 
 Usage::
 
@@ -137,7 +137,7 @@ def detect_scenes(
             progress_cb=_kf_cb,
         )
 
-    _progress("detect", 100, f"Detection done — {len(cut_points)} cuts")
+    _progress("detect", 100, f"Detection done - {len(cut_points)} cuts")
 
     # --- Stage: segment ---
     _progress("segment", 0, f"Cutting {len(cut_points)} scenes...")
