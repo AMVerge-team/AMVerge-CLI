@@ -16,6 +16,9 @@ from .__version__ import __version__
 # -- High-level pipeline ------------------------------------------------
 from .pipeline import detect_scenes, DetectResult, Scene, DetectionMethod
 
+# -- Video object -------------------------------------------------------
+from .core.amverge_video import AmvergeVideo
+
 # -- Binaries -----------------------------------------------------------
 from .core.binaries import get_binary, get_ffmpeg, get_ffprobe
 
@@ -105,6 +108,8 @@ __all__ = [
     "__version__",
     # Pipeline
     "detect_scenes", "DetectResult", "Scene", "DetectionMethod",
+    # Video object
+    "AmvergeVideo",
     # Binaries
     "get_binary", "get_ffmpeg", "get_ffprobe",
     # Video

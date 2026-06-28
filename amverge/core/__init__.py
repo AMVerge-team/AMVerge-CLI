@@ -2,9 +2,10 @@
 
 All public functions and classes are re-exported here for convenience::
 
-    from amverge.core import get_keyframe_timestamps_pyav, make_thumbnail
+    from amverge.core import AmvergeVideo, get_keyframe_timestamps_pyav, make_thumbnail
 """
 
+from .amverge_video import AmvergeVideo
 from .binaries import get_binary, get_ffmpeg, get_ffprobe
 from .codec_utils import check_if_hevc
 from .detection.keyframe import detect_cuts_by_keyframe

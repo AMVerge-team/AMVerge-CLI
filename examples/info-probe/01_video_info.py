@@ -1,38 +1,40 @@
-"""Video stream metadata - shown by `amverge info`.
+"""Video stream metadata.
 
-Uses PyAV to read container metadata without decoding frames.
+Uses the AmvergeVideo class for clean property access.
 
 Usage:
     python 01_video_info.py [video_path]
 """
 
 import sys
-from pathlib import Path
-from amverge import get_video_info, get_video_duration
+from amverge import AmvergeVideo
 
 VIDEO = sys.argv[1] if len(sys.argv) > 1 else "episode.mp4"
 
-dur = get_video_duration(VIDEO)
+video = AmvergeVideo(VIDEO)
+
+dur = video.duration
 h, m, s = int(dur // 3600), int((dur % 3600) // 60), dur % 60
 dur_str = f"{h}h {m:02d}m {s:05.2f}s" if h else f"{m}m {s:05.2f}s" if m else f"{s:.2f}s"
 
-info = get_video_info(VIDEO)
-print(f"\n{Path(VIDEO).name}  {dur_str}\n")
+print(f"\n{video.name}  {dur_str}\n")
+print(f" Video")
+print(f"  Codec:      {video.codec}")
+print(f"  Resolution: {video.width}x{video.height}")
+print(f"  FPS:        {video.fps}")
+print(f"  Frames:     {video.total_frames}")
+print(f"  HEVC:       {video.is_hevc}")
+print()
 
-for stream in info["streams"]:
-    if stream["type"] == "video":
-        print(" Video")
-        print(f"  Codec:      {stream['codec']}")
-        print(f"  Resolution: {stream['width']}x{stream['height']}")
-        print(f"  FPS:        {stream['fps']}")
-        bps = stream.get("bit_rate")
-        if bps:
-            print(f"  Bitrate:    {bps/1_000_000:.1f} Mbps")
-    elif stream["type"] == "audio":
-        print(" Audio")
-        print(f"  Codec:       {stream['codec']}")
-        print(f"  Sample rate: {stream['sample_rate']} Hz")
-        print(f"  Channels:    {stream['channels']}")
-        bps = stream.get("bit_rate")
-        if bps:
-            print(f"  Bitrate:     {bps/1_000:.0f} kbps")
+for s in video.audio_streams:
+    print(f" Audio")
+    print(f"  Codec:       {s['codec']}")
+    print(f"  Sample rate: {s['sample_rate']} Hz")
+    print(f"  Channels:    {s['channels']}")
+    bps = s.get("bit_rate")
+    if bps:
+        print(f"  Bitrate:     {bps/1_000:.0f} kbps")
+
+print(f"\n{len(video.keyframes)} keyframes")
+print(f"  First: {', '.join(f'{t:.2f}s' for t in video.keyframes[:5])}")
+print(f"  Last:  {video.keyframes[-1]:.2f}s")
