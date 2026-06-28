@@ -128,9 +128,9 @@ Wraps: `make_thumbnail()`, `generate_thumbnails()`.
 
 ---
 
-## 8. Cache Management
+## 8. Cache Management ✅
 
-### `SceneCache` class
+~~`SceneCache` class~~ Done. `core/scene_cache.py`, exported from `amverge`.
 
 ```python
 from amverge import SceneCache
@@ -170,7 +170,7 @@ config = TransNetConfig()
 | 1 | `AmvergeVideo` | ✅ done |
 | 2 | `SceneDetector` | ✅ done |
 | 3 | `SceneExporter` | ✅ done |
-| 4 | `SceneCache` | pending |
+| 4 | `SceneCache` | ✅ done |
 | 5 | `ThumbnailGenerator` | pending |
 | 6 | `SimilarityChecker` | pending |
 | 7 | `ImageCrop` rename | pending |
