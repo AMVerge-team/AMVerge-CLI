@@ -3,12 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
-from rich.console import Console
-from rich.table import Table
 
 from ..core.video import get_video_info
-
-console = Console()
+from ..ui import banner, console, make_table, dim
 
 
 def _fmt_bitrate(bps: int | None) -> str:
@@ -33,30 +30,33 @@ def _fmt_duration(seconds: float) -> str:
 def info(
     video: Path = typer.Argument(..., help="Video file", exists=True),
 ) -> None:
-    """Show video metadata."""
-    data = get_video_info(str(video.resolve()))
+    """Show video stream metadata."""
+    banner("info")
 
-    console.print(f"\n[bold]{video.name}[/bold]  [dim]{_fmt_duration(data['duration'])}[/dim]\n")
+    data = get_video_info(str(video.resolve()))
+    console.print(f"[label]{video.name}[/]  [muted]{_fmt_duration(data['duration'])}[/]\n")
 
     for stream in data["streams"]:
         if stream["type"] == "video":
-            t = Table(show_header=False, box=None, padding=(0, 2))
-            t.add_column("key", style="dim", width=14)
-            t.add_column("val")
-            t.add_row("Codec", stream["codec"])
+            t = make_table(
+                ("",      "muted",  {"width": 14, "no_wrap": True}),
+                ("",      "label",  {}),
+                title="Video",
+            )
+            t.add_row("Codec",      stream["codec"])
             t.add_row("Resolution", f"{stream['width']}×{stream['height']}")
-            t.add_row("FPS", str(stream["fps"]))
-            t.add_row("Bitrate", _fmt_bitrate(stream["bit_rate"]))
-            console.print("[cyan]Video[/cyan]")
+            t.add_row("FPS",        str(stream["fps"]))
+            t.add_row("Bitrate",    _fmt_bitrate(stream["bit_rate"]))
             console.print(t)
 
         elif stream["type"] == "audio":
-            t = Table(show_header=False, box=None, padding=(0, 2))
-            t.add_column("key", style="dim", width=14)
-            t.add_column("val")
-            t.add_row("Codec", stream["codec"])
+            t = make_table(
+                ("",      "muted",  {"width": 14, "no_wrap": True}),
+                ("",      "label",  {}),
+                title="Audio",
+            )
+            t.add_row("Codec",       stream["codec"])
             t.add_row("Sample rate", f"{stream['sample_rate']} Hz")
-            t.add_row("Channels", str(stream["channels"]))
-            t.add_row("Bitrate", _fmt_bitrate(stream["bit_rate"]))
-            console.print("[cyan]Audio[/cyan]")
+            t.add_row("Channels",    str(stream["channels"]))
+            t.add_row("Bitrate",     _fmt_bitrate(stream["bit_rate"]))
             console.print(t)

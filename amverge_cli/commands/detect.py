@@ -5,66 +5,51 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from rich.console import Console
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
-from rich.table import Table
 
 from ..pipeline import detect_scenes, DetectResult
-
-console = Console()
-err = Console(stderr=True)
+from ..ui import banner, console, err, make_progress, make_table, ok, fail, dim
 
 _STAGE_LABELS = {
-    "detect": "Detecting cuts",
-    "segment": "Cutting scenes",
+    "detect":     "Detecting cuts",
+    "segment":    "Cutting scenes",
     "thumbnails": "Thumbnails",
-    "similarity": "Similarity",
+    "similarity": "Similarity check",
 }
 
 
 def detect(
     video: Path = typer.Argument(..., help="Input video file", exists=True),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
-    method: str = typer.Option("keyframe", "--method", "-m", help="Detection method: keyframe, edge"),
-    format: str = typer.Option("table", "--format", "-f", help="Output format: table, json, paths"),
-    json_output: Optional[Path] = typer.Option(None, "--json-output", help="Also save JSON to this path"),
-    no_thumbnails: bool = typer.Option(False, "--no-thumbnails", help="Skip thumbnail generation"),
-    no_similarity: bool = typer.Option(False, "--no-similarity", help="Skip similarity check"),
-    min_duration: float = typer.Option(0.25, "--min-duration", help="Min scene duration in seconds"),
-    workers: int = typer.Option(4, "--workers", help="Thumbnail worker threads"),
-    similarity_threshold: float = typer.Option(0.10, "--similarity-threshold", help="Similarity threshold"),
-    edge_threshold: float = typer.Option(0.15, "--edge-threshold", help="Edge detection threshold"),
-    edge_radius: float = typer.Option(0.6, "--edge-radius", help="Keyframe window radius for edge detection"),
+    method: str = typer.Option("keyframe", "--method", "-m", help="keyframe · edge"),
+    format: str = typer.Option("table", "--format", "-f", help="table · json · paths"),
+    json_output: Optional[Path] = typer.Option(None, "--json-output", help="Save JSON to file"),
+    no_thumbnails: bool = typer.Option(False, "--no-thumbnails"),
+    no_similarity: bool = typer.Option(False, "--no-similarity"),
+    min_duration: float = typer.Option(0.25, "--min-duration"),
+    workers: int = typer.Option(4, "--workers"),
+    similarity_threshold: float = typer.Option(0.10, "--similarity-threshold"),
+    edge_threshold: float = typer.Option(0.15, "--edge-threshold"),
+    edge_radius: float = typer.Option(0.6, "--edge-radius"),
 ) -> None:
-    """Split a video into scenes at cut boundaries."""
+    """Detect scenes in a video file."""
     fmt = format.lower()
     if fmt not in ("table", "json", "paths"):
-        err.print("[red]--format must be: table, json, or paths")
+        fail("--format must be: table, json, or paths")
         raise typer.Exit(1)
-
     if method not in ("keyframe", "edge"):
-        err.print("[red]--method must be: keyframe or edge")
+        fail("--method must be: keyframe or edge")
         raise typer.Exit(1)
 
-    current_task_id = None
+    banner("detect")
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[cyan]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-        console=err,
-        transient=True,
-    ) as progress:
+    with make_progress() as progress:
         tasks: dict[str, object] = {}
 
         def on_progress(stage: str, pct: int, msg: str) -> None:
             label = _STAGE_LABELS.get(stage, stage)
             if stage not in tasks:
-                tasks[stage] = progress.add_task(f"{label}...", total=100)
-            tid = tasks[stage]
-            progress.update(tid, completed=pct, description=f"{label}: {msg[:50]}" if msg else label)
+                tasks[stage] = progress.add_task(label, total=100)
+            progress.update(tasks[stage], completed=pct, description=label)
 
         result: DetectResult = detect_scenes(
             str(video.resolve()),
@@ -81,39 +66,38 @@ def detect(
         )
 
     if not result.scenes:
-        err.print("[red]No scenes detected.")
+        fail("No scenes detected.")
         raise typer.Exit(1)
 
     if json_output:
         json_output.write_text(json.dumps(result.to_dict(), indent=2))
-        err.print(f"[green]JSON saved → {json_output}")
+        ok(f"JSON → {json_output}")
 
     similar_set = {idx for pair in result.similar_pairs for idx in pair}
 
     if fmt == "json":
         console.print_json(json.dumps(result.to_dict()))
-    elif fmt == "paths":
+        return
+    if fmt == "paths":
         for scene in result.scenes:
             console.print(scene.path)
-    else:
-        table = Table(
-            title=f"{video.stem} — {len(result.scenes)} scenes  [{method}]",
-            show_lines=False,
+        return
+
+    t = make_table(
+        ("#",        "muted",  {"justify": "right", "width": 5}),
+        ("Start",    None,     {"justify": "right", "width": 9}),
+        ("End",      None,     {"justify": "right", "width": 9}),
+        ("Duration", None,     {"justify": "right", "width": 9}),
+        ("~",        "warn",   {"justify": "center", "width": 3}),
+        title=f"{video.stem}  ·  {len(result.scenes)} scenes  ·  {method}",
+    )
+    for s in result.scenes:
+        t.add_row(
+            str(s.index),
+            f"{s.start:.2f}s",
+            f"{s.end:.2f}s",
+            f"{s.duration:.2f}s",
+            "~" if s.index in similar_set else "",
         )
-        table.add_column("#", style="dim", justify="right", width=5)
-        table.add_column("Start", justify="right", width=9)
-        table.add_column("End", justify="right", width=9)
-        table.add_column("Duration", justify="right", width=9)
-        table.add_column("~", justify="center", width=3)
-
-        for scene in result.scenes:
-            table.add_row(
-                str(scene.index),
-                f"{scene.start:.2f}s",
-                f"{scene.end:.2f}s",
-                f"{scene.duration:.2f}s",
-                "[yellow]~[/yellow]" if scene.index in similar_set else "",
-            )
-
-        console.print(table)
-        console.print(f"[dim]Scenes JSON → {result.scenes_json}[/dim]")
+    console.print(t)
+    dim(f"scenes.json → {result.scenes_json}")
