@@ -68,6 +68,7 @@ AMVerge-CLI/
 │   │
 │   ├── commands/
 │   │   ├── backend.py       amverge backend <video> <output_dir>  (hidden - Rust sidecar replacement)
+│   │   ├── rpc_server.py    amverge rpc-server  (hidden - Discord RPC sidecar, reads JSON from stdin)
 │   │   ├── detect.py        amverge detect
 │   │   ├── export.py        amverge export
 │   │   ├── merge.py         amverge merge
@@ -189,7 +190,8 @@ for scene in result.scenes:
 | `core/nelux_runtime.py` | Windows DLL setup for Nelux video reader. Set `AMVERGE_FFMPEG_BIN` env var to FFmpeg shared DLL directory. Idempotent - safe to call multiple times. |
 | `core/keyframe_align.py` | `get_keyframe_timestamps_pyav` uses PyAV demux with `stream.discard = "NONKEY"` - fast, reads packet metadata only. `classify_scenes_by_keyframe_alignment` partitions scenes for Phase 1 vs Phase 2 cutting. |
 | `core/thumbnails_streaming.py` | V1 backend mode only. Emits events as each thumbnail completes. Not used in V2 backend. |
-| `core/discord_rpc.py` | Uses same CLIENT_ID as AMVerge app (`1497922104065134823`). Silently no-ops if pypresence not installed. Auto-connects per command. `--no-rpc` flag on detect/export/merge to disable. |
+| `core/discord_rpc.py` | Uses same CLIENT_ID as AMVerge app (`1497922104065134823`). Silently no-ops if pypresence not installed. `--no-rpc` flag on detect/export/merge to disable. Methods: idle/detecting/selecting/navigating/exporting/merging/complete/error. |
+| `commands/rpc_server.py` | Hidden sidecar: `amverge rpc-server`. Long-lived process; Rust spawns it once and sends JSON commands via stdin (`{"type":"update","details":"...","state":"..."}`, `{"type":"clear"}`, `{"type":"shutdown"}`). Throttles Discord updates to max 1 per 15s. Exits when stdin closes or parent dies. |
 | `commands/backend.py` | V2 backend. Positional interface: `amverge backend <video_path> <output_dir> [import_method]`. Rust replaces `python app.py <video> <dir>` with `amverge backend <video> <dir>` - no Rust changes needed. Emits V2 IPC events. Outputs JSON schema v1.0 with `schema_version`, `run_id`, `video` metadata block. |
 
 ## Theme

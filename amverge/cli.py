@@ -9,6 +9,7 @@ from .commands.credits import credits
 from .commands.changelog import changelog
 from .commands.usage import usage
 from .commands.backend import backend
+from .commands.rpc_server import rpc_server
 
 app = typer.Typer(
     name="amverge",
@@ -25,6 +26,7 @@ app.command()(info)
 
 # App backend replacement (hidden - called by Rust sidecar)
 app.command(hidden=True)(backend)
+app.command(name="rpc-server", hidden=True)(rpc_server)
 
 # Info
 app.command()(usage)

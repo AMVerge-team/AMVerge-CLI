@@ -95,6 +95,18 @@ class DiscordRPC:
             small_text="Detecting...",
         )
 
+    def update_selecting(self, count: int = 0) -> None:
+        self._update(
+            details="Editing Episode",
+            state=f"Selecting Clips ({count} selected)",
+        )
+
+    def update_navigating(self, page: str = "") -> None:
+        self._update(
+            details="Navigating menus",
+            state=f"In {page.capitalize()}" if page else "Browsing",
+        )
+
     def update_exporting(self, file_name: str = "", progress: float = 0) -> None:
         self._update(
             details=f"Saving: {file_name}" if file_name else "Exporting clips",
