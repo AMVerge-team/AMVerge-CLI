@@ -433,41 +433,252 @@ def _wizard_info() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Info pages
+# ---------------------------------------------------------------------------
+
+def _wizard_help() -> None:
+    _header()
+    _section("help")
+    err.print("  [muted]Command reference and usage examples.[/]\n")
+
+    # Workflow commands
+    t = make_table(
+        ("command",  "accent bold", {"width": 10}),
+        ("args",     "label",       {"width": 36}),
+        ("note",     "muted",       {}),
+        title="Workflow",
+    )
+    t.add_row("detect",  "VIDEO  [--output DIR] [--method keyframe|edge]",  "split video into scenes")
+    t.add_row("",        "[--min-duration 0.25] [--workers 4]",             "")
+    t.add_row("",        "[--no-thumbnails] [--no-similarity]",             "")
+    t.add_row("export",  "VIDEO  --scenes JSON  [--output DIR]",            "export scenes to disk")
+    t.add_row("",        "[--select 0,2,5-8]  [--merge]  [--codec copy]",  "")
+    t.add_row("merge",   "CLIP CLIP ...  --output FILE",                    "concat clips")
+    t.add_row("info",    "VIDEO",                                            "show stream metadata")
+    console.print(t)
+
+    # Info commands
+    t2 = make_table(
+        ("command",   "accent bold", {"width": 10}),
+        ("note",      "muted",       {}),
+        title="Info",
+    )
+    t2.add_row("help",      "command reference (this page)")
+    t2.add_row("about",     "what is AMVerge CLI")
+    t2.add_row("credits",   "meet the team")
+    t2.add_row("changelog", "version history")
+    console.print(t2)
+
+    console.print("\n[muted]  Examples[/]\n")
+    examples = [
+        ("detect",              "amverge detect ep01.mkv"),
+        ("detect (accurate)",   "amverge detect ep01.mkv --method edge --min-duration 0.5"),
+        ("export all",          "amverge export ep01.mkv --scenes ep01_scenes/scenes.json"),
+        ("export selection",    "amverge export ep01.mkv -s scenes.json --select 0,2,5-8 --merge"),
+        ("merge",               "amverge merge scene_0001.mp4 scene_0002.mp4 -o out.mp4"),
+        ("info",                "amverge info ep01.mkv"),
+        ("library",             "python -c \"from amverge_cli import detect_scenes; detect_scenes('ep01.mkv')\""),
+    ]
+    t3 = make_table(
+        ("",      "muted",  {"width": 22}),
+        ("",      "label",  {}),
+    )
+    for label, cmd in examples:
+        t3.add_row(label, cmd)
+    console.print(t3)
+
+    console.print("\n[muted]  Detection methods[/]\n")
+    t4 = make_table(
+        ("method",    "accent bold", {"width": 10}),
+        ("speed",     "label",       {"width": 8}),
+        ("accuracy",  "label",       {"width": 10}),
+        ("requires",  "muted",       {}),
+    )
+    t4.add_row("keyframe", "fast",   "good",      "nothing extra")
+    t4.add_row("edge",     "slower", "excellent", "pip install amverge-cli[edge]")
+    console.print(t4)
+
+
+def _wizard_about() -> None:
+    _header()
+    _section("about")
+
+    console.print(
+        Panel(
+            "[label]AM[/][accent]Verge[/] [muted]CLI[/]  [muted]v" + __version__ + "[/]",
+            border_style="accent",
+            padding=(0, 2),
+            expand=False,
+        )
+    )
+    console.print()
+
+    blurb = (
+        "AMVerge CLI ports the scene-detection and clip-management engine from the "
+        "[accent]AMVerge[/] desktop app into a standalone Python library and CLI tool.\n\n"
+        "Use it to split anime episodes (or any video) into scenes at cut boundaries, "
+        "browse the results, export only the clips you want, and merge fragments back "
+        "together — all from a terminal or your own Python scripts.\n\n"
+        "Built on [accent]FFmpeg[/] and [accent]PyAV[/]. No GUI required."
+    )
+    console.print(Panel(blurb, border_style="muted", padding=(1, 2)))
+    console.print()
+
+    t = make_table(
+        ("",  "muted",  {"width": 18}),
+        ("",  "label",  {}),
+        title="Key features",
+    )
+    t.add_row("Keyframe detection",  "near-instant splitting using I-frames, no re-encode")
+    t.add_row("Edge detection",      "cosine-similarity approach for difficult encodes")
+    t.add_row("Thumbnails",          "auto-generated scene previews via PyAV")
+    t.add_row("Similarity check",    "flags duplicate or near-identical adjacent scenes")
+    t.add_row("Python library",      "from amverge_cli import detect_scenes")
+    t.add_row("Zero quality loss",   "copy-mode export keeps the original stream intact")
+    console.print(t)
+
+    console.print()
+    console.print("[muted]  Source  [/][label]github.com/crptk/AMVerge[/]")
+    console.print("[muted]  Discord [/][label]discord.gg/bmXjTgsAaN[/]")
+    console.print()
+
+
+def _wizard_credits() -> None:
+    _header()
+    _section("credits")
+    err.print("  [muted]The people who made AMVerge come to life.[/]\n")
+
+    team = [
+        ("Crptk",          "App owner · developer · original creator"),
+        ("Netsuma",         "Export settings · UI upgrades"),
+        ("Moongetsu",       "Settings overhaul · Discord RPC · menu revamp · CLI"),
+        ("Lewis",           "Mac support · background import · heavy optimization"),
+        ("0xkhaosoccured",  "Grid UI fixes"),
+        ("TOSINIRL",        "Mac video import fixes"),
+    ]
+
+    t = make_table(
+        ("name",  "accent bold", {"width": 18}),
+        ("role",  "muted",       {}),
+        title="Contributors",
+    )
+    for name, role in team:
+        t.add_row(name, role)
+    console.print(t)
+
+    console.print()
+    console.print(
+        Panel(
+            "[muted]Want to contribute?[/]  [label]github.com/crptk/AMVerge[/]",
+            border_style="muted",
+            padding=(0, 2),
+            expand=False,
+        )
+    )
+    console.print()
+
+
+def _wizard_changelog() -> None:
+    _header()
+    _section("changelog")
+    err.print("  [muted]AMVerge version history.[/]\n")
+
+    entries = [
+        ("v1.2.6", ["Fixed AMVerge updater failing"]),
+        ("v1.2.5", ["Fixed videos not playing in Windows Media Player"]),
+        ("v1.2.4", [
+            "Fixed files with % or special characters in name not importing",
+            "Export now sets selected audio stream as default track",
+        ]),
+        ("v1.2.3", ["Added safeguards to episode clear so it doesn't wipe everything"]),
+        ("v1.2.2", [
+            "Fixed episodes disappearing on startup",
+            "Fixed Python build errors for some Windows users",
+        ]),
+        ("v1.2.1", ["Fixed hovered videos sometimes not showing full clip content"]),
+        ("v1.2.0", [
+            "Added audio stream switching for previewing",
+            "Added 'Update Available!' in-app notification",
+            "Fixed timeline click not working",
+            "Fixed audio toggle resetting video",
+            "Fixed Intel Macs not importing properly",
+        ]),
+        ("v1.0.0", [
+            "macOS support",
+            "Backend merges clips with similar thumbnails to fix awkward cuts",
+            "Export profiles with customizable icons",
+            "Quick download buttons per clip",
+            "Audio hover — plays audio when hovering clips",
+            "Discord Rich Presence support",
+            "General settings: change episode storage path, reset to defaults",
+            "Appearance: GIF background support, built-in cropper, accent → bg sync",
+            "Widescreen clip tiles and timestamp toggles",
+            "Fixed large video files not importing",
+            "Fixed 4K images turning white on import",
+        ]),
+    ]
+
+    for version, changes in entries:
+        t = make_table(
+            ("",  "muted",  {}),
+            title=version,
+        )
+        for c in changes:
+            t.add_row(c)
+        console.print(t)
+        console.print()
+
+
+# ---------------------------------------------------------------------------
 # Main menu + session loop
 # ---------------------------------------------------------------------------
 
-_COMMANDS: list[tuple[str, str, object]] = [
+_WORKFLOW: list[tuple[str, str, object]] = [
     ("detect", "split video into scenes at cut boundaries", _wizard_detect),
     ("export", "export selected scenes from a detect run",  _wizard_export),
     ("merge",  "merge multiple clips into one file",        _wizard_merge),
     ("info",   "show video stream metadata",                _wizard_info),
 ]
 
+_INFO: list[tuple[str, str, object]] = [
+    ("help",      "command reference and usage examples",  _wizard_help),
+    ("about",     "what is AMVerge CLI",                   _wizard_about),
+    ("credits",   "meet the team",                         _wizard_credits),
+    ("changelog", "version history",                       _wizard_changelog),
+]
+
+_ALL_COMMANDS = _WORKFLOW + _INFO
+
 
 def _show_menu() -> None:
     _header()
 
     t = Table(box=None, show_header=False, padding=(0, 2), show_edge=False)
-    t.add_column("num",  style="muted",   width=4)
-    t.add_column("cmd",  style="accent bold", width=10)
+    t.add_column("num",  style="muted",       width=4)
+    t.add_column("cmd",  style="accent bold", width=12)
     t.add_column("desc", style="muted")
 
-    for i, (cmd, desc, _) in enumerate(_COMMANDS, 1):
+    for i, (cmd, desc, _) in enumerate(_WORKFLOW, 1):
         t.add_row(f"0{i}", cmd, desc)
+
+    t.add_row("", "", "")
+
+    for i, (cmd, desc, _) in enumerate(_INFO, len(_WORKFLOW) + 1):
+        num = f"{i:02d}"
+        t.add_row(num, cmd, desc)
 
     t.add_row("", "", "")
     t.add_row("00", "quit", "exit session")
 
-    err.print(
-        Panel(t, border_style="muted", padding=(0, 1))
-    )
+    err.print(Panel(t, border_style="muted", padding=(0, 1)))
     err.print()
 
 
 def run_wizard() -> None:
     """Launch the interactive AMVerge CLI session."""
-    cmd_map = {str(i): fn for i, (_, _, fn) in enumerate(_COMMANDS, 1)}
-    name_map = {cmd: fn for cmd, _, fn in _COMMANDS}
+    cmd_map = {f"{i:02d}": fn for i, (_, _, fn) in enumerate(_ALL_COMMANDS, 1)}
+    cmd_map.update({str(i): fn for i, (_, _, fn) in enumerate(_ALL_COMMANDS, 1)})
+    name_map = {cmd: fn for cmd, _, fn in _ALL_COMMANDS}
 
     while True:
         _show_menu()
