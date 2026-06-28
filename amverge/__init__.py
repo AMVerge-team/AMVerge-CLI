@@ -98,7 +98,7 @@ from .core.hevc import is_hevc
 from .core.image import CropData, crop_image
 
 # -- Diagnostics -------------------------------------------------------
-from .core.diagnostics import get_gpu_info, get_versions
+from .core.diagnostics import get_gpu_info, get_versions, check_environment, EnvironmentCheck, CheckResult
 
 # -- IPC ----------------------------------------------------------------
 from .core.ipc import (
@@ -173,6 +173,7 @@ __all__ = [
     "CropData", "crop_image",
     # Diagnostics
     "get_gpu_info", "get_versions",
+    "check_environment", "EnvironmentCheck", "CheckResult",
     # IPC
     "emit_progress", "emit_event", "log",
     "check_if_path_exists", "build_video_cache_prefix",

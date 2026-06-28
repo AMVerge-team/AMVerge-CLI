@@ -16,7 +16,7 @@ from .similarity_checker import SimilarityChecker
 from .image_crop import ImageCrop
 from .detection.keyframe import detect_cuts_by_keyframe
 from .detection.edge import detect_cuts_by_edge
-from .diagnostics import get_gpu_info, get_versions
+from .diagnostics import get_gpu_info, get_versions, check_environment, EnvironmentCheck, CheckResult
 from .discord_rpc import RPC_AVAILABLE, DiscordRPC
 from .hevc import is_hevc
 from .image import CropData, crop_image
