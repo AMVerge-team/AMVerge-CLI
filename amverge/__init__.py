@@ -28,6 +28,9 @@ from .core.scene_exporter import SceneExporter
 # -- Scene cache --------------------------------------------------------
 from .core.scene_cache import SceneCache
 
+# -- Thumbnail generator ------------------------------------------------
+from .core.thumbnail_generator import ThumbnailGenerator
+
 # -- Binaries -----------------------------------------------------------
 from .core.binaries import get_binary, get_ffmpeg, get_ffprobe
 
@@ -125,6 +128,8 @@ __all__ = [
     "SceneExporter",
     # Scene cache
     "SceneCache",
+    # Thumbnail generator
+    "ThumbnailGenerator",
     # Binaries
     "get_binary", "get_ffmpeg", "get_ffprobe",
     # Video
