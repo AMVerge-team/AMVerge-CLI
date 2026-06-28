@@ -5,6 +5,7 @@ from .commands.export import export
 from .commands.merge import merge
 from .commands.info import info
 from .commands.probe import probe
+from .commands.gpu import gpu
 from .commands.cache import cache
 from .commands.keyframes import keyframes
 from .commands.scenes import scenes
@@ -28,6 +29,7 @@ app.command()(export)
 app.command()(merge)
 app.command()(info)
 app.command()(probe)
+app.command()(gpu)
 app.command()(cache)
 app.command()(keyframes)
 app.command()(scenes)

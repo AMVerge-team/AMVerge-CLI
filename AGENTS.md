@@ -74,6 +74,7 @@ AMVerge-CLI/
 │   │   ├── merge.py         amverge merge
 │   │   ├── info.py          amverge info  (stream metadata via PyAV)
 │   │   ├── probe.py         amverge probe  (V2 diagnostics: codec/HEVC/keyframes/scene cache)
+│   │   ├── gpu.py           amverge gpu  (PyTorch version, CUDA, GPU name/VRAM, all optional deps)
 │   │   ├── cache.py         amverge cache  (list/clear TransNetV2 .npy scene caches)
 │   │   ├── keyframes.py     amverge keyframes  (dump keyframe timestamps, --json, --count)
 │   │   ├── scenes.py        amverge scenes  (show scene list from .npy cache, --json, --min-duration)
