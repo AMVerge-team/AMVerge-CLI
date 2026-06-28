@@ -477,7 +477,7 @@ def _wizard_help() -> None:
         ("export selection",    "amverge export ep01.mkv -s scenes.json --select 0,2,5-8 --merge"),
         ("merge",               "amverge merge scene_0001.mp4 scene_0002.mp4 -o out.mp4"),
         ("info",                "amverge info ep01.mkv"),
-        ("library",             "python -c \"from amverge_cli import detect_scenes; detect_scenes('ep01.mkv')\""),
+        ("library",             "python -c \"from amverge import detect_scenes; detect_scenes('ep01.mkv')\""),
     ]
     t3 = make_table(
         ("",      "muted",  {"width": 22}),
@@ -533,7 +533,7 @@ def _wizard_about() -> None:
     t.add_row("Edge detection",      "cosine-similarity approach for difficult encodes")
     t.add_row("Thumbnails",          "auto-generated scene previews via PyAV")
     t.add_row("Similarity check",    "flags duplicate or near-identical adjacent scenes")
-    t.add_row("Python library",      "from amverge_cli import detect_scenes")
+    t.add_row("Python library",      "from amverge import detect_scenes")
     t.add_row("Zero quality loss",   "copy-mode export keeps the original stream intact")
     console.print(t)
 

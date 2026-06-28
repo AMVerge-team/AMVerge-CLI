@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="assets/amverge_title_gif.gif" alt="AMVerge CLI" width="1440"/>
 </p>
 
@@ -34,7 +34,7 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 ```txt
 amverge CLI  /  Python library
           ↓
-   amverge_cli package
+   amverge package
           ↓
     PyAV  +  FFmpeg
 ```
@@ -50,7 +50,7 @@ Similarity compares adjacent thumbnails using cosine similarity on pixel arrays.
 ```txt
 AMVerge-CLI/
 │
-├── amverge_cli/
+├── amverge/
 │   ├── cli.py                  entry point
 │   ├── pipeline.py             high-level detect_scenes() API
 │   ├── wizard.py               interactive session
@@ -96,7 +96,7 @@ amverge info episode.mp4
 ```
 
 ```python
-from amverge_cli import detect_scenes
+from amverge import detect_scenes
 
 result = detect_scenes("episode.mp4")
 for scene in result.scenes:

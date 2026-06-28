@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from ..ui import banner, console, make_table
 
@@ -44,7 +44,7 @@ def usage() -> None:
     t3.add_row("export selection",   "amverge export ep01.mkv -s scenes.json --select 0,2,5-8 --merge")
     t3.add_row("merge",              "amverge merge scene_0001.mp4 scene_0002.mp4 -o out.mp4")
     t3.add_row("info",               "amverge info ep01.mkv")
-    t3.add_row("library",            "from amverge_cli import detect_scenes")
+    t3.add_row("library",            "from amverge import detect_scenes")
     console.print(t3)
 
     console.print("\n[bright_black]  Detection methods[/]\n")

@@ -42,7 +42,7 @@ def about() -> None:
     t.add_row("Edge detection",      "cosine-similarity approach for difficult encodes")
     t.add_row("Thumbnails",          "auto-generated scene previews via PyAV")
     t.add_row("Similarity check",    "flags duplicate or near-identical adjacent scenes")
-    t.add_row("Python library",      "from amverge_cli import detect_scenes")
+    t.add_row("Python library",      "from amverge import detect_scenes")
     t.add_row("Zero quality loss",   "copy-mode export keeps the original stream intact")
     console.print(t)
 

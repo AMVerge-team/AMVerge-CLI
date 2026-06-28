@@ -1,4 +1,4 @@
-[build-system]
+﻿[build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
@@ -18,11 +18,11 @@ dependencies = [
 ]
 
 [project.scripts]
-amverge = "amverge_cli.cli:app"
+amverge = "amverge.cli:app"
 
 [project.optional-dependencies]
 edge = ["opencv-python-headless>=4.9"]
 dev  = ["pyinstaller>=6"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["amverge_cli"]
+packages = ["amverge"]

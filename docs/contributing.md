@@ -1,4 +1,4 @@
-# Contributing
+﻿# Contributing
 
 Contributions are welcome. Bug fixes, new features, and improvements to detection accuracy are all fair game.
 
@@ -17,7 +17,7 @@ pip install -e ".[edge]"
 ## Project Structure
 
 ```txt
-amverge_cli/
+amverge/
 ├── cli.py          entry point + command registration
 ├── pipeline.py     high-level detect_scenes() API
 ├── wizard.py       interactive session (no-args mode)

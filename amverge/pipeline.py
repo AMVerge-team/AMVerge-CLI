@@ -2,7 +2,7 @@
 
 Usage::
 
-    from amverge_cli import detect_scenes
+    from amverge import detect_scenes
 
     result = detect_scenes("episode.mp4", output_dir="./scenes")
 

@@ -1,4 +1,4 @@
-# AGENTS.md - AMVerge CLI
+﻿# AGENTS.md - AMVerge CLI
 
 AMVerge features as a CLI tool and Python library. Ports the AMVerge desktop app backend (by Crptk) into a standalone `pip install amverge` package.
 
@@ -52,7 +52,7 @@ twine upload dist/*
 
 ```
 AMVerge-CLI/
-├── amverge_cli/
+├── amverge/
 │   ├── __init__.py          public exports: detect_scenes, DetectResult, Scene, DetectionMethod
 │   ├── __version__.py       version string
 │   ├── cli.py               Typer app, registers all commands, no-args -> wizard
@@ -95,8 +95,7 @@ AMVerge-CLI/
 │
 ├── pyproject.toml
 ├── README.md
-├── AGENTS.md
-└── OPENCODE.md              full session context and decisions log
+└── AGENTS.md
 ```
 
 ## Key Architecture
@@ -122,7 +121,7 @@ find_similar_pairs() (cosine similarity on pixel arrays)
 ### Library API
 
 ```python
-from amverge_cli import detect_scenes
+from amverge import detect_scenes
 
 result = detect_scenes("episode.mp4")
 for scene in result.scenes:
