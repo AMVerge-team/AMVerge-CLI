@@ -14,7 +14,7 @@ def about() -> None:
 
     console.print(
         Panel(
-            "[white bold]AM[/][accent]Verge[/]  [muted]CLI[/]  [muted]v" + __version__ + "[/]",
+            "[accent]AMV[/][white bold]erge[/]  [muted]CLI[/]  [muted]v" + __version__ + "[/]",
             border_style="#22c55e",
             padding=(0, 2),
             expand=False,

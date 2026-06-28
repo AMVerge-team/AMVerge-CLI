@@ -58,7 +58,7 @@ def banner(command: str) -> None:
     err.print()
     err.print(
         Panel(
-            f"[white bold]AM[/][accent]Verge[/]  [muted]CLI[/]"
+            f"[accent]AMV[/][white bold]erge[/]  [muted]CLI[/]"
             f"  [muted]v{__version__}[/]  [muted]·[/]  [accent]{command}[/]",
             border_style="#22c55e",
             padding=(0, 2),

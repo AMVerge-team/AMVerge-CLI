@@ -99,7 +99,7 @@ def _header() -> None:
     err.print()
     err.print(
         Panel(
-            f"[white bold]AM[/][accent bold]Verge[/]  [muted]CLI[/]  [muted]v{__version__}[/]",
+            f"[accent]AMV[/][white bold]erge[/]  [muted]CLI[/]  [muted]v{__version__}[/]",
             border_style="accent",
             padding=(0, 2),
             expand=False,
@@ -544,41 +544,13 @@ def _wizard_about() -> None:
 
 
 def _wizard_credits() -> None:
+    from .commands.credits import _credits_table
+
     _header()
     _section("credits")
     err.print("  [muted]The people behind AMVerge.[/]\n")
 
-    cli_team = [
-        ("Moongetsu",  "CLI author · package design · interactive wizard"),
-    ]
-
-    app_team = [
-        ("Crptk",          "App owner · developer · original creator"),
-        ("Netsuma",         "Export settings · UI upgrades"),
-        ("Moongetsu",       "Settings overhaul · Discord RPC · menu revamp"),
-        ("Lewis",           "Mac support · background import · heavy optimization"),
-        ("0xkhaosoccured",  "Grid UI fixes"),
-        ("TOSINIRL",        "Mac video import fixes"),
-    ]
-
-    t1 = make_table(
-        ("name",  "#22c55e bold", {"width": 18}),
-        ("role",  "muted",        {}),
-        title="AMVerge CLI",
-    )
-    for name, role in cli_team:
-        t1.add_row(name, role)
-    console.print(t1)
-
-    t2 = make_table(
-        ("name",  "#22c55e bold", {"width": 18}),
-        ("role",  "muted",        {}),
-        title="AMVerge App",
-    )
-    for name, role in app_team:
-        t2.add_row(name, role)
-    console.print(t2)
-
+    console.print(_credits_table())
     console.print()
     console.print(
         Panel(
