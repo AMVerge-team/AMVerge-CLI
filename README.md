@@ -1,160 +1,161 @@
 # AMVerge CLI
 
-Scene detection and clip management — usable as a CLI tool or a Python library.
+**Scene detection and clip management — as a CLI tool and Python library.**  
+Port of the AMVerge desktop app backend. Split videos into scenes, export clips, merge fragments, and build your own tools on top of it.
+
+---
+
+## Features
+
+- Keyframe-based scene splitting (fast, no re-encode)
+- Edge + cosine-similarity detection for difficult encodes
+- Auto-generated scene thumbnails
+- Duplicate / similar scene detection
+- Scene export with codec selection
+- Clip merging via FFmpeg concat
+- Video metadata inspection
+- Interactive wizard mode (`amverge` with no args)
+- Usable as a Python library
+
+---
+
+## How It Works
+
+```txt
+amverge CLI  /  Python library
+          ↓
+   amverge_cli package
+          ↓
+    PyAV  +  FFmpeg
+```
+
+### Detection
+
+Extracts keyframe timestamps from the video using PyAV packet demux (fast path) or decode fallback.  
+Filters out scenes shorter than `min_duration`, then segments using `ffmpeg -segment_times`.
+
+### Thumbnails
+
+Decoded via PyAV and written as JPEG using Pillow. Generated in parallel with `ThreadPoolExecutor`.
+
+### Similarity
+
+Compares adjacent scene thumbnails using cosine similarity on flattened pixel arrays.  
+Pairs below the threshold are flagged as potential duplicates.
+
+---
+
+## Repository Structure
+
+```txt
+AMVerge-CLI/
+│
+├── amverge_cli/
+│   ├── cli.py                  entry point
+│   ├── pipeline.py             high-level detect_scenes() API
+│   ├── wizard.py               interactive session
+│   ├── ui.py                   shared Rich theme + components
+│   │
+│   ├── commands/
+│   │   ├── detect.py
+│   │   ├── export.py
+│   │   ├── merge.py
+│   │   ├── info.py
+│   │   ├── usage.py
+│   │   ├── about.py
+│   │   ├── credits.py
+│   │   └── changelog.py
+│   │
+│   └── core/
+│       ├── binaries.py         ffmpeg / ffprobe resolution
+│       ├── keyframes.py        keyframe extraction
+│       ├── video.py            metadata + scene merging
+│       ├── segmenter.py        ffmpeg segment runner
+│       ├── thumbnails.py       thumbnail generation
+│       ├── similarity.py       cosine similarity check
+│       ├── hevc.py             HEVC codec detection
+│       ├── image.py            image crop with GIF support
+│       └── detection/
+│           ├── keyframe.py
+│           └── edge.py
+│
+├── pyproject.toml
+└── README.md
+```
+
+---
 
 ## Install
 
 ```bash
-pip install amverge-cli
+pip install amverge
 
-# For edge-detection method (requires OpenCV):
-pip install amverge-cli[edge]
+# Edge detection method (requires OpenCV):
+pip install amverge[edge]
 ```
 
-Requires **ffmpeg** and **ffprobe** on your PATH (or in the working directory).
+Requires **ffmpeg** and **ffprobe** on your PATH (or drop them in the working directory).
 
 ---
 
-## Python Library API
+## Getting Started
 
-### Quick start
-
-```python
-from amverge_cli import detect_scenes
-
-result = detect_scenes("episode.mp4")
-
-for scene in result.scenes:
-    print(scene.index, scene.start, scene.end, scene.path)
-
-for a, b in result.similar_pairs:
-    print(f"Scenes {a} and {b} look similar — consider merging")
-```
-
-### `detect_scenes()`
-
-```python
-from amverge_cli import detect_scenes, DetectResult
-
-result: DetectResult = detect_scenes(
-    video_path="episode.mp4",
-    output_dir="./scenes",       # defaults to <name>_scenes/ next to video
-    method="keyframe",            # "keyframe" (fast) or "edge" (accurate, needs OpenCV)
-    min_duration=0.25,            # merge scenes shorter than N seconds
-    thumbnails=True,              # generate JPEG thumbnails
-    similarity=True,              # flag adjacent scenes that look similar
-    similarity_threshold=0.10,    # lower = stricter similarity
-    thumbnail_workers=4,
-    # edge method options:
-    edge_threshold=0.15,
-    edge_radius=0.6,
-    edge_blocksize=3,
-    # optional progress callback:
-    progress=lambda stage, pct, msg: print(f"[{stage}] {pct}% {msg}"),
-)
-```
-
-### Return types
-
-```python
-@dataclass
-class Scene:
-    index: int
-    start: float          # seconds
-    end: float            # seconds
-    duration: float       # seconds
-    path: str             # absolute path to the .mp4 clip
-    thumbnail: str | None # absolute path to the .jpg thumbnail
-    original_file: str    # stem of the source video
-
-@dataclass
-class DetectResult:
-    scenes: list[Scene]
-    similar_pairs: list[tuple[int, int]]  # (scene_index_a, scene_index_b)
-    output_dir: str
-    scenes_json: str      # path to the saved scenes.json file
-```
-
-### Low-level modules
-
-```python
-# Binary resolution
-from amverge_cli.core.binaries import get_ffmpeg, get_ffprobe
-
-# Keyframe extraction
-from amverge_cli.core.keyframes import generate_keyframes
-timestamps = generate_keyframes("video.mp4")
-
-# Video metadata
-from amverge_cli.core.video import get_video_duration, get_video_info
-info = get_video_info("video.mp4")  # codec, resolution, fps, bitrate
-
-# FFmpeg segmenter
-from amverge_cli.core.segmenter import run_ffmpeg_segment, collect_scenes
-
-# Thumbnails
-from amverge_cli.core.thumbnails import make_thumbnail, generate_thumbnails
-
-# Similarity
-from amverge_cli.core.similarity import check_pair_similar, find_similar_pairs
-
-# HEVC detection
-from amverge_cli.core.hevc import is_hevc
-is_hevc("video.mp4")  # True / False
-
-# Image crop (supports GIF)
-from amverge_cli.core.image import crop_image, CropData
-crop_image("in.jpg", "out.jpg", CropData(x=10, y=10, width=200, height=200, rotation=90))
-
-# Detection methods
-from amverge_cli.core.detection import detect_cuts_by_keyframe, detect_cuts_by_edge
-cut_points = detect_cuts_by_keyframe("video.mp4", min_duration=0.25)
-cut_points = detect_cuts_by_edge("video.mp4", threshold=0.15)  # needs [edge]
-```
-
----
-
-## CLI Commands
-
-### `amverge detect`
+### Interactive mode
 
 ```bash
-amverge detect video.mp4
-amverge detect video.mp4 --output ./scenes --method edge
-amverge detect video.mp4 --format json > scenes.json
-amverge detect video.mp4 --no-thumbnails --no-similarity
-amverge detect video.mp4 --min-duration 0.5 --workers 8
+amverge
 ```
+
+Launches a full wizard session — pick a command, fill in options step by step.
+
+### Direct commands
+
+```bash
+amverge detect episode.mp4
+amverge detect episode.mp4 --method edge --min-duration 0.5
+amverge export episode.mp4 --scenes episode_scenes/scenes.json
+amverge export episode.mp4 --scenes scenes.json --select 0,2,5-8 --merge
+amverge merge scene_0001.mp4 scene_0002.mp4 --output out.mp4
+amverge info episode.mp4
+```
+
+### Info
+
+```bash
+amverge usage      # command reference + examples
+amverge about      # what this is
+amverge credits    # contributors
+amverge changelog  # version history
+```
+
+---
+
+## CLI Reference
+
+### `amverge detect`
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--output / -o` | `<name>_scenes/` | Output directory |
 | `--method / -m` | `keyframe` | `keyframe` or `edge` |
 | `--format / -f` | `table` | `table`, `json`, or `paths` |
-| `--json-output` | — | Also save JSON to a file |
+| `--json-output` | — | Also write JSON to a file |
 | `--no-thumbnails` | false | Skip thumbnail generation |
 | `--no-similarity` | false | Skip similarity check |
 | `--min-duration` | `0.25` | Merge scenes shorter than N seconds |
-| `--workers` | `4` | Thumbnail worker threads |
-| `--similarity-threshold` | `0.10` | Similarity cutoff |
+| `--workers` | `4` | Thumbnail thread count |
+| `--similarity-threshold` | `0.10` | Similarity cutoff (lower = stricter) |
 | `--edge-threshold` | `0.15` | Edge detection sensitivity |
-| `--edge-radius` | `0.6` | Keyframe window radius (edge method) |
+| `--edge-radius` | `0.6` | Keyframe window radius |
 
 ### `amverge export`
-
-```bash
-amverge export video.mp4 --scenes scenes.json --output ./export
-amverge export video.mp4 --scenes scenes.json --select 0,2,5-8
-amverge export video.mp4 --scenes scenes.json --select 0-10 --merge
-amverge export video.mp4 --scenes scenes.json --codec h264
-```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--scenes / -s` | required | `scenes.json` from `detect` |
 | `--output / -o` | `./export` | Output directory |
-| `--select` | all | Indices: `0,2,5-8` |
-| `--merge` | false | Merge into one file |
+| `--select` | all | Index range: `0,2,5-8` |
+| `--merge` | false | Merge selection into one file |
 | `--codec` | `copy` | `copy`, `h264`, `hevc` |
 
 ### `amverge merge`
@@ -166,7 +167,7 @@ amverge merge clip1.mp4 clip2.mp4 clip3.mp4 --output merged.mp4
 ### `amverge info`
 
 ```bash
-amverge info video.mp4
+amverge info episode.mp4
 ```
 
 ---
@@ -175,8 +176,70 @@ amverge info video.mp4
 
 | Method | Speed | Accuracy | Requirement |
 |--------|-------|----------|-------------|
-| `keyframe` | Fast | Cuts only at I-frames | PyAV (base install) |
-| `edge` | Slow | Frame-accurate via Canny edges | OpenCV (`pip install amverge-cli[edge]`) |
+| `keyframe` | Fast | Cuts at I-frame boundaries | base install |
+| `edge` | Slower | Frame-accurate via Canny edges | `pip install amverge[edge]` |
 
-Use `keyframe` for most anime and broadcast content where scenes always start at keyframes.
-Use `edge` for heavily compressed files or content where keyframe placement is unreliable.
+Use `keyframe` for most anime and broadcast content.  
+Use `edge` for heavily compressed files where keyframe placement is unreliable.
+
+---
+
+## Python Library
+
+```python
+from amverge_cli import detect_scenes
+
+result = detect_scenes("episode.mp4")
+
+for scene in result.scenes:
+    print(scene.index, scene.start, scene.end, scene.path)
+
+for a, b in result.similar_pairs:
+    print(f"Scenes {a} and {b} look similar")
+```
+
+### `detect_scenes()` signature
+
+```python
+result = detect_scenes(
+    video_path="episode.mp4",
+    output_dir="./scenes",        # defaults to <name>_scenes/ next to video
+    method="keyframe",             # "keyframe" or "edge"
+    min_duration=0.25,             # merge scenes shorter than N seconds
+    thumbnails=True,
+    similarity=True,
+    similarity_threshold=0.10,
+    thumbnail_workers=4,
+    edge_threshold=0.15,
+    edge_radius=0.6,
+    progress=lambda stage, pct, msg: print(f"[{stage}] {pct}%"),
+)
+```
+
+### Low-level modules
+
+```python
+from amverge_cli.core.binaries   import get_ffmpeg, get_ffprobe
+from amverge_cli.core.keyframes  import generate_keyframes
+from amverge_cli.core.video      import get_video_info
+from amverge_cli.core.segmenter  import run_ffmpeg_segment
+from amverge_cli.core.thumbnails import generate_thumbnails
+from amverge_cli.core.similarity import find_similar_pairs
+from amverge_cli.core.hevc       import is_hevc
+from amverge_cli.core.image      import crop_image, CropData
+from amverge_cli.core.detection  import detect_cuts_by_keyframe, detect_cuts_by_edge
+```
+
+---
+
+## Credits
+
+Built by [Moongetsu](https://github.com/Moongetsu) as a standalone port of the [AMVerge](https://github.com/crptk/AMVerge) backend.
+
+Original AMVerge by [Crptk](https://github.com/crptk) and contributors.
+
+---
+
+## License
+
+MIT
