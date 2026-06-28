@@ -1,9 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import typer
 
-from ..ui import banner, console
-from ..ui import make_table
+from ..ui import banner, console, make_table
 from ..__version__ import __version__
 from rich.panel import Panel
 
@@ -25,25 +24,29 @@ def about() -> None:
     blurb = (
         "AMVerge CLI ports the scene-detection and clip-management engine from the "
         "[accent]AMVerge[/] desktop app into a standalone Python library and CLI tool.\n\n"
-        "Use it to split anime episodes (or any video) into scenes at cut boundaries, "
-        "browse the results, export only the clips you want, and merge fragments back "
-        "together - all from a terminal or your own Python scripts.\n\n"
-        "Built on [accent]FFmpeg[/] and [accent]PyAV[/]. No GUI required."
+        "Use it to split anime episodes (or any video) into scenes using "
+        "[accent]TransNetV2[/] ML detection or fast keyframe analysis, "
+        "export only the clips you want, and merge fragments - all from a terminal "
+        "or your own Python scripts.\n\n"
+        "Built on [accent]FFmpeg[/], [accent]PyAV[/], and [accent]PyTorch[/]. No GUI required."
     )
     console.print(Panel(blurb, border_style="bright_black", padding=(1, 2)))
     console.print()
 
     t = make_table(
-        ("",  "bright_black", {"width": 18}),
-        ("",  "white",        {}),
+        ("", "bright_black", {"width": 20}),
+        ("", "white",        {}),
         title="Key features",
     )
-    t.add_row("Keyframe detection",  "near-instant splitting using I-frames, no re-encode")
-    t.add_row("Edge detection",      "cosine-similarity approach for difficult encodes")
-    t.add_row("Thumbnails",          "auto-generated scene previews via PyAV")
-    t.add_row("Similarity check",    "flags duplicate or near-identical adjacent scenes")
-    t.add_row("Python library",      "from amverge import detect_scenes")
-    t.add_row("Zero quality loss",   "copy-mode export keeps the original stream intact")
+    t.add_row("TransNetV2 detection", "ML scene detection, GPU-accelerated, highly accurate")
+    t.add_row("Keyframe detection",   "near-instant splitting via I-frames, no ML required")
+    t.add_row("Smart cut",            "lossless copy for keyframe-aligned scenes, smartcut or re-encode for the rest")
+    t.add_row("HEVC support",         "snapped-copy on CPU, full re-encode with CUDA")
+    t.add_row("Scene cache",          "TransNetV2 results saved as .npy - skips re-detection on re-open")
+    t.add_row("Streaming IPC",        "CLIP_READY events stream to Tauri as each scene finishes cutting")
+    t.add_row("Discord RPC",          "live status via pypresence, same app ID as AMVerge desktop")
+    t.add_row("Python library",       "from amverge import detect_scenes")
+    t.add_row("Zero quality loss",    "copy-mode export keeps original stream intact")
     console.print(t)
 
     console.print()
