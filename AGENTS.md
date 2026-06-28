@@ -70,7 +70,7 @@ AMVerge-CLI/
 │   │   ├── backend.py       amverge backend <video> <output_dir>  (hidden - Rust sidecar replacement)
 │   │   ├── rpc_server.py    amverge rpc-server  (hidden - Discord RPC sidecar, reads JSON from stdin)
 │   │   ├── detect.py        amverge detect
-│   │   ├── export.py        amverge export
+│   │   ├── export.py        amverge export  (CODEC_PROFILES/AUDIO_FFMPEG dicts - wizard imports these)
 │   │   ├── merge.py         amverge merge
 │   │   ├── info.py          amverge info  (stream metadata via PyAV)
 │   │   ├── probe.py         amverge probe  (V2 diagnostics: codec/HEVC/keyframes/scene cache)
@@ -190,13 +190,16 @@ for scene in result.scenes:
 | `core/segmenter.py` | Windows 32,767-char command line limit. If video has >1500 cut points, chunks into multiple ffmpeg passes. Do not remove this chunking. |
 | `core/keyframes.py` | Fast path reads packet metadata only (no frame decode). Falls back to full decode for pathological encodes. Deduplicates I-frames within short windows. |
 | `core/detection/edge.py` | `import cv2` is inside the function body, not at module level. Raises clear `ImportError` pointing to `pip install amverge[edge]` if OpenCV missing. Keep it this way - edge is an optional dep. |
-| `wizard.py` | `_credits_table()` is imported from `commands/credits.py` to avoid duplication. The wizard and the direct `amverge credits` command share one table definition. |
-| `ui.py` | `err` console (stderr) used for all interactive/wizard output. `console` (stdout) for command results. Do not mix them. |
+| `wizard.py` | `_credits_table()` is imported from `commands/credits.py` to avoid duplication. `_wizard_export()` imports `CODEC_PROFILES`, `AUDIO_FFMPEG`, `CODEC_ALIASES`, `PRORES_CODECS`, `_resolve_gpu` from `commands/export.py` - single source of truth for codec mappings. |
+| `ui.py` | `err` console (stderr) used for all interactive/wizard output. `console` (stdout) for command results. Do not mix them. `ok()`/`warn()`/`fail()` use ASCII-safe marker `>` - Python `●`/`→` crash on CP1252 Windows terminals. |
+| `core/similarity.py` | `find_similar_pairs()` accepts both `scene_index` and `index` keys for V1 (collect_scenes) / V2 (Scene.to_dict()) compat. |
+| `commands/export.py` | `CODEC_PROFILES` maps 14 codec names to CPU/GPU ffmpeg encoders. `AUDIO_FFMPEG` maps 10 audio choices. `CODEC_ALIASES` maps `h264`/`hevc`/`h265` to `*_main` profiles. `PRORES_CODECS` set for mov-container enforcement. `_resolve_gpu()` handles auto/gpu/cpu hardware choice. Wizard imports these to avoid duplication. |
+| `pipeline.py` | `DetectionMethod` is `Literal["keyframe", "edge", "transnetv2"]`. TransNetV2 path uses `decode_and_detect_scenes()` + `cut_all_scenes()` (V2 pipeline). Monkey-patches `emit_progress` on `scene_detection`/`smart_cut` module-local refs (not `ipc` module) to route IPC progress to Rich callback. |
 | `core/ipc.py` | IPC protocol for Tauri app. V2 events: `PROGRESS\|pct\|msg`, `INITIAL_CLIPS_READY\|json`, `CLIP_READY\|idx\|path\|mode`, `PHASE1_COMPLETE`, `REENCODE_PROGRESS\|done\|total`. stdout reserved for final JSON. Never mix IPC output with Rich output. |
 | `core/scene_detection.py` | TransNetV2 inference. Requires `[ml]` extra. `TRANSNET_AVAILABLE` flag guards import at module level - raises clear `ImportError` if missing. Do not import torch at module level in other files. |
 | `core/smart_cut.py` | Four cut modes: `copy` (start on keyframe), `snapped_copy` (HEVC CPU - snaps to nearest keyframe within 5s), `smartcut` (H.264 - encode tiny head + lossless tail), `reencode` (full fallback). Never remove the HEVC CPU path - HEVC re-encode without CUDA takes 10+ minutes. |
 | `core/nelux_runtime.py` | Windows DLL setup for Nelux video reader. Set `AMVERGE_FFMPEG_BIN` env var to FFmpeg shared DLL directory. Idempotent - safe to call multiple times. |
-| `core/keyframe_align.py` | `get_keyframe_timestamps_pyav` uses PyAV demux with `stream.discard = "NONKEY"` - fast, reads packet metadata only. `classify_scenes_by_keyframe_alignment` partitions scenes for Phase 1 vs Phase 2 cutting. |
+| `core/keyframe_align.py` | `get_keyframe_timestamps_pyav` uses PyAV demux with `type(stream.discard).nonkey` enum (PyAV 17.x; was `"NONKEY"` string in older PyAV). `classify_scenes_by_keyframe_alignment` partitions scenes for Phase 1 vs Phase 2 cutting. |
 | `core/thumbnails_streaming.py` | V1 backend mode only. Emits events as each thumbnail completes. Not used in V2 backend. |
 | `core/discord_rpc.py` | Uses same CLIENT_ID as AMVerge app (`1497922104065134823`). Silently no-ops if pypresence not installed. `--no-rpc` flag on detect/export/merge to disable. Methods: idle/detecting/selecting/navigating/exporting/merging/complete/error. |
 | `commands/rpc_server.py` | Hidden sidecar: `amverge rpc-server`. Long-lived process; Rust spawns it once and sends JSON commands via stdin (`{"type":"update","details":"...","state":"..."}`, `{"type":"clear"}`, `{"type":"shutdown"}`). Throttles Discord updates to max 1 per 15s. Exits when stdin closes or parent dies. |
