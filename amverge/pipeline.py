@@ -27,7 +27,7 @@ from .core.thumbnails import generate_thumbnails
 from .core.similarity import find_similar_pairs
 from .core.video import get_video_duration
 
-DetectionMethod = Literal["keyframe", "edge"]
+DetectionMethod = Literal["keyframe", "edge", "transnetv2"]
 ProgressCb = Callable[[str, int, str], None]
 
 
@@ -115,55 +115,151 @@ def detect_scenes(
             except Exception:
                 pass
 
-    # --- Stage: detect cuts ---
-    _progress("detect", 0, f"Starting {method} detection...")
+    if method == "transnetv2":
+        from .core.scene_detection import TRANSNET_AVAILABLE
+        if not TRANSNET_AVAILABLE:
+            raise ImportError(
+                "transnetv2_pytorch not installed. Run: pip install amverge[ml]"
+            )
 
-    def _kf_cb(pct: int, msg: str) -> None:
-        _progress("detect", pct, msg)
+        import torch
+        from .core.scene_detection import decode_and_detect_scenes
+        from .core.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
+        from .core.codec_utils import check_if_hevc
+        from .core.scene_utils import scenes_to_objects
+        from .core.smart_cut import cut_all_scenes
 
-    if method == "keyframe":
-        cut_points = detect_cuts_by_keyframe(
-            video_path,
-            min_duration=min_duration,
-            progress_cb=_kf_cb,
+        import amverge.core.ipc as ipc_mod
+        _orig_emit = ipc_mod.emit_progress
+        _stage = "detect"
+
+        def _emit_patched(pct: int, msg: str) -> None:
+            _progress(_stage, pct, msg)
+
+        ipc_mod.emit_progress = _emit_patched
+        try:
+            _progress("detect", 0, "Starting TransNetV2 detection...")
+            scenes_secs, scenes_frames = decode_and_detect_scenes(video_path)
+        finally:
+            ipc_mod.emit_progress = _orig_emit
+
+        _progress("detect", 80, "Extracting keyframe timestamps...")
+        keyframes = get_keyframe_timestamps_pyav(video_path)
+        is_hevc = check_if_hevc(video_path)
+
+        raw_scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
+        scene_pairs = [(s["start_sec"], s["end_sec"]) for s in raw_scenes]
+        copy_candidates, reencode_candidates = classify_scenes_by_keyframe_alignment(
+            scene_pairs, keyframes
         )
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        scenes_out_dir = Path(output_dir) / "scenes"
+        scenes_out_dir.mkdir(parents=True, exist_ok=True)
+        cut_by_idx: dict[int, dict] = {}
+
+        copy_idx = {c["scene_id"] for c in copy_candidates}
+        phase1_scenes = [s for s in raw_scenes if s["scene_index"] in copy_idx]
+        phase2_scenes = [s for s in raw_scenes if s["scene_index"] not in copy_idx]
+
+        def _on_clip_ready(result: dict) -> None:
+            cut_by_idx[result["scene_index"]] = result
+
+        _progress("segment", 0, f"Cutting {len(phase1_scenes)} scenes (lossless copy)...")
+        ipc_mod.emit_progress = _emit_patched
+        _stage = "segment"
+        try:
+            cut_all_scenes(
+                input_file=Path(video_path),
+                scenes=phase1_scenes,
+                keyframes=keyframes,
+                out_dir=scenes_out_dir,
+                use_cuda=(device == "cuda"),
+                is_hevc=is_hevc,
+                max_workers=8,
+                on_ready=_on_clip_ready,
+            )
+
+            if phase2_scenes:
+                _progress("segment", 60, f"Cutting {len(phase2_scenes)} scenes (re-encode)...")
+                cut_all_scenes(
+                    input_file=Path(video_path),
+                    scenes=phase2_scenes,
+                    keyframes=keyframes,
+                    out_dir=scenes_out_dir,
+                    use_cuda=(device == "cuda"),
+                    is_hevc=is_hevc,
+                    max_workers=2,
+                    on_ready=_on_clip_ready,
+                    emit_progress_updates=False,
+                )
+        finally:
+            ipc_mod.emit_progress = _orig_emit
+
+        _progress("segment", 100, f"{len(raw_scenes)} scenes written")
+
+        scenes = [
+            Scene(
+                index=s["scene_index"],
+                start=s["start_sec"],
+                end=s["end_sec"],
+                duration=s["duration_sec"],
+                path=cut_by_idx.get(s["scene_index"], {}).get("clip_path", ""),
+                thumbnail=None,
+                original_file=Path(video_path).name,
+            )
+            for s in raw_scenes
+        ]
     else:
-        cut_points = detect_cuts_by_edge(
-            video_path,
-            threshold=edge_threshold,
-            radius=edge_radius,
-            blocksize=edge_blocksize,
-            min_duration=min_duration,
-            progress_cb=_kf_cb,
-        )
+        # --- Stage: detect cuts ---
+        _progress("detect", 0, f"Starting {method} detection...")
 
-    _progress("detect", 100, f"Detection done - {len(cut_points)} cuts")
+        def _kf_cb(pct: int, msg: str) -> None:
+            _progress("detect", pct, msg)
 
-    # --- Stage: segment ---
-    _progress("segment", 0, f"Cutting {len(cut_points)} scenes...")
+        if method == "keyframe":
+            cut_points = detect_cuts_by_keyframe(
+                video_path,
+                min_duration=min_duration,
+                progress_cb=_kf_cb,
+            )
+        else:
+            cut_points = detect_cuts_by_edge(
+                video_path,
+                threshold=edge_threshold,
+                radius=edge_radius,
+                blocksize=edge_blocksize,
+                min_duration=min_duration,
+                progress_cb=_kf_cb,
+            )
 
-    seg_stem = video_stem.replace("%", "%%")
-    output_pattern = os.path.join(output_dir, f"{seg_stem}_%04d.mp4")
+        _progress("detect", 100, f"Detection done - {len(cut_points)} cuts")
 
-    run_ffmpeg_segment(video_path, output_pattern, cut_points)
+        # --- Stage: segment ---
+        _progress("segment", 0, f"Cutting {len(cut_points)} scenes...")
 
-    total_duration = get_video_duration(video_path)
-    raw_scenes = collect_scenes(output_dir, video_stem, cut_points, total_duration)
+        seg_stem = video_stem.replace("%", "%%")
+        output_pattern = os.path.join(output_dir, f"{seg_stem}_%04d.mp4")
 
-    _progress("segment", 100, f"{len(raw_scenes)} scenes written")
+        run_ffmpeg_segment(video_path, output_pattern, cut_points)
 
-    scenes = [
-        Scene(
-            index=s["scene_index"],
-            start=s["start"],
-            end=s["end"],
-            duration=s["duration"],
-            path=s["path"],
-            thumbnail=s.get("thumbnail"),
-            original_file=s["original_file"],
-        )
-        for s in raw_scenes
-    ]
+        total_duration = get_video_duration(video_path)
+        raw_scenes = collect_scenes(output_dir, video_stem, cut_points, total_duration)
+
+        _progress("segment", 100, f"{len(raw_scenes)} scenes written")
+
+        scenes = [
+            Scene(
+                index=s["scene_index"],
+                start=s["start"],
+                end=s["end"],
+                duration=s["duration"],
+                path=s["path"],
+                thumbnail=s.get("thumbnail"),
+                original_file=s["original_file"],
+            )
+            for s in raw_scenes
+        ]
 
     similar_pairs: list[tuple[int, int]] = []
 
@@ -172,19 +268,45 @@ def detect_scenes(
         _progress("thumbnails", 0, f"Generating {len(scenes)} thumbnails...")
         total = len(scenes)
 
-        def _thumb_cb(done: int, t: int) -> None:
-            _progress("thumbnails", int(100 * done / max(t, 1)), f"Thumbnails {done}/{t}")
+        if method == "transnetv2":
+            import threading as _threading
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            from .core.thumbnails import make_thumbnail as _make_thumbnail
+            _done = 0
+            _lock = _threading.Lock()
 
-        generate_thumbnails(
-            raw_scenes,
-            output_dir,
-            video_stem,
-            workers=thumbnail_workers,
-            progress_cb=_thumb_cb,
-        )
+            def _make_one(scene: Scene) -> None:
+                nonlocal _done
+                thumb_path = os.path.join(output_dir, f"{video_stem}_{scene.index:04d}.jpg")
+                if scene.path and os.path.exists(scene.path):
+                    _make_thumbnail(scene.path, thumb_path)
+                scene.thumbnail = thumb_path
+                with _lock:
+                    _done += 1
+                    _progress("thumbnails", int(100 * _done / max(total, 1)), f"Thumbnails {_done}/{total}")
 
-        for scene in scenes:
-            scene.thumbnail = os.path.join(output_dir, f"{video_stem}_{scene.index:04d}.jpg")
+            max_w = min(thumbnail_workers, (os.cpu_count() or 4))
+            with ThreadPoolExecutor(max_workers=max_w) as executor:
+                futures = [executor.submit(_make_one, s) for s in scenes]
+                for f in as_completed(futures):
+                    try:
+                        f.result()
+                    except Exception:
+                        pass
+        else:
+            def _thumb_cb(done: int, t: int) -> None:
+                _progress("thumbnails", int(100 * done / max(t, 1)), f"Thumbnails {done}/{t}")
+
+            generate_thumbnails(
+                raw_scenes,
+                output_dir,
+                video_stem,
+                workers=thumbnail_workers,
+                progress_cb=_thumb_cb,
+            )
+
+            for scene in scenes:
+                scene.thumbnail = os.path.join(output_dir, f"{video_stem}_{scene.index:04d}.jpg")
 
         _progress("thumbnails", 100, "Thumbnails done")
 

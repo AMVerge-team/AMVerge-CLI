@@ -22,7 +22,7 @@ _STAGE_LABELS = {
 def detect(
     video: Path = typer.Argument(..., help="Input video file", exists=True),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
-    method: str = typer.Option("keyframe", "--method", "-m", help="keyframe · edge"),
+    method: str = typer.Option("keyframe", "--method", "-m", help="keyframe · edge · transnetv2"),
     format: str = typer.Option("table", "--format", "-f", help="table · json · paths"),
     json_output: Optional[Path] = typer.Option(None, "--json-output", help="Save JSON to file"),
     no_thumbnails: bool = typer.Option(False, "--no-thumbnails"),
@@ -40,8 +40,8 @@ def detect(
     if fmt not in ("table", "json", "paths"):
         fail("--format must be: table, json, or paths")
         raise typer.Exit(1)
-    if method not in ("keyframe", "edge"):
-        fail("--method must be: keyframe or edge")
+    if method not in ("keyframe", "edge", "transnetv2"):
+        fail("--method must be: keyframe, edge, or transnetv2")
         raise typer.Exit(1)
 
     if ipc:
@@ -162,6 +162,98 @@ def _detect_ipc(
 
     def kf_cb(pct: int, msg: str) -> None:
         emit_progress(pct, msg)
+
+    if method == "transnetv2":
+        from ..core.scene_detection import TRANSNET_AVAILABLE
+        if not TRANSNET_AVAILABLE:
+            fail("transnetv2_pytorch not installed. Run: pip install amverge[ml]")
+            raise typer.Exit(1)
+
+        import torch
+        from ..core.scene_detection import decode_and_detect_scenes
+        from ..core.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
+        from ..core.codec_utils import check_if_hevc
+        from ..core.scene_utils import scenes_to_objects
+        from ..core.smart_cut import cut_all_scenes
+
+        emit_progress(0, "Starting TransNetV2 detection...")
+        scenes_secs, scenes_frames = decode_and_detect_scenes(video_path)
+
+        emit_progress(80, "Extracting keyframe timestamps...")
+        keyframes = get_keyframe_timestamps_pyav(video_path)
+        is_hevc = check_if_hevc(video_path)
+
+        raw_scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
+        scene_pairs = [(s["start_sec"], s["end_sec"]) for s in raw_scenes]
+        copy_candidates, reencode_candidates = classify_scenes_by_keyframe_alignment(
+            scene_pairs, keyframes
+        )
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        scenes_out_dir = Path(output_dir) / "scenes"
+        scenes_out_dir.mkdir(parents=True, exist_ok=True)
+
+        copy_idx = {c["scene_id"] for c in copy_candidates}
+        phase1_scenes = [s for s in raw_scenes if s["scene_index"] in copy_idx]
+        phase2_scenes = [s for s in raw_scenes if s["scene_index"] not in copy_idx]
+
+        cut_by_idx: dict[int, dict] = {}
+
+        def _on_clip_ready(result: dict) -> None:
+            cut_by_idx[result["scene_index"]] = result
+
+        emit_progress(82, f"Cutting {len(phase1_scenes)} scenes (lossless copy)...")
+        cut_all_scenes(
+            input_file=video,
+            scenes=phase1_scenes,
+            keyframes=keyframes,
+            out_dir=scenes_out_dir,
+            use_cuda=(device == "cuda"),
+            is_hevc=is_hevc,
+            max_workers=8,
+            on_ready=_on_clip_ready,
+        )
+
+        if phase2_scenes:
+            emit_progress(90, f"Cutting {len(phase2_scenes)} scenes (re-encode)...")
+            cut_all_scenes(
+                input_file=video,
+                scenes=phase2_scenes,
+                keyframes=keyframes,
+                out_dir=scenes_out_dir,
+                use_cuda=(device == "cuda"),
+                is_hevc=is_hevc,
+                max_workers=2,
+                on_ready=_on_clip_ready,
+                emit_progress_updates=False,
+            )
+
+        emit_progress(95, "Generating thumbnails...")
+        from ..core.thumbnails import make_thumbnail
+        for scene in raw_scenes:
+            idx = scene["scene_index"]
+            thumb_path = os.path.join(output_dir, f"{video_stem}_{idx:04d}.jpg")
+            clip_path = cut_by_idx.get(idx, {}).get("clip_path", "")
+            if clip_path and os.path.exists(clip_path):
+                make_thumbnail(clip_path, thumb_path)
+
+        scenes = []
+        for s in raw_scenes:
+            idx = s["scene_index"]
+            cut = cut_by_idx.get(idx, {})
+            scenes.append({
+                "scene_index": idx,
+                "start": s["start_sec"],
+                "end": s["end_sec"],
+                "duration": s["duration_sec"],
+                "path": cut.get("clip_path", ""),
+                "thumbnail": os.path.join(output_dir, f"{video_stem}_{idx:04d}.jpg"),
+                "original_file": video.name,
+            })
+
+        emit_progress(100, "Done")
+        print(json.dumps(scenes), flush=True)
+        return
 
     if method == "keyframe":
         cut_points = detect_cuts_by_keyframe(video_path, min_duration=min_duration, progress_cb=kf_cb)
