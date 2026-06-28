@@ -1,4 +1,14 @@
-﻿# AMVerge CLI
+﻿<p align="center">
+  <img src="assets/amverge_title_gif.gif" alt="AMVerge CLI" width="1440"/>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square" alt="Python"/>
+  <img src="https://img.shields.io/badge/pypi-amverge-22c55e?style=flat-square" alt="PyPI"/>
+  <img src="https://img.shields.io/badge/license-GPL--3.0-22c55e?style=flat-square" alt="License"/>
+</p>
+
+# AMVerge CLI
 
 **Scene detection and clip management - as a CLI tool and Python library.**  
 Port of the AMVerge desktop app backend. Split videos into scenes, export clips, merge fragments, and build your own tools on top of it.
@@ -242,4 +252,6 @@ Original AMVerge by [Crptk](https://github.com/crptk) and contributors.
 
 ## License
 
-MIT
+AMVerge CLI is licensed under the GNU GPL v3.0.
+
+Any derivative work must also be open-source under the same license.
