@@ -7,15 +7,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-from rich.align import Align
-from rich.columns import Columns
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.rule import Rule
 from rich.table import Table
-from rich import box
 
-from .ui import console, err, make_progress, make_table, ok, fail, dim, THEME
+from .ui import console, err, make_progress, make_table, ok, fail, dim
 from .__version__ import __version__
 
 
@@ -437,172 +434,27 @@ def _wizard_info() -> None:
 # ---------------------------------------------------------------------------
 
 def _wizard_help() -> None:
-    _header()
-    _section("help")
-    err.print("  [muted]Command reference and usage examples.[/]\n")
-
-    # Workflow commands
-    t = make_table(
-        ("command",  "#22c55e bold", {"width": 10}),
-        ("args",     "label",        {"width": 36}),
-        ("note",     "muted",        {}),
-        title="Workflow",
-    )
-    t.add_row("detect",  "VIDEO  [--output DIR] [--method keyframe|edge]",  "split video into scenes")
-    t.add_row("",        "[--min-duration 0.25] [--workers 4]",             "")
-    t.add_row("",        "[--no-thumbnails] [--no-similarity] [--ipc]",     "")
-    t.add_row("export",  "VIDEO  --scenes JSON  [--output DIR]",            "export scenes to disk")
-    t.add_row("",        "[--select 0,2,5-8]  [--merge]  [--codec copy]",  "")
-    t.add_row("merge",   "CLIP CLIP ...  --output FILE",                    "concat clips")
-    console.print(t)
-
-    t2 = make_table(
-        ("command",    "#22c55e bold", {"width": 12}),
-        ("args",       "label",        {"width": 38}),
-        ("note",       "muted",        {}),
-        title="Video info",
-    )
-    t2.add_row("info",       "VIDEO",                                     "stream metadata (PyAV)")
-    t2.add_row("probe",      "VIDEO  [--no-keyframes] [--cache-dir DIR]", "V2 diagnostics: codec, HEVC, keyframes, cache")
-    t2.add_row("keyframes",  "VIDEO  [--json] [--count]",                 "dump keyframe timestamps")
-    t2.add_row("scenes",     "VIDEO  [--json] [--min-duration N]",        "scene list from .npy cache")
-    t2.add_row("cache",      "DIR  [--clear VIDEO] [--clear-all]",        "list or delete .npy caches")
-    console.print(t2)
-
-    t3 = make_table(
-        ("command",   "#22c55e bold", {"width": 10}),
-        ("note",      "muted",        {}),
-        title="App info",
-    )
-    t3.add_row("usage",     "command reference (this page)")
-    t3.add_row("about",     "what is AMVerge CLI")
-    t3.add_row("credits",   "meet the team")
-    t3.add_row("changelog", "version history")
-    console.print(t3)
-
-    console.print("\n[muted]  Examples[/]\n")
-    examples = [
-        ("detect (V2 ML)",       "amverge detect ep01.mkv"),
-        ("detect (keyframe)",    "amverge detect ep01.mkv --method keyframe"),
-        ("detect (edge)",        "amverge detect ep01.mkv --method edge --min-duration 0.5"),
-        ("export all",           "amverge export ep01.mkv --scenes scenes.json"),
-        ("export selection",     "amverge export ep01.mkv -s scenes.json --select 0,2,5-8 --merge"),
-        ("merge",                "amverge merge scene_0001.mp4 scene_0002.mp4 -o out.mp4"),
-        ("probe",                "amverge probe ep01.mkv"),
-        ("keyframes",            "amverge keyframes ep01.mkv --json"),
-        ("scenes from cache",    "amverge scenes ep01.mkv --cache-dir path/to/cache"),
-        ("library",              "from amverge import detect_scenes"),
-    ]
-    t4 = make_table(
-        ("",      "muted",  {"width": 22}),
-        ("",      "label",  {}),
-    )
-    for label, cmd in examples:
-        t4.add_row(label, cmd)
-    console.print(t4)
-
-    console.print("\n[muted]  Detection methods[/]\n")
-    t5 = make_table(
-        ("method",      "#22c55e bold", {"width": 12}),
-        ("speed",       "label",        {"width": 8}),
-        ("accuracy",    "label",        {"width": 10}),
-        ("requires",    "muted",        {}),
-    )
-    t5.add_row("transnetv2", "medium", "best",      "pip install amverge[ml]  (CUDA optional)")
-    t5.add_row("keyframe",   "fast",   "good",      "nothing extra")
-    t5.add_row("edge",       "slower", "excellent", "pip install amverge[edge]")
-    console.print(t5)
+    os.system("cls" if os.name == "nt" else "clear")
+    from .commands.usage import usage
+    usage()
 
 
 def _wizard_about() -> None:
-    _header()
-    _section("about")
-
-    console.print(
-        Panel(
-            "[label]AM[/][accent]Verge[/] [muted]CLI[/]  [muted]v" + __version__ + "[/]",
-            border_style="accent",
-            padding=(0, 2),
-            expand=False,
-        )
-    )
-    console.print()
-
-    blurb = (
-        "AMVerge CLI ports the scene-detection and clip-management engine from the "
-        "[accent]AMVerge[/] desktop app into a standalone Python library and CLI tool.\n\n"
-        "Use it to split anime episodes (or any video) into scenes using "
-        "[accent]TransNetV2[/] ML detection or fast keyframe analysis, "
-        "export only the clips you want, and merge fragments - all from a terminal "
-        "or your own Python scripts.\n\n"
-        "Built on [accent]FFmpeg[/], [accent]PyAV[/], and [accent]PyTorch[/]. No GUI required."
-    )
-    console.print(Panel(blurb, border_style="muted", padding=(1, 2)))
-    console.print()
-
-    t = make_table(
-        ("",  "muted",  {"width": 20}),
-        ("",  "label",  {}),
-        title="Key features",
-    )
-    t.add_row("TransNetV2 detection", "ML scene detection, GPU-accelerated, highly accurate")
-    t.add_row("Keyframe detection",   "near-instant splitting via I-frames, no ML required")
-    t.add_row("Smart cut",            "lossless copy for keyframe-aligned scenes, smartcut or re-encode for the rest")
-    t.add_row("HEVC support",         "snapped-copy on CPU, full re-encode with CUDA")
-    t.add_row("Scene cache",          "TransNetV2 results saved as .npy - skips re-detection on re-open")
-    t.add_row("Discord RPC",          "live status via pypresence, same app ID as AMVerge desktop")
-    t.add_row("Python library",       "from amverge import detect_scenes")
-    t.add_row("Zero quality loss",    "copy-mode export keeps original stream intact")
-    console.print(t)
-
-    console.print()
-    console.print("[muted]  Source  [/][label]github.com/crptk/AMVerge[/]")
-    console.print("[muted]  Discord [/][label]discord.gg/bmXjTgsAaN[/]")
-    console.print()
+    os.system("cls" if os.name == "nt" else "clear")
+    from .commands.about import about
+    about()
 
 
 def _wizard_credits() -> None:
-    from .commands.credits import _credits_table
-
-    _header()
-    _section("credits")
-    err.print("  [muted]The people behind AMVerge.[/]\n")
-
-    console.print(_credits_table())
-    console.print()
-    console.print(
-        Panel(
-            "[muted]Want to contribute?[/]  [label]github.com/crptk/AMVerge[/]",
-            border_style="muted",
-            padding=(0, 2),
-            expand=False,
-        )
-    )
-    console.print()
+    os.system("cls" if os.name == "nt" else "clear")
+    from .commands.credits import credits
+    credits()
 
 
 def _wizard_changelog() -> None:
-    from .commands.changelog import _CLI_ENTRIES, _APP_ENTRIES
-
-    _header()
-    _section("changelog")
-    err.print("  [muted]AMVerge CLI and app version history.[/]\n")
-
-    console.print("[muted]  CLI[/]\n")
-    for version, changes in _CLI_ENTRIES:
-        t = make_table(("", "muted", {}), title=version)
-        for c in changes:
-            t.add_row(c)
-        console.print(t)
-        console.print()
-
-    console.print("[muted]  AMVerge App[/]\n")
-    for version, changes in _APP_ENTRIES:
-        t = make_table(("", "muted", {}), title=version)
-        for c in changes:
-            t.add_row(c)
-        console.print(t)
-        console.print()
+    os.system("cls" if os.name == "nt" else "clear")
+    from .commands.changelog import changelog
+    changelog()
 
 
 # ---------------------------------------------------------------------------
