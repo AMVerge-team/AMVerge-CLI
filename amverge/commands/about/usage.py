@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..ui import banner, console, make_table
+from ...ui import banner, console, make_table
 
 
 def usage() -> None:

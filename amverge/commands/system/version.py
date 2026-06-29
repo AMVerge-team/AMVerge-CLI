@@ -6,8 +6,8 @@ import sys
 
 import typer
 
-from ..ui import banner, console, make_table
-from ..__version__ import __version__
+from ...ui import banner, console, make_table
+from ...__version__ import __version__
 
 
 def version(

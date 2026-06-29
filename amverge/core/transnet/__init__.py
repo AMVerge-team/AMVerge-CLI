@@ -1,4 +1,4 @@
-from amverge.core.transnet.transnet_constants import (
+from .transnet_constants import (
     FRAME_BYTES,
     FRAME_CHANNELS,
     FRAME_HEIGHT,

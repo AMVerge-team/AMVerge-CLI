@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..ui import banner, console, make_table
+from ...ui import banner, console, make_table
 
 
 def gpu() -> None:
@@ -58,7 +58,7 @@ def gpu() -> None:
         t2.add_row("tqdm",               "[error]not installed[/]  pip install amverge[ml]")
 
     try:
-        from ..core.detection.nelux_runtime import _get_nelux_video_reader
+        from ...core.detection.nelux_runtime import _get_nelux_video_reader
         _get_nelux_video_reader()
         t2.add_row("nelux",              "[accent]available[/]")
     except ImportError as e:

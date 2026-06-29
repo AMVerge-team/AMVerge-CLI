@@ -4,7 +4,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-from ..ui import banner, console
+from ...ui import banner, console
 
 
 _CLI_TEAM = [

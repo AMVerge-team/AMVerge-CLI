@@ -16,7 +16,7 @@ def rpc_server() -> None:
     Shuts down when stdin closes or a shutdown command is received.
     Called by Rust as a long-lived subprocess.
     """
-    from ..core.discord.discord_rpc import DiscordRPC, RPC_AVAILABLE
+    from ...core.discord.discord_rpc import DiscordRPC, RPC_AVAILABLE
 
     if not RPC_AVAILABLE:
         raise typer.Exit(1)

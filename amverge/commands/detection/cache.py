@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from ..ui import banner, console, make_table, ok, fail, warn
+from ...ui import banner, console, make_table, ok, fail, warn
 
 
 def cache(
@@ -13,7 +13,7 @@ def cache(
     clear_all: bool = typer.Option(False, "--clear-all", help="Delete all caches in directory"),
 ) -> None:
     """List or clear TransNetV2 scene caches (.npy files)."""
-    from ..core.infra.ipc import build_video_cache_prefix
+    from ...core.infra.ipc import build_video_cache_prefix
 
     banner("cache")
 

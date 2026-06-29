@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from ..core.infra.diagnostics import check_environment
-from ..ui import banner, console, make_table
+from ...core.infra.diagnostics import check_environment
+from ...ui import banner, console, make_table
 
 
 def doctor() -> None:

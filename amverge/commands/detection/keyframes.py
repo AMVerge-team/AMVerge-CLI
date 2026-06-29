@@ -5,7 +5,7 @@ from pathlib import Path
 
 import typer
 
-from ..ui import banner, console, make_table, make_progress
+from ...ui import banner, console, make_table, make_progress
 
 
 def keyframes(
@@ -15,7 +15,7 @@ def keyframes(
     threshold: float = typer.Option(0.2, "--threshold", help="Snap threshold in seconds (for cut mode column)"),
 ) -> None:
     """List all keyframe timestamps for a video."""
-    from ..core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
+    from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
 
     banner("keyframes")
 

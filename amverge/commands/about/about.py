@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import typer
 
-from ..ui import banner, console, make_table
-from ..__version__ import __version__
+from ...ui import banner, console, make_table
+from ...__version__ import __version__
 from rich.panel import Panel
 
 

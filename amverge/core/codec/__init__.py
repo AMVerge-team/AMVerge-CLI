@@ -1,4 +1,4 @@
-from amverge.core.codec.codec_utils import (
+from .codec_utils import (
     AUDIO_FFMPEG,
     CODEC_ALIASES,
     CODEC_PROFILES,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import typer
 
-from ..ui import banner, console, make_table, fail
+from ...ui import banner, console, make_table, fail
 
 
 def scenes(
@@ -15,8 +15,8 @@ def scenes(
     min_duration: float = typer.Option(0.0, "--min-duration", help="Filter scenes shorter than N seconds"),
 ) -> None:
     """Show detected scenes from a TransNetV2 cache."""
-    from ..core.infra.ipc import build_video_cache_prefix
-    from ..core.video.scene_utils import scenes_to_objects
+    from ...core.infra.ipc import build_video_cache_prefix
+    from ...core.video.scene_utils import scenes_to_objects
 
     import numpy as np
 

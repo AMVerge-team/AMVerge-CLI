@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from ..ui import banner, console, make_table, err
+from ...ui import banner, console, make_table, err
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -24,10 +24,10 @@ def probe(
     cache_dir: Path = typer.Option(None, "--cache-dir", help="Directory to check for scene cache"),
 ) -> None:
     """Show detailed V2 diagnostics: codec, HEVC, keyframes, scene cache."""
-    from ..core.video.probe_utils import probe_video_fps, probe_video_duration, probe_video_dimensions
-    from ..core.codec.codec_utils import check_if_hevc
-    from ..core.infra.ipc import build_video_cache_prefix
-    from ..ui import make_progress
+    from ...core.video.probe_utils import probe_video_fps, probe_video_duration, probe_video_dimensions
+    from ...core.codec.codec_utils import check_if_hevc
+    from ...core.infra.ipc import build_video_cache_prefix
+    from ...ui import make_progress
 
     banner("probe")
 
@@ -47,7 +47,7 @@ def probe(
         kf_times: list[float] = []
         if keyframes:
             progress.update(task, description="Scanning keyframes...")
-            from ..core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
+            from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
             kf_times = get_keyframe_timestamps_pyav(str(video))
 
     console.print(f"[label]{video.name}[/]  [muted]{_fmt_duration(duration)}[/]\n")

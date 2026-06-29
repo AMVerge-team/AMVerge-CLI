@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
 import typer
 
-from ..core.video import get_video_info
-from ..ui import banner, console, make_table, dim
+from ...core.video import get_video_info
+from ...ui import banner, console, make_table, dim
 
 
 def _fmt_bitrate(bps: int | None) -> str:

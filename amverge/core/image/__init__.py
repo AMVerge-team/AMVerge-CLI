@@ -1,1 +1,1 @@
-from amverge.core.image.image import CropData, crop_image
+from .image import CropData, crop_image

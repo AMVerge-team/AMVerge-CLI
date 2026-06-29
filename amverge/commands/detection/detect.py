@@ -7,9 +7,9 @@ from typing import Optional
 
 import typer
 
-from ..pipeline import detect_scenes, DetectResult
-from ..ui import banner, console, err, make_progress, make_table, ok, fail, dim
-from ..core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
+from ...pipeline import detect_scenes, DetectResult
+from ...ui import banner, console, err, make_progress, make_table, ok, fail, dim
+from ...core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
 
 _STAGE_LABELS = {
     "detect":     "Detecting cuts",
@@ -141,12 +141,12 @@ def _detect_ipc(
     edge_radius: float,
 ) -> None:
     import sys
-    from ..core.infra.ipc import emit_progress, emit_event
-    from ..core.detection.keyframe import detect_cuts_by_keyframe
-    from ..core.detection.edge import detect_cuts_by_edge
-    from ..core.cutting.segmenter import run_ffmpeg_segment, collect_scenes
-    from ..core.video import get_video_duration
-    from ..core.thumbnails.thumbnails_streaming import generate_thumbnails_streaming
+    from ...core.infra.ipc import emit_progress, emit_event
+    from ...core.detection.keyframe import detect_cuts_by_keyframe
+    from ...core.detection.edge import detect_cuts_by_edge
+    from ...core.cutting.segmenter import run_ffmpeg_segment, collect_scenes
+    from ...core.video import get_video_duration
+    from ...core.thumbnails.thumbnails_streaming import generate_thumbnails_streaming
 
     video_path = str(video.resolve())
     video_stem = video.stem
@@ -164,17 +164,17 @@ def _detect_ipc(
         emit_progress(pct, msg)
 
     if method == "transnetv2":
-        from ..core.detection.scene_detection import TRANSNET_AVAILABLE
+        from ...core.detection.scene_detection import TRANSNET_AVAILABLE
         if not TRANSNET_AVAILABLE:
             fail("transnetv2_pytorch not installed. Run: pip install amverge[ml]")
             raise typer.Exit(1)
 
         import torch
-        from ..core.detection.scene_detection import decode_and_detect_scenes
-        from ..core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
-        from ..core.codec.codec_utils import check_if_hevc
-        from ..core.video.scene_utils import scenes_to_objects
-        from ..core.cutting.smart_cut import cut_all_scenes
+        from ...core.detection.scene_detection import decode_and_detect_scenes
+        from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
+        from ...core.codec.codec_utils import check_if_hevc
+        from ...core.video.scene_utils import scenes_to_objects
+        from ...core.cutting.smart_cut import cut_all_scenes
 
         emit_progress(0, "Starting TransNetV2 detection...")
         scenes_secs, scenes_frames = decode_and_detect_scenes(video_path)
@@ -229,7 +229,7 @@ def _detect_ipc(
             )
 
         emit_progress(95, "Generating thumbnails...")
-        from ..core.thumbnails import make_thumbnail
+        from ...core.thumbnails import make_thumbnail
         for scene in raw_scenes:
             idx = scene["scene_index"]
             thumb_path = os.path.join(output_dir, f"{video_stem}_{idx:04d}.jpg")

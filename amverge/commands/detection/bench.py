@@ -5,7 +5,7 @@ from pathlib import Path
 
 import typer
 
-from ..ui import banner, console, make_table, make_progress, warn
+from ...ui import banner, console, make_table, make_progress, warn
 
 
 def bench(
@@ -22,7 +22,7 @@ def bench(
     with make_progress(transient=True) as progress:
         progress.add_task("Scanning keyframes...", total=None)
         t0 = time.perf_counter()
-        from ..core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
+        from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
         kf = get_keyframe_timestamps_pyav(str(video))
         kf_elapsed = time.perf_counter() - t0
 
@@ -32,7 +32,7 @@ def bench(
     with make_progress(transient=True) as progress:
         progress.add_task("Probing video...", total=None)
         t0 = time.perf_counter()
-        from ..core.video.probe_utils import probe_video_duration, probe_video_fps
+        from ...core.video.probe_utils import probe_video_duration, probe_video_fps
         duration = probe_video_duration(video)
         fps = probe_video_fps(video)
         probe_elapsed = time.perf_counter() - t0
@@ -49,7 +49,7 @@ def bench(
             with make_progress(transient=True) as progress:
                 progress.add_task(f"TransNetV2 decode ({device})...", total=None)
                 t0 = time.perf_counter()
-                from ..core.detection.scene_detection import decode_video_frames_nelux
+                from ...core.detection.scene_detection import decode_video_frames_nelux
                 try:
                     frames = decode_video_frames_nelux(video)
                     decode_elapsed = time.perf_counter() - t0
@@ -63,7 +63,7 @@ def bench(
                     with make_progress(transient=True) as progress2:
                         progress2.add_task(f"TransNetV2 inference ({device})...", total=None)
                         t0 = time.perf_counter()
-                        from ..core.detection.scene_detection import run_model_one_pass
+                        from ...core.detection.scene_detection import run_model_one_pass
                         scenes_secs, scenes_frames = run_model_one_pass(frames, video)
                         infer_elapsed = time.perf_counter() - t0
 
@@ -75,7 +75,7 @@ def bench(
 
                 except ImportError:
                     t0 = time.perf_counter()
-                    from ..core.detection.scene_detection import decode_and_detect_scenes
+                    from ...core.detection.scene_detection import decode_and_detect_scenes
                     scenes_secs, _ = decode_and_detect_scenes(video)
                     total_elapsed = time.perf_counter() - t0
                     results.append((

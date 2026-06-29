@@ -10,14 +10,14 @@ from typing import Optional
 
 import typer
 
-from ..core.infra.binaries import get_ffmpeg
-from ..core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
-from ..core.codec.codec_utils import (
+from ...core.infra.binaries import get_ffmpeg
+from ...core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
+from ...core.codec.codec_utils import (
     VALID_CODECS, VALID_AUDIO, VALID_CONTAINERS, VALID_HARDWARE,
     CODEC_ALIASES, CODEC_PROFILES, PRORES_CODECS, AUDIO_FFMPEG,
     resolve_gpu,
 )
-from ..ui import banner, console, err, make_progress, make_table, ok, fail, dim
+from ...ui import banner, console, err, make_progress, make_table, ok, fail, dim
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 

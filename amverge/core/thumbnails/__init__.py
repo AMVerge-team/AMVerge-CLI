@@ -1,2 +1,2 @@
-from amverge.core.thumbnails.thumbnails import generate_thumbnails, make_thumbnail
-from amverge.core.thumbnails.thumbnails_streaming import generate_thumbnails_streaming
+from .thumbnails import generate_thumbnails, make_thumbnail
+from .thumbnails_streaming import generate_thumbnails_streaming

@@ -9,9 +9,9 @@ from typing import List
 
 import typer
 
-from ..core.infra.binaries import get_ffmpeg
-from ..core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
-from ..ui import banner, ok, fail
+from ...core.infra.binaries import get_ffmpeg
+from ...core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
+from ...ui import banner, ok, fail
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
