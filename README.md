@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square" alt="Python"/>
-  <img src="https://img.shields.io/badge/pypi-amverge-22c55e?style=flat-square" alt="PyPI"/>
+  <a href="https://pypi.org/project/amverge/"><img src="https://img.shields.io/badge/pypi-amverge-22c55e?style=flat-square" alt="PyPI"/></a>
   <img src="https://img.shields.io/badge/license-GPL--3.0-22c55e?style=flat-square" alt="License"/>
 </p>
 
