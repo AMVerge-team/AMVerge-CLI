@@ -194,7 +194,7 @@ The best approach is not to use a generic AI assistant - it is to train it to wo
 <details>
 <summary><b>Credits</b></summary>
 
-Built by [Moongetsu](https://github.com/Moongetsu) as a standalone port of the [AMVerge](https://github.com/crptk/AMVerge) backend.
+Built by [Moongetsu](https://github.com/Moongetsu) as a standalone port of the [AMVerge](https://github.com/AMVerge-team/AMVerge) backend.
 
 AMVerge was created by [Crptk](https://github.com/crptk). All core scene detection and clip management logic originates from the original AMVerge project.
 
