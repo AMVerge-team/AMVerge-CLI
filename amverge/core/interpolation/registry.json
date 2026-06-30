@@ -6,7 +6,7 @@
     "method": "rife",
     "name": "RIFE 4.6",
     "credit": "by hzwer / megvii-research",
-    "description": "Real-time Intermediate Flow Estimation v4.6 (light)",
+    "description": "Real-time Intermediate Flow Estimation v4.6 (v1 arch, 4-ch head)",
     "file": "rife46.pth",
     "heavy": false
   },
@@ -14,7 +14,7 @@
     "method": "rife",
     "name": "RIFE 4.13 Lite",
     "credit": "by hzwer / megvii-research",
-    "description": "RIFE v4.13 lite variant",
+    "description": "RIFE v4.13 lite variant (v1 arch)",
     "file": "rife413_lite.pth",
     "heavy": false
   },
@@ -22,7 +22,7 @@
     "method": "rife",
     "name": "RIFE 4.14",
     "credit": "by hzwer / megvii-research",
-    "description": "Real-time Intermediate Flow Estimation v4.14 (light)",
+    "description": "Real-time Intermediate Flow Estimation v4.14 (v1 arch)",
     "file": "rife414.pth",
     "heavy": false
   },
@@ -30,7 +30,7 @@
     "method": "rife",
     "name": "RIFE 4.15",
     "credit": "by hzwer / megvii-research",
-    "description": "Real-time Intermediate Flow Estimation v4.15 (light)",
+    "description": "Real-time Intermediate Flow Estimation v4.15 (v1 arch)",
     "file": "rife415.pth",
     "heavy": false
   },
@@ -38,7 +38,7 @@
     "method": "rife",
     "name": "RIFE 4.15 Lite",
     "credit": "by hzwer / megvii-research",
-    "description": "RIFE v4.15 lite variant",
+    "description": "RIFE v4.15 lite variant (v1 arch)",
     "file": "rife415_lite.pth",
     "heavy": false
   },
@@ -46,7 +46,7 @@
     "method": "rife",
     "name": "RIFE 4.16 Lite",
     "credit": "by hzwer / megvii-research",
-    "description": "RIFE v4.16 lite variant",
+    "description": "RIFE v4.16 lite variant (v1 arch)",
     "file": "rife416_lite.pth",
     "heavy": false
   },
@@ -54,7 +54,7 @@
     "method": "rife",
     "name": "RIFE 4.17",
     "credit": "by hzwer / megvii-research",
-    "description": "Real-time Intermediate Flow Estimation v4.17 (light)",
+    "description": "Real-time Intermediate Flow Estimation v4.17 (v1 arch)",
     "file": "rife417.pth",
     "heavy": false
   },
@@ -62,7 +62,7 @@
     "method": "rife",
     "name": "RIFE 4.17 Lite",
     "credit": "by hzwer / megvii-research",
-    "description": "RIFE v4.17 lite variant",
+    "description": "RIFE v4.17 lite variant (v1 arch)",
     "file": "rife417_lite.pth",
     "heavy": false
   },
@@ -70,7 +70,7 @@
     "method": "rife",
     "name": "RIFE 4.18",
     "credit": "by hzwer / megvii-research",
-    "description": "Real-time Intermediate Flow Estimation v4.18 (light)",
+    "description": "Real-time Intermediate Flow Estimation v4.18 (v1 arch)",
     "file": "rife418.pth",
     "heavy": false
   },
@@ -78,7 +78,7 @@
     "method": "rife",
     "name": "RIFE 4.20",
     "credit": "by hzwer / megvii-research",
-    "description": "Real-time Intermediate Flow Estimation v4.20 (light, 61 MB)",
+    "description": "Real-time Intermediate Flow Estimation v4.20 (v2 arch, 8-ch head, 61 MB)",
     "file": "rife420.pth",
     "heavy": false
   },
@@ -86,7 +86,7 @@
     "method": "rife",
     "name": "RIFE 4.21",
     "credit": "by hzwer / megvii-research",
-    "description": "Real-time Intermediate Flow Estimation v4.21 (light)",
+    "description": "Real-time Intermediate Flow Estimation v4.21 (v2 arch)",
     "file": "rife421.pth",
     "heavy": false
   },
@@ -94,7 +94,7 @@
     "method": "rife",
     "name": "RIFE 4.22",
     "credit": "by hzwer / megvii-research",
-    "description": "Real-time Intermediate Flow Estimation v4.22 (light)",
+    "description": "Real-time Intermediate Flow Estimation v4.22 (v2 arch)",
     "file": "rife422.pth",
     "heavy": false
   },
@@ -102,7 +102,7 @@
     "method": "rife",
     "name": "RIFE 4.22 Lite",
     "credit": "by hzwer / megvii-research",
-    "description": "RIFE v4.22 lite variant",
+    "description": "RIFE v4.22 lite variant (v2 arch)",
     "file": "rife422_lite.pth",
     "heavy": false
   },

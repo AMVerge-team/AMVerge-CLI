@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import subprocess
 import sys
 import threading
@@ -126,7 +127,6 @@ def _mux_audio(video_path, audio_source_path):
                 pass
         return False
 
-    import os as _os
     if _mux(["-c:a", "copy"]):
         return True
     return _mux(["-c:a", "aac", "-b:a", "192k"])

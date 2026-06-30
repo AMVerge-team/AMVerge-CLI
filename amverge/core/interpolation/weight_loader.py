@@ -164,6 +164,17 @@ def _remap_state_dict_keys(checkpoint, model):
         if isinstance(raw, dict):
             return raw
 
+    model_state = model.state_dict()
+    if isinstance(checkpoint, dict) and checkpoint:
+        first_ckpt_key = next(iter(checkpoint))
+        first_model_key = next(iter(model_state))
+
+        if not first_ckpt_key.startswith("flownet.") and first_model_key.startswith("flownet."):
+            remapped = OrderedDict()
+            for k, v in checkpoint.items():
+                remapped["flownet." + k] = v
+            return remapped
+
     remapped = OrderedDict()
     for k, v in checkpoint.items():
         new_key = k
