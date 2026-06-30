@@ -63,4 +63,5 @@ include = [
     "examples/**/*.py",
     "examples/**/*.md",
     "docs/*.md",
+    "amverge/core/upscaling/registry.json",
 ]
