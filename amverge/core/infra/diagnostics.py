@@ -107,7 +107,7 @@ def get_gpu_info() -> dict:
         pass
 
     try:
-        from ..detection.scene_detection import TRANSNET_AVAILABLE
+        from ..detection.ai_scene_detection import TRANSNET_AVAILABLE
         info["transnetv2_available"] = TRANSNET_AVAILABLE
     except ImportError:
         pass

@@ -7,7 +7,7 @@ boundaries. Supports two decode paths: Nelux (Windows native, optional) and
 FFmpeg pipe (cross-platform).
 
 Usage:
-    >>> from amverge.core.detection.scene_detection import decode_and_detect_scenes
+    >>> from amverge.core.detection.ai_scene_detection import decode_and_detect_scenes
     >>> scenes_secs, scenes_frames = decode_and_detect_scenes("episode.mp4")
     >>> print(f"Detected {len(scenes_secs)} scenes")
 """
@@ -200,7 +200,7 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
     log("Running nelux video decode...")
     import torch
     VideoReader = _get_nelux_video_reader()
-    decode_accelerator = "nvdec" if torch.cuda.is_available() else None
+    decode_accelerator = "nvdec" if torch.cuda.is_available() else "cpu"
     reader = VideoReader(
         str(input_video),
         decode_accelerator=decode_accelerator,
@@ -278,7 +278,7 @@ def run_model_one_pass(
             Run ``pip install amverge[ml]``.
 
     Example:
-        >>> from amverge.core.detection.scene_detection import (
+        >>> from amverge.core.detection.ai_scene_detection import (
         ...     decode_video_frames_nelux, run_model_one_pass
         ... )
         >>> frames = decode_video_frames_nelux("episode.mp4")

@@ -49,7 +49,7 @@ def bench(
             with make_progress(transient=True) as progress:
                 progress.add_task(f"TransNetV2 decode ({device})...", total=None)
                 t0 = time.perf_counter()
-                from ...core.detection.scene_detection import decode_video_frames_nelux
+                from ...core.detection.ai_scene_detection import decode_video_frames_nelux
                 try:
                     frames = decode_video_frames_nelux(video)
                     decode_elapsed = time.perf_counter() - t0
@@ -63,7 +63,7 @@ def bench(
                     with make_progress(transient=True) as progress2:
                         progress2.add_task(f"TransNetV2 inference ({device})...", total=None)
                         t0 = time.perf_counter()
-                        from ...core.detection.scene_detection import run_model_one_pass
+                        from ...core.detection.ai_scene_detection import run_model_one_pass
                         scenes_secs, scenes_frames = run_model_one_pass(frames, video)
                         infer_elapsed = time.perf_counter() - t0
 
@@ -75,7 +75,7 @@ def bench(
 
                 except ImportError:
                     t0 = time.perf_counter()
-                    from ...core.detection.scene_detection import decode_and_detect_scenes
+                    from ...core.detection.ai_scene_detection import decode_and_detect_scenes
                     scenes_secs, _ = decode_and_detect_scenes(video)
                     total_elapsed = time.perf_counter() - t0
                     results.append((

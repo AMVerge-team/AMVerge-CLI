@@ -8,7 +8,7 @@ from typing import Optional
 import typer
 
 from ...pipeline import detect_scenes, DetectResult
-from ...ui import banner, console, err, make_progress, make_table, ok, fail, dim
+from ...ui import banner, console, err, make_progress, make_table, ok, warn, fail, dim
 from ...core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
 
 _STAGE_LABELS = {
@@ -23,6 +23,7 @@ def detect(
     video: Path = typer.Argument(..., help="Input video file", exists=True),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     method: str = typer.Option("keyframe", "--method", "-m", help="keyframe · edge · transnetv2"),
+    decode_method: str = typer.Option("ffmpeg", "--decode-method", help="transnetv2 decode: ffmpeg (parallel) · nelux (GPU, Windows)"),
     format: str = typer.Option("table", "--format", "-f", help="table · json · paths"),
     json_output: Optional[Path] = typer.Option(None, "--json-output", help="Save JSON to file"),
     no_thumbnails: bool = typer.Option(False, "--no-thumbnails"),
@@ -43,6 +44,17 @@ def detect(
     if method not in ("keyframe", "edge", "transnetv2"):
         fail("--method must be: keyframe, edge, or transnetv2")
         raise typer.Exit(1)
+    if decode_method not in ("ffmpeg", "nelux"):
+        fail("--decode-method must be: ffmpeg or nelux")
+        raise typer.Exit(1)
+    if decode_method != "ffmpeg" and method != "transnetv2":
+        warn("--decode-method only applies to --method transnetv2; ignoring")
+        decode_method = "ffmpeg"
+    if method == "transnetv2" and decode_method == "nelux":
+        from ...core.detection.nelux_runtime import nelux_available
+        if not nelux_available():
+            warn("Nelux unavailable, falling back to FFmpeg parallel decode")
+            decode_method = "ffmpeg"
 
     if ipc:
         _detect_ipc(video, output, method, min_duration, workers, similarity_threshold, edge_threshold, edge_radius)
@@ -71,6 +83,7 @@ def detect(
                 str(video.resolve()),
                 output_dir=str(output.resolve()) if output else None,
                 method=method,
+                decode_method=decode_method,
                 min_duration=min_duration,
                 thumbnails=not no_thumbnails,
                 similarity=not no_similarity and not no_thumbnails,
@@ -164,13 +177,13 @@ def _detect_ipc(
         emit_progress(pct, msg)
 
     if method == "transnetv2":
-        from ...core.detection.scene_detection import TRANSNET_AVAILABLE
+        from ...core.detection.ai_scene_detection import TRANSNET_AVAILABLE
         if not TRANSNET_AVAILABLE:
             fail("transnetv2_pytorch not installed. Run: pip install amverge[ml]")
             raise typer.Exit(1)
 
         import torch
-        from ...core.detection.scene_detection import decode_and_detect_scenes
+        from ...core.detection.ai_scene_detection import decode_and_detect_scenes
         from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
         from ...core.codec.codec_utils import check_if_hevc
         from ...core.video.scene_utils import scenes_to_objects

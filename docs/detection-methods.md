@@ -55,10 +55,25 @@ amverge detect episode.mp4 --method transnetv2
 TransNetV2 is a deep learning model trained specifically for shot boundary detection in video.
 It decodes frames at 48x27 resolution and passes them through a convolutional neural network.
 
+**Decode backend (`--decode-method`):**
+
+The transnetv2 method has two decode backends. The flag is ignored by the keyframe and edge methods.
+
+| value | how | platform | notes |
+|-------|-----|----------|-------|
+| `ffmpeg` (default) | FFmpeg pipe, decode and inference interleaved in one pass | cross-platform | no extra setup |
+| `nelux` | Nelux/NVDEC GPU decode into a frame buffer, then inference | Windows | faster; needs Nelux + FFmpeg shared DLLs (`AMVERGE_FFMPEG_BIN`) |
+
+When `--decode-method nelux` is requested, the CLI runs a quick availability smoke test first. If Nelux or its FFmpeg DLLs are missing, it prints a warning and falls back to the `ffmpeg` backend automatically, so the command always completes.
+
+```bash
+amverge detect episode.mp4 --method transnetv2 --decode-method nelux
+```
+
 **How it works:**
 
 ```txt
-FFmpeg pipe decode (48x27 rgb24)
+FFmpeg pipe decode (48x27 rgb24)   [or Nelux/NVDEC GPU decode]
       ↓ (frames ndarray)
 TransNetV2 CNN inference (GPU/CPU)
       ↓ (scene boundaries in frames)

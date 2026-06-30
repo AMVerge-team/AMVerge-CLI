@@ -59,7 +59,7 @@ twine upload dist/*
 ```
 AMVerge-CLI/
 ├── amverge/
-│   ├── __init__.py          public exports: detect_scenes, DetectResult, Scene, DetectionMethod
+│   ├── __init__.py          public exports: detect_scenes, DetectResult, Scene, DetectionMethod, DecodeMethod
 │   ├── __version__.py       version string
 │   ├── cli.py               Typer app, registers all commands, no-args -> wizard
 │   ├── pipeline.py          high-level detect_scenes() public API
@@ -102,7 +102,7 @@ AMVerge-CLI/
 │       │   ├── edge.py          detect_cuts_by_edge() - guarded cv2 import (V1)
 │       │   ├── keyframe.py      detect_cuts_by_keyframe() (V1)
 │       │   ├── nelux_runtime.py _get_nelux_video_reader() - Windows DLL config for Nelux
-│       │   └── scene_detection.py   decode_video_frames_nelux(), decode_and_detect_scenes(), run_model_one_pass()
+│       │   └── ai_scene_detection.py   decode_video_frames_nelux(), decode_and_detect_scenes(), run_model_one_pass()
 │       ├── discord/
 │       │   └── discord_rpc.py   DiscordRPC class - pypresence wrapper, CLIENT_ID from AMVerge
 │       ├── image/
@@ -219,12 +219,12 @@ for scene in result.scenes:
 | `ui.py` | `err` console (stderr) used for all interactive/wizard output. `console` (stdout) for command results. Do not mix them. `ok()`/`warn()`/`fail()` use ASCII-safe marker `>` - Python `●`/`→` crash on CP1252 Windows terminals. |
 | `core/similarity/similarity.py` | `find_similar_pairs()` accepts both `scene_index` and `index` keys for V1 (collect_scenes) / V2 (Scene.to_dict()) compat. |
 | `commands/export/export.py` | `CODEC_PROFILES`/`AUDIO_FFMPEG`/`CODEC_ALIASES`/`PRORES_CODECS`/`_resolve_gpu` imported from `core/codec/codec_utils.py`. |
-| `pipeline.py` | `DetectionMethod` is `Literal["keyframe", "edge", "transnetv2"]`. TransNetV2 path uses `decode_and_detect_scenes()` + `cut_all_scenes()` (V2 pipeline). Monkey-patches `emit_progress` on `scene_detection`/`smart_cut` module-local refs (not `ipc` module) to route IPC progress to Rich callback. |
+| `pipeline.py` | `DetectionMethod` is `Literal["keyframe", "edge", "transnetv2"]`. `DecodeMethod` is `Literal["ffmpeg", "nelux"]` (transnetv2 only; default `ffmpeg`). TransNetV2 path: `ffmpeg` uses `decode_and_detect_scenes()`, `nelux` uses `decode_video_frames_nelux()` + `run_model_one_pass()`, then `cut_all_scenes()` (V2 pipeline). `nelux` runs `nelux_available()` smoke test first and falls back to `ffmpeg` if missing. Monkey-patches `emit_progress` on `ai_scene_detection`/`smart_cut` module-local refs (not `ipc` module) to route IPC progress to Rich callback. |
 | `core/infra/ipc.py` | IPC protocol for Tauri app. V2 events: `PROGRESS\|pct\|msg`, `INITIAL_CLIPS_READY\|json`, `CLIP_READY\|idx\|path\|mode`, `PHASE1_COMPLETE`, `REENCODE_PROGRESS\|done\|total`. stdout reserved for final JSON. Never mix IPC output with Rich output. |
-| `core/detection/scene_detection.py` | TransNetV2 inference. Requires `[ml]` extra. `TRANSNET_AVAILABLE` flag guards import at module level - raises clear `ImportError` if missing. Do not import torch at module level in other files. |
+| `core/detection/ai_scene_detection.py` | TransNetV2 inference. Requires `[ml]` extra. `TRANSNET_AVAILABLE` flag guards import at module level - raises clear `ImportError` if missing. Do not import torch at module level in other files. |
 | `core/cutting/smart_cut.py` | Four cut modes: `copy` (start on keyframe), `snapped_copy` (HEVC CPU - snaps to nearest keyframe within 5s), `smartcut` (H.264 - encode tiny head + lossless tail), `reencode` (full fallback). Never remove the HEVC CPU path - HEVC re-encode without CUDA takes 10+ minutes. |
 | `core/codec/codec_utils.py` | `check_if_hevc()` via ffprobe. Also contains `CODEC_PROFILES` (14 codec -> ffmpeg encoder mappings), `AUDIO_FFMPEG` (10 audio choices), `CODEC_ALIASES`, `PRORES_CODECS`, `resolve_gpu()`, `is_hevc()`. Single source of truth - `commands/export/export.py` and `wizard.py` import from here. Do not duplicate these dicts. |
-| `core/detection/nelux_runtime.py` | Windows DLL setup for Nelux video reader. Set `AMVERGE_FFMPEG_BIN` env var to FFmpeg shared DLL directory. Idempotent - safe to call multiple times. |
+| `core/detection/nelux_runtime.py` | Windows DLL setup for Nelux video reader. Set `AMVERGE_FFMPEG_BIN` env var to FFmpeg shared DLL directory. Idempotent - safe to call multiple times. `nelux_available()` is the quick smoke test (tries `_get_nelux_video_reader()`, returns bool, no decode) used by `detect`/`pipeline` to decide the transnetv2 decode backend. |
 | `core/keyframes/keyframe_align.py` | `get_keyframe_timestamps_pyav` uses PyAV demux with `type(stream.discard).nonkey` enum (PyAV 17.x; was `"NONKEY"` string in older PyAV). `classify_scenes_by_keyframe_alignment` partitions scenes for Phase 1 vs Phase 2 cutting. |
 | `core/thumbnails/thumbnails_streaming.py` | V1 backend mode only. Emits events as each thumbnail completes. Not used in V2 backend. |
 | `core/discord/discord_rpc.py` | Uses same CLIENT_ID as AMVerge app (`1497922104065134823`). Silently no-ops if pypresence not installed. `--no-rpc` flag on detect/export/merge to disable. Methods: idle/detecting/selecting/navigating/exporting/merging/complete/error. |

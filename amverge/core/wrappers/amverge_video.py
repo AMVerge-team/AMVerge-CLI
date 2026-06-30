@@ -336,7 +336,7 @@ class AmvergeVideo:
             ndarray of shape ``(N, 27, 48, 3)`` with dtype ``uint8``.
         """
         try:
-            from ..detection.scene_detection import decode_video_frames_nelux
+            from ..detection.ai_scene_detection import decode_video_frames_nelux
             return decode_video_frames_nelux(str(self._path))
         except ImportError:
             import numpy as np

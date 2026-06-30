@@ -33,7 +33,7 @@ from .video.probe_utils import (
     probe_video_fps, probe_video_dimensions,
     probe_video_duration, probe_video_total_frames,
 )
-from .detection.scene_detection import (
+from .detection.ai_scene_detection import (
     TRANSNET_AVAILABLE,
     decode_and_detect_scenes,
     decode_video_frames_nelux,

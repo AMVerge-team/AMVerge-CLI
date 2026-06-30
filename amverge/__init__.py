@@ -14,7 +14,7 @@ Usage::
 from .__version__ import __version__
 
 # -- High-level pipeline ------------------------------------------------
-from .pipeline import detect_scenes, DetectResult, Scene, DetectionMethod
+from .pipeline import detect_scenes, DetectResult, Scene, DetectionMethod, DecodeMethod
 
 # -- Video object -------------------------------------------------------
 from .core.wrappers.amverge_video import AmvergeVideo
@@ -64,12 +64,13 @@ from .core.detection.keyframe import detect_cuts_by_keyframe
 from .core.detection.edge import detect_cuts_by_edge
 
 # -- Scene detection (V2 TransNetV2) ------------------------------------
-from .core.detection.scene_detection import (
+from .core.detection.ai_scene_detection import (
     TRANSNET_AVAILABLE,
     decode_and_detect_scenes,
     decode_video_frames_nelux,
     run_model_one_pass,
 )
+from .core.detection.nelux_runtime import nelux_available
 
 # -- Scene cutting ------------------------------------------------------
 from .core.cutting.smart_cut import cut_scene, cut_all_scenes
@@ -128,7 +129,7 @@ from .core.transnet.transnet_constants import (
 __all__ = [
     "__version__",
     # Pipeline
-    "detect_scenes", "DetectResult", "Scene", "DetectionMethod",
+    "detect_scenes", "DetectResult", "Scene", "DetectionMethod", "DecodeMethod",
     # Video object
     "AmvergeVideo",
     # Scene detector
@@ -158,7 +159,7 @@ __all__ = [
     "detect_cuts_by_keyframe", "detect_cuts_by_edge",
     # Scene detection V2
     "TRANSNET_AVAILABLE", "decode_and_detect_scenes",
-    "decode_video_frames_nelux", "run_model_one_pass",
+    "decode_video_frames_nelux", "run_model_one_pass", "nelux_available",
     # Scene cutting
     "cut_scene", "cut_all_scenes",
     "run_ffmpeg_segment", "collect_scenes",

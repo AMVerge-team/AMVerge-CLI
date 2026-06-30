@@ -120,3 +120,11 @@ def _get_nelux_video_reader():
             f"the required FFmpeg DLLs. Searched: {searched}"
         ) from exc
     return VideoReader
+
+
+def nelux_available() -> bool:
+    try:
+        _get_nelux_video_reader()
+        return True
+    except Exception:
+        return False

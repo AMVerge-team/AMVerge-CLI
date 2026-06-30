@@ -35,6 +35,14 @@ DetectionMethod = Literal["keyframe", "edge", "transnetv2"]
 - ``"transnetv2"``  ML scene detection via TransNetV2 (needs PyTorch)
 """
 
+DecodeMethod = Literal["ffmpeg", "nelux"]
+"""Decode backend for the ``"transnetv2"`` method (ignored by other methods).
+
+- ``"ffmpeg"``  FFmpeg pipe, decode and inference interleaved (cross-platform)
+- ``"nelux"``   Nelux/NVDEC GPU decode then inference (Windows, faster); falls
+  back to ``"ffmpeg"`` when Nelux is unavailable
+"""
+
 ProgressCb = Callable[[str, int, str], None]
 """Progress callback signature: ``(stage: str, percent: int, message: str)``.
 
@@ -195,6 +203,7 @@ def detect_scenes(
     video_path: str,
     output_dir: str | None = None,
     method: DetectionMethod = "keyframe",
+    decode_method: DecodeMethod = "ffmpeg",
     min_duration: float = 0.25,
     thumbnails: bool = True,
     similarity: bool = True,
@@ -214,6 +223,11 @@ def detect_scenes(
         method: Detection method. ``"keyframe"`` cuts at I-frame boundaries
             (fast, lossless). ``"edge"`` uses Canny edges + cosine similarity
             inside keyframe windows (more accurate, slower, requires OpenCV).
+        decode_method: Decode backend for the ``"transnetv2"`` method only
+            (ignored otherwise). ``"ffmpeg"`` (default) decodes and runs
+            inference in one interleaved pass. ``"nelux"`` GPU-decodes with
+            Nelux then runs inference (faster on Windows); falls back to
+            ``"ffmpeg"`` automatically when Nelux is unavailable.
         min_duration: Merge any resulting scenes shorter than this many seconds.
         thumbnails: Generate JPEG thumbnails for each scene.
         similarity: Run adjacent-scene similarity check (requires thumbnails).
@@ -246,20 +260,25 @@ def detect_scenes(
                 pass
 
     if method == "transnetv2":
-        from .core.detection.scene_detection import TRANSNET_AVAILABLE
+        from .core.detection.ai_scene_detection import TRANSNET_AVAILABLE
         if not TRANSNET_AVAILABLE:
             raise ImportError(
                 "transnetv2_pytorch not installed. Run: pip install amverge[ml]"
             )
 
         import torch
-        from .core.detection.scene_detection import decode_and_detect_scenes
+        from .core.detection.ai_scene_detection import (
+            decode_and_detect_scenes,
+            decode_video_frames_nelux,
+            run_model_one_pass,
+        )
+        from .core.detection.nelux_runtime import nelux_available
         from .core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
         from .core.codec.codec_utils import check_if_hevc
         from .core.video.scene_utils import scenes_to_objects
         from .core.cutting.smart_cut import cut_all_scenes
 
-        import amverge.core.detection.scene_detection as scene_det
+        import amverge.core.detection.ai_scene_detection as scene_det
         import amverge.core.cutting.smart_cut as smart_cut
         _orig_emit_scene = scene_det.emit_progress
         _orig_emit_cut = smart_cut.emit_progress
@@ -268,11 +287,20 @@ def detect_scenes(
         def _emit_patched(pct: int, msg: str) -> None:
             _progress(_stage, pct, msg)
 
+        effective_decode = decode_method
+        if effective_decode == "nelux" and not nelux_available():
+            _progress("detect", 0, "Nelux unavailable, falling back to FFmpeg decode")
+            effective_decode = "ffmpeg"
+
         scene_det.emit_progress = _emit_patched
         smart_cut.emit_progress = _emit_patched
         try:
             _progress("detect", 0, "Starting TransNetV2 detection...")
-            scenes_secs, scenes_frames = decode_and_detect_scenes(video_path)
+            if effective_decode == "nelux":
+                frames = decode_video_frames_nelux(video_path)
+                scenes_secs, scenes_frames = run_model_one_pass(frames, video_path)
+            else:
+                scenes_secs, scenes_frames = decode_and_detect_scenes(video_path)
         finally:
             scene_det.emit_progress = _orig_emit_scene
             smart_cut.emit_progress = _orig_emit_cut

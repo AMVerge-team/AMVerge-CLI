@@ -14,8 +14,8 @@ def usage() -> None:
         title="Workflow commands",
     )
     t.add_row("detect",  "VIDEO  [--output DIR] [--method keyframe|edge|transnetv2]",  "split video into scenes")
-    t.add_row("",        "[--min-duration 0.25] [--workers 4]",             "")
-    t.add_row("",        "[--no-thumbnails] [--no-similarity] [--ipc]",     "")
+    t.add_row("",        "[--decode-method ffmpeg|nelux] [--min-duration 0.25]",  "")
+    t.add_row("",        "[--workers 4] [--no-thumbnails] [--no-similarity] [--ipc]",  "")
     t.add_row("export",  "VIDEO  --scenes JSON  [--output DIR]",               "export scenes to disk")
     t.add_row("",        "[--select 0,2,5-8]  [--merge]  [--codec copy]",     "")
     t.add_row("",        "[--audio copy] [--container mp4] [--hardware auto]", "")
@@ -59,6 +59,7 @@ def usage() -> None:
     t4.add_row("detect (V2 ML)",        "amverge detect ep01.mkv")
     t4.add_row("detect (keyframe)",     "amverge detect ep01.mkv --method keyframe")
     t4.add_row("detect (edge)",         "amverge detect ep01.mkv --method edge --min-duration 0.5")
+    t4.add_row("detect (nelux GPU)",    "amverge detect ep01.mkv --method transnetv2 --decode-method nelux")
     t4.add_row("export all",            "amverge export ep01.mkv --scenes scenes.json")
     t4.add_row("export selection",      "amverge export ep01.mkv -s scenes.json --select 0,2,5-8 --merge")
     t4.add_row("merge",                 "amverge merge scene_0001.mp4 scene_0002.mp4 -o out.mp4")

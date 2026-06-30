@@ -15,6 +15,7 @@ Split a video into scenes at cut boundaries.
 amverge detect episode.mp4                              # keyframe (fast, default)
 amverge detect episode.mp4 --method edge                 # edge detection (accurate, needs opencv)
 amverge detect episode.mp4 --method transnetv2           # ML detection (best accuracy, needs torch)
+amverge detect episode.mp4 --method transnetv2 --decode-method nelux  # GPU decode (Windows, faster)
 amverge detect episode.mp4 --output ./scenes
 amverge detect episode.mp4 --format json > scenes.json
 amverge detect episode.mp4 --no-thumbnails --no-similarity
@@ -25,6 +26,7 @@ amverge detect episode.mp4 --min-duration 0.5 --workers 8
 |------|---------|-------------|
 | `--output / -o` | `<name>_scenes/` | Output directory |
 | `--method / -m` | `keyframe` | `keyframe`, `edge`, or `transnetv2` |
+| `--decode-method` | `ffmpeg` | transnetv2 decode backend: `ffmpeg` (parallel, cross-platform) or `nelux` (GPU, Windows; auto-falls back to ffmpeg if unavailable) |
 | `--format / -f` | `table` | `table`, `json`, or `paths` |
 | `--json-output` | - | Also save JSON to a file |
 | `--no-thumbnails` | false | Skip thumbnail generation |

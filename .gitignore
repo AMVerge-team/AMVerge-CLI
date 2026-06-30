@@ -13,3 +13,6 @@ venv/
 *.mkv
 *.mov
 .env
+.agents
+skills-lock.json
+test_videos
