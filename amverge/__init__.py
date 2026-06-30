@@ -161,6 +161,7 @@ except ImportError:
 
 from .core.upscaling.registry import (
     UPSCALE_REGISTRY,
+    QUALITY_PRESETS,
     get_model,
     get_models_by_method,
     get_ml_models,
@@ -169,6 +170,17 @@ from .core.upscaling.registry import (
     get_all_model_keys,
     get_model_scales,
     get_model_credit,
+)
+
+from .core.upscaling.anime4k import (
+    download_anime4k_shaders,
+    is_anime4k_downloaded,
+    libplacebo_available,
+)
+from .core.upscaling.artcnn import (
+    download_artcnn,
+    is_artcnn_downloaded,
+    get_artcnn_path,
 )
 
 __all__ = [
@@ -240,7 +252,9 @@ __all__ = [
     "verify_weight_hash", "load_weights_if_available",
     "ANIME4K_MODE_PRESETS",
     "SystemMonitor", "sample_gpu", "sample_cpu", "format_eta",
-    "UPSCALE_REGISTRY", "get_model", "get_models_by_method",
+    "UPSCALE_REGISTRY", "QUALITY_PRESETS", "get_model", "get_models_by_method",
     "get_ml_models", "get_shader_models", "get_onnx_models",
     "get_all_model_keys", "get_model_scales", "get_model_credit",
+    "download_anime4k_shaders", "is_anime4k_downloaded", "libplacebo_available",
+    "download_artcnn", "is_artcnn_downloaded", "get_artcnn_path",
 ]
