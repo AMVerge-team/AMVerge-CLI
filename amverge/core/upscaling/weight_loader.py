@@ -11,7 +11,7 @@ from .registry import get_model, get_ml_models
 WEIGHTS_DIR = get_models_dir()
 
 MODEL_FILES = {
-    key: (entry["category"], entry["file"])
+    key: (entry.get("category", ""), entry["file"])
     for key, entry in get_ml_models().items()
 }
 

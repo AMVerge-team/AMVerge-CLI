@@ -289,8 +289,9 @@ def upscale(
 
         gpu_info = get_gpu_info()
         if gpu_info.get("cuda_available"):
+            vram = gpu_info.get("vram_gb", 0)
             console.print(f"  GPU: [accent]{gpu_info.get('gpu_name', 'N/A')}[/accent]  "
-                          f"VRAM: [accent]{gpu_info.get('gpu_memory_free_mb', 0)}/{gpu_info.get('gpu_memory_total_mb', 0)} MB[/accent]")
+                          f"VRAM: [accent]{vram:.1f} GB[/accent]")
         else:
             console.print("  [warn]No NVIDIA GPU detected. Upscaling on CPU will be very slow.[/warn]")
 

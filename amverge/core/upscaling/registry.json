@@ -87,6 +87,33 @@
       "description": "High quality non-real-time anime upscaler (926K params)",
       "file": "ArtCNN_R8F64.onnx",
       "input_channels": 1
+    },
+    "realesrgan-x2": {
+      "method": "ml",
+      "name": "Real-ESRGAN x2",
+      "scales": [2],
+      "credit": "by xinntao",
+      "description": "General purpose 2x upscaler (67M params)",
+      "file": "RealESRGAN_x2plus.pth",
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"
+    },
+    "realesrgan-x4": {
+      "method": "ml",
+      "name": "Real-ESRGAN x4",
+      "scales": [4],
+      "credit": "by xinntao",
+      "description": "General purpose 4x upscaler (67M params)",
+      "file": "RealESRGAN_x4plus.pth",
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
+    },
+    "realesrgan-anime": {
+      "method": "ml",
+      "name": "Real-ESRGAN Anime",
+      "scales": [4],
+      "credit": "by xinntao",
+      "description": "Anime-optimized 4x upscaler (18M params, fast)",
+      "file": "RealESRGAN_x4plus_anime_6B.pth",
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth"
     }
   }
 }

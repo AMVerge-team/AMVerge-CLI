@@ -19,15 +19,16 @@ def _build_model_entry(key, raw):
     entry = dict(raw)
     entry["key"] = key
 
-    if entry["method"] == "ml":
-        category = entry.get("category", "upscale")
-        base = _sources.get("ml", "")
-        entry["url"] = base + category + "/" + entry["file"]
-    elif entry["method"] == "onnx":
-        base = _sources.get("artcnn", "")
-        entry["url"] = base + entry["file"]
-    elif entry["method"] == "shader":
-        entry["download_url"] = _sources.get("anime4k", "")
+    if "url" not in entry:
+        if entry["method"] == "ml":
+            category = entry.get("category", "upscale")
+            base = _sources.get("ml", "")
+            entry["url"] = base + category + "/" + entry["file"]
+        elif entry["method"] == "onnx":
+            base = _sources.get("artcnn", "")
+            entry["url"] = base + entry["file"]
+        elif entry["method"] == "shader":
+            entry["download_url"] = _sources.get("anime4k", "")
 
     return entry
 

@@ -30,6 +30,9 @@ except ImportError:
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
+import warnings
+warnings.filterwarnings("ignore", message=".*expandable_segments.*")
+
 
 def _resolve_quality(key):
     return QUALITY_PRESETS.get(str(key or "high").lower(), QUALITY_PRESETS["high"])
