@@ -270,7 +270,6 @@ def upscale(
         from rich.live import Live
         from rich.panel import Panel
         from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
-        from rich.table import Table
 
         if not hasattr(_update_display, "live"):
             progress = Progress(
@@ -281,22 +280,22 @@ def upscale(
                 TimeElapsedColumn(),
             )
             _update_display.task = progress.add_task("Upscaling...", total=100)
+            _update_display.progress = progress
             _update_display.live = Live(progress, console=err, refresh_per_second=4, transient=True)
             _update_display.live.start()
 
-        progress = _update_display.live.renderable
-        progress.update(_update_display.task, completed=data["pct"], description=data["msg"])
+        _update_display.progress.update(_update_display.task, completed=data["pct"], description=data["msg"])
 
         if not skip_monitor and hasattr(_update_display, "live"):
-            lines = [progress]
+            lines = []
             gpu_name = data.get("gpu_name", "GPU")
             gpu_parts = []
             if data.get("gpu_util") is not None:
-                gpu_parts.append(f"{data['gpu_util']:.0f}%")
+                gpu_parts.append(f"GPU {data['gpu_util']:.0f}%")
             if data.get("gpu_temp") is not None:
                 gpu_parts.append(f"{data['gpu_temp']:.0f}°C")
             if data.get("vram_used") is not None and data.get("vram_total"):
-                gpu_parts.append(f"{data['vram_used']:.0f}/{data['vram_total']:.0f}MB")
+                gpu_parts.append(f"VRAM {data['vram_used']:.0f}/{data['vram_total']:.0f} MB")
             if gpu_parts:
                 lines.append(f"  {gpu_name}: {' | '.join(gpu_parts)}")
 
@@ -304,7 +303,7 @@ def upscale(
             if data.get("cpu_percent") is not None:
                 cpu_parts.append(f"CPU {data['cpu_percent']:.0f}%")
             if data.get("ram_used") is not None and data.get("ram_total"):
-                cpu_parts.append(f"RAM {data['ram_used']:.1f}/{data['ram_total']:.1f}GB")
+                cpu_parts.append(f"RAM {data['ram_used']:.1f}/{data['ram_total']:.1f} GB")
             if cpu_parts:
                 lines.append(f"  {' | '.join(cpu_parts)}")
 
@@ -318,11 +317,11 @@ def upscale(
             if status_parts:
                 lines.append(f"  {' | '.join(status_parts)}")
 
-            _update_display.live.renderable = Panel(
-                "\n".join(str(l) for l in lines),
-                border_style="#22c55e",
-                padding=(0, 1),
-            )
+            from rich.console import Group
+            content = [_update_display.progress]
+            if lines:
+                content.append(Panel("\n".join(lines), border_style="#22c55e", padding=(0, 1)))
+            _update_display.live.update(Group(*content))
 
     try:
         upscale_model(
