@@ -128,10 +128,9 @@ AMVerge-CLI/
 │       │   ├── registry.json       declarative model registry - add models here, CLI auto-discovers
 │       │   ├── registry.py          loads registry.json, builds download URLs, query functions
 │       │   ├── __init__.py          exports: UPSCALE_REGISTRY, QUALITY_PRESETS, upscale_video, ...
-│       │   ├── upscale.py           upscale_video() - ML frame loop, FFmpeg pipe, audio mux
+│       │   ├── upscale.py           upscale_video() - ML frame loop via spandrel, FFmpeg pipe, audio mux
 │       │   ├── anime4k.py           upscale_video_anime4k() - FFmpeg lanczos+unsharp+smartblur filters
 │       │   ├── artcnn.py            upscale_video_artcnn() - ONNX Runtime inference (ArtCNN by Artoriuz)
-│       │   ├── shufflecugan.py      ShuffleCUGANModel - U-Net architecture with SE blocks
 │       │   └── weight_loader.py     download_weights(), verify_weight_hash(), load_weights_if_available()
 │       ├── video/
 │       │   ├── probe_utils.py   probe_video_fps/duration/dimensions/total_frames via ffprobe

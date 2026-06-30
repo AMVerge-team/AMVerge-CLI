@@ -61,31 +61,17 @@ def _frame_to_tensor(frame, device):
 def _load_model(model_name, scale, device):
     from .weight_loader import (
         is_weight_downloaded, download_weights,
-        get_weight_path, verify_weight_hash, load_weights_if_available,
+        get_weight_path, verify_weight_hash,
     )
-    from .shufflecugan import ShuffleCUGANModel
 
     if not is_weight_downloaded(model_name):
         success = download_weights(model_name)
         if not success:
             raise RuntimeError(f"Failed to download weights for {model_name}")
 
-    weight_path = None
-    try:
-        weight_path = get_weight_path(model_name)
-        if weight_path and os.path.exists(weight_path):
-            verify_weight_hash(model_name, weight_path)
-    except ValueError:
-        pass
-
-    try:
-        model = ShuffleCUGANModel(model_name, scale).to(device)
-        model.eval()
-        if weight_path and os.path.exists(weight_path):
-            if load_weights_if_available(model, model_name, device):
-                return model
-    except Exception:
-        pass
+    weight_path = get_weight_path(model_name)
+    if weight_path and os.path.exists(weight_path):
+        verify_weight_hash(model_name, weight_path)
 
     if not SPANDREL_AVAILABLE:
         raise RuntimeError(
@@ -94,13 +80,10 @@ def _load_model(model_name, scale, device):
         )
 
     try:
-        if weight_path and os.path.exists(weight_path):
-            model_descriptor = spandrel.ModelLoader(device=device).load_from_file(weight_path)
-            return model_descriptor
+        model_descriptor = spandrel.ModelLoader(device=device).load_from_file(weight_path)
+        return model_descriptor
     except Exception as e:
-        raise RuntimeError(f"spandrel loading failed: {e}")
-
-    raise RuntimeError(f"Weights not available for {model_name}")
+        raise RuntimeError(f"Failed to load model {model_name}: {e}")
 
 
 def _build_ffmpeg_pipe_cmd(input_path, output_path, output_w, output_h, output_fps,

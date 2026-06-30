@@ -486,7 +486,6 @@ from amverge import (
     UPSCALE_AVAILABLE, QUALITY_PRESETS,
     UPSCALE_REGISTRY, get_ml_models, get_onnx_models, get_shader_models,
     upscale_video, upscale_video_anime4k, upscale_video_artcnn,
-    ShuffleCUGANModel,
     download_weights, is_weight_downloaded, get_weight_path,
     verify_weight_hash, load_weights_if_available,
     ANIME4K_MODE_PRESETS, ANIME4K_SHADER_FILES, ARTCNN_MODELS,
@@ -517,10 +516,6 @@ download_weights("adore")                  # downloads from registry URL
 is_weight_downloaded("shufflecugan")       # True/False
 path = get_weight_path("adore")            # full path to .pth file
 verify_weight_hash("adore", path)          # SHA-256 integrity check
-
-# Load weights into a model
-model = ShuffleCUGANModel("adore", scale=2)
-load_weights_if_available(model, "adore", device="cuda")
 
 # ML upscale pipeline (torch required)
 if UPSCALE_AVAILABLE:
