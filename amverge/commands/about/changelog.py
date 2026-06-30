@@ -5,15 +5,15 @@ from ...ui import banner, console, make_table
 
 _CLI_ENTRIES = [
     ("v0.2.0", [
-        "V2 backend migration: TransNetV2 ML scene detection (GPU/CPU)",
-        "Smart cut: lossless copy + smartcut + re-encode (HEVC snapped-copy on CPU)",
-        "Scene cache: .npy files keyed by file fingerprint, skips re-detection on re-open",
-        "Streaming IPC: INITIAL_CLIPS_READY, CLIP_READY, PHASE1_COMPLETE, REENCODE_PROGRESS",
-        "Nelux Windows native video reader support (optional)",
-        "New commands: probe, cache, keyframes, scenes",
-        "rpc-server sidecar: long-lived Discord RPC server driven via stdin JSON",
-        "Discord RPC: added update_selecting and update_navigating",
-        "pyproject.toml: added [ml] extra (torch, transnetv2-pytorch, tqdm)",
+        "AI upscaling: ML (RealCUGAN/ESRGAN via spandrel), Anime4K (FFmpeg filters), ArtCNN (ONNX)",
+        "Registry system: single registry.json defines all models, CLI auto-discovers",
+        "New commands: upscale, models",
+        "System monitor: live GPU/CPU/RAM/ETA display during upscale (--no-monitor to disable)",
+        "Portable FFmpeg auto-download into %APPDATA%/com.amverge.cli/",
+        "Model management: download/delete/list with unified table (--verbose for details)",
+        "Library API: upscale_model(), SystemMonitor, sample_gpu(), sample_cpu(), format_eta()",
+        "9 upscale models: adore, shufflecugan, fallin_soft, fallin_strong, anime4k, C4F16, C4F32, R8F64, realesrgan-x2/x4/anime",
+        "pyproject.toml: added [upscale] extra (torch, opencv, spandrel, onnxruntime)",
     ]),
     ("v0.1.0", [
         "Initial release: keyframe and edge detection methods",
