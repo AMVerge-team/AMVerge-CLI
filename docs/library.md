@@ -168,29 +168,29 @@ for key in UPSCALE_MODEL_KEYS:
 ### `amverge upscale`
 
 ```python
-from amverge import upscale_video, QUALITY_PRESETS
+from amverge import upscale_model, UPSCALE_AVAILABLE
 
-# ML method (needs torch + opencv)
-upscale_video(
-    "episode.mp4", "upscaled.mp4",
-    model_name="adore", scale=2, preset="high",
-    progress_cb=lambda pct, msg: print(f"{pct}% {msg}"),
-)
+# All methods dispatched automatically from registry
+if UPSCALE_AVAILABLE:
+    upscale_model("adore", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
 
-# Anime4K shader method (FFmpeg only, fast)
-from amverge import upscale_video_anime4k
+# Shader method (FFmpeg only, no ML)
+upscale_model("anime4k", "episode.mp4", "upscaled.mp4", scale=2, mode="medium")
 
-upscale_video_anime4k(
-    "episode.mp4", "upscaled.mp4",
-    scale=2, mode="medium", preset="high",
-)
+# ONNX method (lightweight)
+upscale_model("C4F32", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
 
-# ArtCNN ONNX method (lightweight, fast)
-from amverge import upscale_video_artcnn
-
-upscale_video_artcnn(
-    "episode.mp4", "upscaled.mp4",
-    model_name="C4F32", scale=2, preset="high",
+# Full options
+upscale_model(
+    "adore",
+    "episode.mp4",
+    "upscaled.mp4",
+    scale=2,
+    preset="archival",
+    fit_w=1920,
+    fit_h=1080,
+    mode="medium",
+    progress_cb=lambda pct, msg: print(f"[{pct}%] {msg}"),
 )
 ```
 
@@ -485,10 +485,10 @@ check_if_path_exists(str(secs))  # raises FileNotFoundError if missing
 from amverge import (
     UPSCALE_AVAILABLE, QUALITY_PRESETS,
     UPSCALE_REGISTRY, get_ml_models, get_onnx_models, get_shader_models,
-    upscale_video, upscale_video_anime4k, upscale_video_artcnn,
+    upscale_model,
     download_weights, is_weight_downloaded, get_weight_path,
     verify_weight_hash, load_weights_if_available,
-    ANIME4K_MODE_PRESETS, ANIME4K_SHADER_FILES, ARTCNN_MODELS,
+    ANIME4K_MODE_PRESETS,
 )
 
 # Check availability
@@ -517,24 +517,14 @@ is_weight_downloaded("shufflecugan")       # True/False
 path = get_weight_path("adore")            # full path to .pth file
 verify_weight_hash("adore", path)          # SHA-256 integrity check
 
-# ML upscale pipeline (torch required)
+# Unified upscale - dispatches from registry method type automatically
 if UPSCALE_AVAILABLE:
-    upscale_video(
-        "episode.mp4", "upscaled.mp4",
-        model_name="adore", scale=2, preset="high",
-        fit_w=1920, fit_h=1080,
-        progress_cb=lambda pct, msg: print(f"[{pct}%] {msg}"),
-    )
+    upscale_model("adore", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
+    upscale_model("realesrgan-x2", "episode.mp4", "upscaled.mp4", scale=2)
 
-# Anime4K shader upscale (FFmpeg only, no ML deps)
-upscale_video_anime4k(
-    "episode.mp4", "upscaled.mp4",
-    scale=2, mode="medium", preset="high",
-)
+# Shader method (FFmpeg only, no ML deps)
+upscale_model("anime4k", "episode.mp4", "upscaled.mp4", scale=2, mode="medium")
 
-# ArtCNN ONNX upscale (needs onnxruntime)
-upscale_video_artcnn(
-    "episode.mp4", "upscaled.mp4",
-    model_name="C4F32", scale=2, preset="high",
-)
+# ONNX method (needs onnxruntime)
+upscale_model("C4F32", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
 ```

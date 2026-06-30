@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from amverge import upscale_video_anime4k, ANIME4K_MODE_PRESETS
+from amverge import upscale_model, ANIME4K_MODE_PRESETS
 
 video_path = sys.argv[1] if len(sys.argv) > 1 else "episode.mp4"
 output_path = "upscaled_anime4k.mp4"
@@ -13,14 +13,15 @@ if not Path(video_path).exists():
     sys.exit(1)
 
 print(f"Upscaling: {video_path} -> {output_path}")
-print(f"Method: Anime4K (GPU shaders via FFmpeg)")
+print(f"Model: anime4k (FFmpeg lanczos+unsharp+smartblur)")
 print(f"Mode: medium, Scale: 2x")
 print(f"Available modes: {list(ANIME4K_MODE_PRESETS.keys())}")
-print(f"  light  - fast, fewer shader passes")
+print(f"  light  - fast, minimal filtering")
 print(f"  medium - balanced quality/speed")
-print(f"  strong - best quality, more shader passes")
+print(f"  strong - maximum enhancement")
 
-upscale_video_anime4k(
+upscale_model(
+    "anime4k",
     video_path,
     output_path,
     scale=2,

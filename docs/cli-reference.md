@@ -196,42 +196,44 @@ amverge bench episode.mp4 --skip-ml
 ### `amverge upscale`
 
 Upscale video using AI super-resolution or GPU-accelerated filters.
+Method is auto-detected from the model key in registry.json.
 
 ```bash
-amverge upscale episode.mp4 -o upscaled.mp4 --method ml --model adore -s 2
-amverge upscale episode.mp4 --method anime4k --anime4k-mode medium -s 2
-amverge upscale episode.mp4 --method artcnn --onnx-model C4F32 -s 2
-amverge upscale episode.mp4 --method ml --model adore -s 4 -p archival
-amverge upscale episode.mp4 --method ml --model shufflecugan --fit-w 1920 --fit-h 1080
-amverge upscale --list-models                       # show all available models
-amverge upscale --credits                           # show credits
-amverge upscale episode.mp4 --method ml -y          # auto-confirm all downloads
+amverge upscale episode.mp4 -m adore -s 2               # ML model (GPU recommended)
+amverge upscale episode.mp4 -m anime4k --mode medium    # shader (fast, no ML)
+amverge upscale episode.mp4 -m C4F32 -s 2               # ONNX (lightweight)
+amverge upscale episode.mp4 -m realesrgan-x2            # Real-ESRGAN x2
+amverge upscale episode.mp4 -m adore -s 4 -p archival   # archive quality 4x
+amverge upscale --list-models                           # browse all models
+amverge upscale --credits                               # show credits
+amverge upscale episode.mp4 -m adore -y                 # auto-confirm downloads
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--model / -m` | `adore` | Model key from registry (see --list-models) |
 | `--output / -o` | `upscaled.mp4` | Output video file |
-| `--method` | `ml` | `ml`, `anime4k`, or `artcnn` |
-| `--model / -m` | `adore` | ML model key (see --list-models) |
-| `--onnx-model` | `C4F32` | ONNX model key (see --list-models) |
-| `--anime4k-mode` | `medium` | Anime4K intensity: light, medium, strong |
-| `--scale / -s` | `2` | Scale factor: 2 or 4 |
+| `--scale / -s` | `2` | Scale factor (model-specific, 2 or 4) |
 | `--preset / -p` | `high` | Quality: archival, high, balanced, fast, draft |
+| `--mode` | `medium` | Shader intensity: light, medium, strong |
 | `--fit-w` | `0` | Max output width (0 = no limit) |
 | `--fit-h` | `0` | Max output height (0 = no limit) |
 | `--list-models` | false | Show all available models and descriptions |
-| `--credits` | false | Show credits for upscaling technologies |
+| `--credits` | false | Show credits for all upscaling technologies |
 | `--yes / -y` | false | Auto-confirm all download prompts |
+| `--no-monitor` | false | Disable live GPU/CPU/RAM/ETA display |
 
-**Upscale methods:**
+**Method dispatch** (automatic from registry.json):
 
 | method | speed | deps | description |
 |--------|-------|------|-------------|
-| `anime4k` | fastest | FFmpeg only | Lanczos + unsharp + smartblur filters |
-| `artcnn` | fast | `[upscale]` | Lightweight CNN via ONNX Runtime, by Artoriuz |
-| `ml` | medium | `[upscale]` | RealCUGAN via PyTorch/spandrel |
+| `shader` | fastest | FFmpeg only | Lanczos + unsharp + smartblur filters |
+| `onnx` | fast | `[upscale]` | ONNX Runtime inference (ArtCNN) |
+| `ml` | medium | `[upscale]` | Spandrel auto-arch detection (RealCUGAN, ESRGAN, etc.) |
 
-**Adding models:** Edit `amverge/core/upscaling/registry.json`. All CLI discovery is automatic.
+**System monitor:** During ml and onnx upscaling, a live panel shows GPU utilization, VRAM, CPU%, RAM, ETA, and fps. Use `--no-monitor` to disable.
+
+**Adding models:** Edit `amverge/core/upscaling/registry.json`. One JSON entry per model. See `docs/registry.md` for format.
 
 Models and FFmpeg are auto-downloaded to `%APPDATA%/com.amverge.cli/`. On first run, prompts ask before downloading (skip with `--yes`).
 
