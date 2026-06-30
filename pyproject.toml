@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "amverge"
-version = "0.2.0"
+version = "0.2.1"
 description = "AMVerge Features as a CLI Tool and Python Library"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -53,8 +53,8 @@ amverge = "amverge.cli:app"
 ml      = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0"]
 edge    = ["opencv-python-headless>=4.9"]
 discord = ["pypresence>=4.3"]
-upscale = ["torch>=2.0", "opencv-python-headless>=4.9", "spandrel>=0.3"]
-all     = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0", "opencv-python-headless>=4.9", "pypresence>=4.3", "spandrel>=0.3"]
+upscale = ["torch>=2.0", "opencv-python-headless>=4.9", "spandrel>=0.3", "onnxruntime>=1.16"]
+all     = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0", "opencv-python-headless>=4.9", "pypresence>=4.3", "spandrel>=0.3", "onnxruntime>=1.16"]
 dev     = ["pyinstaller>=6"]
 
 [tool.hatch.build.targets.wheel]

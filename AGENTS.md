@@ -127,9 +127,13 @@ AMVerge-CLI/
 │       ├── upscaling/
 │       │   ├── registry.json       declarative model registry - add models here, CLI auto-discovers
 │       │   ├── registry.py          loads registry.json, builds URLs, query functions
-│       │   ├── engine.py            upscale_model() - dispatches ml/shader/onnx from registry
-│       │   ├── __init__.py          exports: UPSCALE_REGISTRY, upscale_model, ...
-│       │   └── weight_loader.py     download_weights(), verify_weight_hash(), load_weights_if_available()
+│       │   ├── engine.py            upscale_model() - dispatches ml (spandrel) / shader / onnx; owns ml path only
+│       │   ├── anime4k.py           upscale_video_anime4k() - real Anime4K GLSL via libplacebo, lanczos fallback
+│       │   ├── artcnn.py            upscale_video_artcnn() - ArtCNN ONNX inference (luma 2x), download helpers
+│       │   ├── ffmpeg_helpers.py    shared: mux_audio(), build_ffmpeg_pipe(), get_video_dims_ffprobe(), CREATE_NO_WINDOW
+│       │   ├── monitor.py           SystemMonitor - GPU/CPU/RAM sampling + ETA during upscale
+│       │   ├── __init__.py          exports: UPSCALE_REGISTRY, upscale_model, download_*, is_*_downloaded, ...
+│       │   └── weight_loader.py     download_weights(), verify_weight_hash(), load_weights_if_available() (ml .pth only)
 │       ├── video/
 │       │   ├── probe_utils.py   probe_video_fps/duration/dimensions/total_frames via ffprobe
 │       │   ├── scene_utils.py   scenes_to_objects(), scenes_frames_to_seconds()
@@ -237,12 +241,12 @@ for scene in result.scenes:
 | `core/keyframes/keyframe_align.py` | `get_keyframe_timestamps_pyav` uses PyAV demux with `type(stream.discard).nonkey` enum (PyAV 17.x; was `"NONKEY"` string in older PyAV). `classify_scenes_by_keyframe_alignment` partitions scenes for Phase 1 vs Phase 2 cutting. |
 | `core/thumbnails/thumbnails_streaming.py` | V1 backend mode only. Emits events as each thumbnail completes. Not used in V2 backend. |
 | `core/discord/discord_rpc.py` | Uses same CLIENT_ID as AMVerge app (`1497922104065134823`). Silently no-ops if pypresence not installed. `--no-rpc` flag on detect/export/merge to disable. Methods: idle/detecting/selecting/navigating/exporting/merging/complete/error. |
-| `core/upscaling/engine.py` | `upscale_model(key, ...)` - unified dispatch. Reads model from registry, routes to `_upscale_ml()` (spandrel), `_upscale_shader()` (FFmpeg filters), or `_upscale_onnx()` (ONNX Runtime). All three pipeline types in one file. |
-| `core/upscaling/registry.json` | Declarative model registry. To add a model, add one JSON entry with method, name, scales, credit, description, file/hash. CLI auto-discovers everything. See `docs/registry.md`. |
-| `core/upscaling/upscale.py` | `upscale_video()` main pipeline: OpenCV frame read → torch tensor → model inference → rawvideo FFmpeg pipe → audio mux. Model loading: built-in ShuffleCUGAN first, spandrel fallback. Quality presets: CRF + x264 preset + tune=animation. |
-| `core/upscaling/weight_loader.py` | Downloads model weights from AniSmooth-Models GitHub releases. Resume support (HTTP Range), SHA-256 integrity verification, 3 retries. Same MODEL_FILES/MODEL_HASHES as AniSmooth desktop app. |
-| `core/upscaling/anime4k.py` | `upscale_video_anime4k()` - downloads Anime4K v4.0.1 GLSL shaders, applies via FFmpeg `libplacebo` filter. No ML deps, GPU shader-accelerated. Fallback to lanczos+unsharp if libplacebo unavailable. Three modes: light/medium/strong. |
-| `core/upscaling/artcnn.py` | `upscale_video_artcnn()` - downloads ArtCNN ONNX models, runs inference via onnxruntime. C4F16/C4F32 models for speed, R8F64 for quality. Credit: ArtCNN by Artoriuz. |
+| `core/upscaling/engine.py` | `upscale_model(key, ...)` - unified dispatch. Reads model from registry, routes ml → `_upscale_ml()` (spandrel, in-file), shader → `anime4k.upscale_video_anime4k()`, onnx → `artcnn.upscale_video_artcnn()`. Engine owns the ml path only; shader/onnx live in their own modules. |
+| `core/upscaling/registry.json` | Declarative model registry. To add a model, add one JSON entry with method, name, scales, credit, description, file/hash. CLI auto-discovers everything. `_source` holds the ml/anime4k/artcnn base URLs; `registry.py` builds per-model `url` (ml/onnx) or `download_url` (shader zip). |
+| `core/upscaling/ffmpeg_helpers.py` | Shared FFmpeg utilities used by engine/anime4k/artcnn (avoids circular import): `mux_audio()`, `build_ffmpeg_pipe()` (rawvideo stdin pipe), `get_video_dims_ffprobe()`, `encode_thread_count()`, `ensure_ffmpeg()`, `CREATE_NO_WINDOW`. |
+| `core/upscaling/weight_loader.py` | Downloads ml `.pth` weights to `models/upscale/<key>/<file>`. Resume support (HTTP Range), SHA-256 integrity verification, 3 retries. ml-only; ONNX downloads live in `artcnn.py`. |
+| `core/upscaling/anime4k.py` | `upscale_video_anime4k()` - REAL Anime4K. Downloads v4.0.1 GLSL shaders (`models/upscale/anime4k/`), concatenates the mode's shader chain into `_chain_<mode>_<scale>x.glsl`, applies via FFmpeg `libplacebo=custom_shader_path` with `-init_hw_device vulkan`. Auto-detects libplacebo (`ffmpeg -filters`); falls back to lanczos+unsharp if absent. Modes light/medium/strong = Upscale_CNN_x2_{S,M,VL} (+ Restore_CNN for medium/strong); scale=4 adds a 2nd upscale pass. `_chain_*` files excluded from `list_shaders()`. |
+| `core/upscaling/artcnn.py` | `upscale_video_artcnn()` - ArtCNN ONNX (luma-only 2x doublers). Downloads to `models/upscale/artcnn/<file>` (single dir - was a path-mismatch bug vs weight_loader's per-key dir). Per-frame: BGR→YUV, run Y `[1,1,H,W]` → `[1,1,2H,2W]`, lanczos-upscale U/V, recombine, rawvideo pipe. Input/output tensor names auto-detected (`input`/`output` in v1.6.2). v1.6.2 assets verified. Credit: ArtCNN by Artoriuz. |
 | `commands/sidecar/rpc_server.py` | Hidden sidecar: `amverge rpc-server`. Long-lived process; Rust spawns it once and sends JSON commands via stdin (`{"type":"update","details":"...","state":"..."}`, `{"type":"clear"}`, `{"type":"shutdown"}`). Throttles Discord updates to max 1 per 15s. Exits when stdin closes or parent dies. |
 | `commands/sidecar/backend.py` | V2 backend. Positional interface: `amverge backend <video_path> <output_dir> [import_method]`. Rust replaces `python app.py <video> <dir>` with `amverge backend <video> <dir>` - no Rust changes needed. Emits V2 IPC events. Outputs JSON schema v1.0 with `schema_version`, `run_id`, `video` metadata block. |
 

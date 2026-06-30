@@ -7,6 +7,14 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v0.2.1", [
+        "Anime4K: real GLSL shaders via FFmpeg libplacebo (was lanczos approximation)",
+        "Anime4K: auto-detect libplacebo, lanczos+unsharp fallback when unavailable",
+        "Anime4K: shader chains per mode (light/medium/strong), 2 passes for 4x",
+        "ArtCNN: fixed ONNX path bug (download dir now matches read dir)",
+        "ArtCNN: new models R16F96, C4F16_DN, C4F16_DS, C4F32_DN",
+        "Upscaling: split engine.py into anime4k.py / artcnn.py / ffmpeg_helpers.py",
+    ]),
     ("v0.2.0", [
         "AI upscaling: ML models via spandrel (RealCUGAN, Real-ESRGAN)",
         "Anime4K: FFmpeg filter pipeline (lanczos + unsharp + smartblur)",
