@@ -138,6 +138,10 @@ try:
         verify_weight_hash,
         load_weights_if_available,
         ANIME4K_MODE_PRESETS,
+        SystemMonitor,
+        sample_gpu,
+        sample_cpu,
+        format_eta,
     )
 except ImportError:
     UPSCALE_AVAILABLE = False
@@ -150,6 +154,10 @@ except ImportError:
     verify_weight_hash = None
     load_weights_if_available = None
     ANIME4K_MODE_PRESETS = {}
+    SystemMonitor = None
+    sample_gpu = None
+    sample_cpu = None
+    format_eta = lambda s: "--:--"
 
 from .core.upscaling.registry import (
     UPSCALE_REGISTRY,
@@ -231,6 +239,7 @@ __all__ = [
     "download_weights", "is_weight_downloaded", "get_weight_path",
     "verify_weight_hash", "load_weights_if_available",
     "ANIME4K_MODE_PRESETS",
+    "SystemMonitor", "sample_gpu", "sample_cpu", "format_eta",
     "UPSCALE_REGISTRY", "get_model", "get_models_by_method",
     "get_ml_models", "get_shader_models", "get_onnx_models",
     "get_all_model_keys", "get_model_scales", "get_model_credit",

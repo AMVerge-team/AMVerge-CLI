@@ -4,7 +4,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from amverge import upscale_model, QUALITY_PRESETS, UPSCALE_AVAILABLE, UPSCALE_REGISTRY
+from amverge import (
+    upscale_model, SystemMonitor, format_eta,
+    QUALITY_PRESETS, UPSCALE_AVAILABLE, UPSCALE_REGISTRY,
+)
 
 video_path = sys.argv[1] if len(sys.argv) > 1 else "episode.mp4"
 output_path = "upscaled_ml.mp4"
@@ -25,17 +28,21 @@ print(f"Scales: {entry['scales']}")
 print(f"Preset: high (CRF {QUALITY_PRESETS['high']['crf']}, {QUALITY_PRESETS['high']['x264']})")
 print()
 
-start_time = time.time()
-frame_count = [0]
+monitor = SystemMonitor(enabled=True)
 
 def progress_cb(pct, msg):
-    frame_count[0] = frame_count[0] + 1 if pct > 0 else frame_count[0]
-    elapsed = time.time() - start_time
-    if pct > 0 and pct < 100:
-        eta = (elapsed / pct) * (100 - pct)
-        print(f"\r[{pct:3d}%] {msg:40s}  ETA: {eta:5.1f}s", end="")
-    else:
-        print(f"\r[{pct:3d}%] {msg:40s}", end="")
+    monitor.progress_callback(pct, msg)
+    s = monitor.stats
+    line = f"\r[{pct:3d}%] {s['elapsed_s']:5.1f}s"
+    if s.get("eta_s"):
+        line += f"  ETA: {format_eta(s['eta_s'])}"
+    if s.get("gpu_util") is not None:
+        line += f"  GPU: {s['gpu_util']:.0f}%"
+    if s.get("vram_used_mb") is not None:
+        line += f"  VRAM: {s['vram_used_mb']:.0f} MB"
+    if s.get("cpu_percent") is not None:
+        line += f"  CPU: {s['cpu_percent']:.0f}%"
+    print(line, end="")
 
 upscale_model(
     model_key,
@@ -44,7 +51,8 @@ upscale_model(
     scale=2,
     preset="high",
     progress_cb=progress_cb,
+    monitor=monitor,
 )
 
-elapsed = time.time() - start_time
-print(f"\nDone in {elapsed:.1f}s: {output_path}")
+s = monitor.stats
+print(f"\nDone in {s['elapsed_s']:.1f}s: {output_path}")

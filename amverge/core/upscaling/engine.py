@@ -441,6 +441,7 @@ def upscale_model(
     fit_h: int = 0,
     mode: Optional[str] = None,
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    monitor: Optional["SystemMonitor"] = None,
 ) -> None:
     input_path = Path(input_path).resolve()
     output_path = Path(output_path).resolve()
@@ -450,6 +451,9 @@ def upscale_model(
     if scale not in scales:
         scales_str = "/".join(f"{s}x" for s in scales)
         raise ValueError(f"Model '{model_key}' supports {scales_str}, got {scale}x")
+
+    if monitor:
+        monitor.start()
 
     if method == "ml":
         if not UPSCALE_AVAILABLE:
@@ -467,3 +471,6 @@ def upscale_model(
 
     else:
         raise ValueError(f"Unknown method '{method}' for model '{model_key}'")
+
+    if monitor:
+        monitor.stop()

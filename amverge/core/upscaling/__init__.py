@@ -21,6 +21,8 @@ from .weight_loader import (
     UPSCALE_MODEL_KEYS,
 )
 
+from .monitor import SystemMonitor, sample_gpu, sample_cpu, format_eta
+
 try:
     from .engine import (
         upscale_model,
@@ -43,6 +45,10 @@ __all__ = [
     "get_all_model_keys",
     "get_model_scales",
     "get_model_credit",
+    "SystemMonitor",
+    "sample_gpu",
+    "sample_cpu",
+    "format_eta",
     "download_weights",
     "is_weight_downloaded",
     "get_weight_path",

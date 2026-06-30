@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import threading
 import time
 from pathlib import Path
 
@@ -10,71 +8,12 @@ import typer
 from ...ui import banner, console, err, make_progress, ok, fail, dim
 from ...core.infra.diagnostics import get_gpu_info
 from ...core.infra.ffmpeg_bootstrap import is_portable_ffmpeg_installed, ensure_ffmpeg
+from ...core.upscaling.monitor import SystemMonitor, format_eta
 from ...core.upscaling.registry import (
     UPSCALE_REGISTRY,
     QUALITY_PRESETS,
     get_model_scales,
 )
-
-
-def _sample_gpu():
-    try:
-        import subprocess
-        smi = subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=3,
-            creationflags=0x08000000 if os.name == "nt" else 0,
-        )
-        if smi.returncode == 0 and smi.stdout.strip():
-            parts = [p.strip() for p in smi.stdout.strip().split(",")]
-            if len(parts) >= 4:
-                return {
-                    "gpu_util": float(parts[0]),
-                    "vram_used": float(parts[1]),
-                    "vram_total": float(parts[2]),
-                    "gpu_temp": float(parts[3]),
-                }
-    except Exception:
-        pass
-
-    try:
-        import torch
-        if torch.cuda.is_available():
-            free, total = torch.cuda.mem_get_info(0)
-            return {
-                "gpu_util": None,
-                "vram_used": (total - free) / (1024 * 1024),
-                "vram_total": total / (1024 * 1024),
-                "gpu_temp": None,
-            }
-    except Exception:
-        pass
-
-    return None
-
-
-def _sample_cpu():
-    try:
-        import psutil
-        return {
-            "cpu_percent": psutil.cpu_percent(interval=None),
-            "ram_used": psutil.virtual_memory().used / (1024 ** 3),
-            "ram_total": psutil.virtual_memory().total / (1024 ** 3),
-        }
-    except ImportError:
-        return None
-
-
-def _format_eta(seconds):
-    if seconds is None or seconds == float("inf"):
-        return "--:--"
-    seconds = int(seconds)
-    m, s = divmod(seconds, 60)
-    h, m = divmod(m, 60)
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
 
 
 def _ensure_ffmpeg_interactive(auto_yes=False):
@@ -230,46 +169,15 @@ def upscale(
 
     from ...core.upscaling.engine import upscale_model
 
-    monitor_data = {"pct": 0, "msg": "Starting...", "running": True, "done": False}
-    monitor_thread = None
-    start_time = time.time()
+    monitor = SystemMonitor(enabled=not no_monitor and method in ("ml", "onnx"))
+    monitor.stats["gpu_name"] = get_gpu_info().get("gpu_name", "GPU")
+    monitor.start()
 
-    if not no_monitor and method in ("ml", "onnx"):
-        monitor_data["gpu_name"] = get_gpu_info().get("gpu_name", "GPU")
-
-        def _monitor_loop():
-            while monitor_data["running"]:
-                gpu = _sample_gpu()
-                cpu = _sample_cpu()
-                if gpu:
-                    monitor_data.update(gpu)
-                if cpu:
-                    monitor_data.update(cpu)
-                time.sleep(1.0)
-
-        monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
-        monitor_thread.start()
-
-    last_pct = 0
-
-    def _progress_cb(pct, msg):
-        nonlocal last_pct
-        last_pct = pct
-        now = time.time()
-        monitor_data["pct"] = pct
-        monitor_data["msg"] = msg
-        elapsed = now - start_time
-        if pct > 0:
-            eta = (elapsed / pct) * (100 - pct) if pct < 100 else 0
-            monitor_data["eta"] = eta
-            monitor_data["fps"] = (60 * 2.5 * pct / 100) / elapsed if elapsed > 0 else 0
-        monitor_data["elapsed"] = elapsed
-        _update_display(monitor_data, no_monitor)
-
-    def _update_display(data, skip_monitor):
+    def _update_display():
         from rich.live import Live
         from rich.panel import Panel
         from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+        from rich.console import Group
 
         if not hasattr(_update_display, "live"):
             progress = Progress(
@@ -284,44 +192,45 @@ def upscale(
             _update_display.live = Live(progress, console=err, refresh_per_second=4, transient=True)
             _update_display.live.start()
 
-        _update_display.progress.update(_update_display.task, completed=data["pct"], description=data["msg"])
+        s = monitor.stats
+        _update_display.progress.update(_update_display.task, completed=s["pct"], description=s["msg"])
 
-        if not skip_monitor and hasattr(_update_display, "live"):
+        if monitor.enabled and hasattr(_update_display, "live"):
             lines = []
-            gpu_name = data.get("gpu_name", "GPU")
             gpu_parts = []
-            if data.get("gpu_util") is not None:
-                gpu_parts.append(f"GPU {data['gpu_util']:.0f}%")
-            if data.get("gpu_temp") is not None:
-                gpu_parts.append(f"{data['gpu_temp']:.0f}°C")
-            if data.get("vram_used") is not None and data.get("vram_total"):
-                gpu_parts.append(f"VRAM {data['vram_used']:.0f}/{data['vram_total']:.0f} MB")
+            if s.get("gpu_util") is not None:
+                gpu_parts.append(f"GPU {s['gpu_util']:.0f}%")
+            if s.get("gpu_temp") is not None:
+                gpu_parts.append(f"{s['gpu_temp']:.0f}°C")
+            if s.get("vram_used_mb") is not None and s.get("vram_total_mb"):
+                gpu_parts.append(f"VRAM {s['vram_used_mb']:.0f}/{s['vram_total_mb']:.0f} MB")
             if gpu_parts:
-                lines.append(f"  {gpu_name}: {' | '.join(gpu_parts)}")
+                lines.append(f"  {s.get('gpu_name', 'GPU')}: {' | '.join(gpu_parts)}")
 
             cpu_parts = []
-            if data.get("cpu_percent") is not None:
-                cpu_parts.append(f"CPU {data['cpu_percent']:.0f}%")
-            if data.get("ram_used") is not None and data.get("ram_total"):
-                cpu_parts.append(f"RAM {data['ram_used']:.1f}/{data['ram_total']:.1f} GB")
+            if s.get("cpu_percent") is not None:
+                cpu_parts.append(f"CPU {s['cpu_percent']:.0f}%")
+            if s.get("ram_used_gb") is not None and s.get("ram_total_gb"):
+                cpu_parts.append(f"RAM {s['ram_used_gb']:.1f}/{s['ram_total_gb']:.1f} GB")
             if cpu_parts:
                 lines.append(f"  {' | '.join(cpu_parts)}")
 
             status_parts = []
-            if data.get("eta") is not None and data["eta"] != float("inf"):
-                status_parts.append(f"ETA {_format_eta(data['eta'])}")
-            if data.get("elapsed"):
-                status_parts.append(f"elapsed {_format_eta(data['elapsed'])}")
-            if data.get("fps") and data["fps"] > 0:
-                status_parts.append(f"~{data['fps']:.1f} fps")
+            if s.get("eta_s") is not None and s["eta_s"] != float("inf"):
+                status_parts.append(f"ETA {format_eta(s['eta_s'])}")
+            if s.get("elapsed_s"):
+                status_parts.append(f"elapsed {format_eta(s['elapsed_s'])}")
             if status_parts:
                 lines.append(f"  {' | '.join(status_parts)}")
 
-            from rich.console import Group
             content = [_update_display.progress]
             if lines:
                 content.append(Panel("\n".join(lines), border_style="#22c55e", padding=(0, 1)))
             _update_display.live.update(Group(*content))
+
+    def _progress_cb(pct, msg):
+        monitor.progress_callback(pct, msg)
+        _update_display()
 
     try:
         upscale_model(
@@ -336,7 +245,7 @@ def upscale(
             progress_cb=_progress_cb,
         )
     except Exception as e:
-        monitor_data["running"] = False
+        monitor.stop()
         if hasattr(_update_display, "live"):
             _update_display.live.stop()
         fail(str(e))
@@ -345,7 +254,5 @@ def upscale(
         if hasattr(_update_display, "live"):
             _update_display.live.stop()
 
-    elapsed = time.time() - start_time
-    monitor_data["done"] = True
-    monitor_data["running"] = False
-    ok(f"Upscaled video saved to {output} ({elapsed:.1f}s)")
+    monitor.stop()
+    ok(f"Upscaled video saved to {output} ({monitor.stats['elapsed_s']:.1f}s)")
