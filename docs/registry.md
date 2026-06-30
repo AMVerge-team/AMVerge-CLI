@@ -123,9 +123,9 @@ Mode effects:
 - `medium`: lanczos + unsharp(5:5:0.8) + smartblur(0.8)
 - `strong`: lanczos + unsharp(7:7:1.0) + smartblur(1.0)
 
-The pipeline is defined in `core/upscaling/anime4k.py`. To add new shader modes, edit the filter parameters there.
+The pipeline is defined in `core/upscaling/engine.py` `_upscale_shader()`. Modes control filter intensity.
 
-Shaders are stored at `%APPDATA%/com.amverge.cli/models/upscale/anime4k/`.
+No shader files are needed - the pipeline uses FFmpeg built-in filters.
 
 ---
 
@@ -157,7 +157,7 @@ ONNX Runtime inference. Lighter than PyTorch, no spandrel needed. Luma-only (Y c
 
 Download URL becomes: `{_source.artcnn}{file}` = `ArtCNN/.../v1.6.2/ArtCNN_C4F32.onnx`
 
-If `input_channels` is 1 (default), the pipeline converts BGR to YUV, runs the model on Y channel only, upscales UV with lanczos, then recombines.
+If `input_channels` is 1 (default), the pipeline converts BGR to YUV, runs the model on Y channel only, upscales UV with lanczos, then recombines. All handled in `_upscale_onnx()`.
 
 ONNX files are stored at `%APPDATA%/com.amverge.cli/models/upscale/artcnn/`.
 
@@ -170,9 +170,22 @@ The model appears in these commands automatically:
 ```
 amverge upscale --list-models     model listed with name, method, description
 amverge upscale --credits         credit added (deduplicated)
+amverge upscale episode.mp4 -m <key>    dispatched to correct pipeline automatically
 amverge models                    listed in appropriate category table
 amverge models --download <key>   downloads to correct path
 amverge models --delete <key>     deletes from disk
 ```
 
 No Python changes needed. No CLI changes needed. No import changes needed.
+
+## Engine Dispatch
+
+`core/upscaling/engine.py` is the single file that handles all method types. `upscale_model(key, ...)` reads the registry entry and dispatches:
+
+| `method` value | pipeline function | description |
+|----------------|-------------------|-------------|
+| `ml` | `_upscale_ml()` | OpenCV frame read → spandrel model → FFmpeg pipe |
+| `shader` | `_upscale_shader()` | FFmpeg lanczos + unsharp + smartblur filter chain |
+| `onnx` | `_upscale_onnx()` | OpenCV → YUV split → ONNX session → FFmpeg pipe |
+
+The CLI just calls `upscale_model()` with the model key. The method is determined from the registry entry.
