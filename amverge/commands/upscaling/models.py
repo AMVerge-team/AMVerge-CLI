@@ -5,10 +5,10 @@ from typing import Optional
 
 import typer
 
-from ...ui import banner, console, make_table, ok, fail, dim
+from ...ui import banner, console, make_table, ok, fail
 from ...core.infra.config import get_models_dir
 from ...core.upscaling.registry import (
-    UPSCALE_REGISTRY, get_ml_models, get_shader_models, get_onnx_models, get_all_model_keys,
+    UPSCALE_REGISTRY, get_ml_models, get_onnx_models,
 )
 from ...core.upscaling.weight_loader import (
     WEIGHTS_DIR, get_weight_path, is_weight_downloaded, download_weights,

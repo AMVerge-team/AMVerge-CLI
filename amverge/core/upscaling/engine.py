@@ -8,6 +8,7 @@ from typing import Callable, Optional
 from .anime4k import upscale_video_anime4k
 from .artcnn import upscale_video_artcnn
 from .ffmpeg_helpers import CREATE_NO_WINDOW, build_ffmpeg_pipe, get_color_args, mux_audio
+from .monitor import SystemMonitor
 from .registry import QUALITY_PRESETS, get_model
 
 UPSCALE_AVAILABLE = False
@@ -158,7 +159,7 @@ def upscale_model(
     fit_h: int = 0,
     mode: Optional[str] = None,
     progress_cb: Optional[Callable[[int, str], None]] = None,
-    monitor: Optional["SystemMonitor"] = None,
+    monitor: Optional[SystemMonitor] = None,
 ) -> None:
     input_path = Path(input_path).resolve()
     output_path = Path(output_path).resolve()
