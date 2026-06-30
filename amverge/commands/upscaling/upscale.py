@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import typer
 
-from ...ui import banner, console, err, make_progress, ok, fail, dim
+from ...ui import banner, console, err, make_progress, ok, fail
 from ...core.infra.diagnostics import get_gpu_info
 from ...core.infra.ffmpeg_bootstrap import is_portable_ffmpeg_installed, ensure_ffmpeg
 from ...core.upscaling.monitor import SystemMonitor, format_eta
@@ -37,9 +36,15 @@ def _ensure_ffmpeg_interactive(auto_yes=False):
 
 def _ensure_model_downloaded(model_key, auto_yes=False):
     from ...core.upscaling.weight_loader import is_weight_downloaded, download_weights
-    if is_weight_downloaded(model_key):
-        return
+    from ...core.upscaling.artcnn import is_artcnn_downloaded, download_artcnn
+
     entry = UPSCALE_REGISTRY.get(model_key, {})
+    method = entry.get("method", "ml")
+    is_onnx = method == "onnx"
+
+    if (is_artcnn_downloaded(model_key) if is_onnx else is_weight_downloaded(model_key)):
+        return
+
     name = entry.get("name", model_key)
     console.print(f"  [warn]Model '{name}' not downloaded.[/warn]")
     if auto_yes or typer.confirm(f"  Download {name}?", default=True):
@@ -47,8 +52,13 @@ def _ensure_model_downloaded(model_key, auto_yes=False):
             task_id = progress.add_task(f"Downloading {name}...", total=100)
             def _cb(pct, msg):
                 progress.update(task_id, completed=pct, description=msg)
-            if not download_weights(model_key, progress_cb=_cb):
-                fail(f"Download failed for {name}")
+            try:
+                if is_onnx:
+                    download_artcnn(model_key, progress_cb=_cb)
+                elif not download_weights(model_key, progress_cb=_cb):
+                    raise RuntimeError("download returned failure")
+            except Exception as e:
+                fail(f"Download failed for {name}: {e}")
                 raise typer.Exit(1)
             ok(f"Model {name} downloaded")
     else:
@@ -160,7 +170,7 @@ def upscale(
             fail(f"Unknown mode '{mode}'. Valid: {', '.join(shader_modes)}")
             raise typer.Exit(1)
 
-        console.print(f"  Method: [accent]{entry.get('name', model)}[/accent] (FFmpeg filters, no ML)")
+        console.print(f"  Method: [accent]{entry.get('name', model)}[/accent] (GLSL shaders via libplacebo, no ML)")
         console.print(f"  Mode: [accent]{mode}[/accent]  "
                       f"Scale: [accent]{scale}x[/accent]  "
                       f"Preset: [accent]{preset}[/accent]")

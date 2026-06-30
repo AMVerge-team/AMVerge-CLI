@@ -7,6 +7,20 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v0.2.1", [
+        "Anime4K: real GLSL shaders via FFmpeg libplacebo (was lanczos approximation)",
+        "Anime4K: auto-detect libplacebo, lanczos+unsharp fallback when unavailable",
+        "Anime4K: shader chains per mode (light/medium/strong), 2 passes for 4x",
+        "Anime4K: strong mode adds Clamp_Highlights (official Mode A chain)",
+        "ArtCNN: fixed ONNX path bug (download dir now matches read dir)",
+        "ArtCNN: fixed HD out-of-memory (disable onnx arena, free per frame)",
+        "ArtCNN: new models R16F96, C4F16_DN, C4F16_DS, C4F32_DN",
+        "ArtCNN: chroma reconstruction models R8F64_Chroma, R8F64_Chroma_DN (CNN U/V)",
+        "Encode: auto x264 level (was hardcoded 5.1, broke 4x of HD)",
+        "Encode: preserve source color metadata (BT.709/range passthrough)",
+        "Audio: copy source stream untouched, re-encode to AAC only as fallback",
+        "Upscaling: split engine.py into anime4k.py / artcnn.py / ffmpeg_helpers.py",
+    ]),
     ("v0.2.0", [
         "AI upscaling: ML models via spandrel (RealCUGAN, Real-ESRGAN)",
         "Anime4K: FFmpeg filter pipeline (lanczos + unsharp + smartblur)",

@@ -23,16 +23,29 @@ from .weight_loader import (
 
 from .monitor import SystemMonitor, sample_gpu, sample_cpu, format_eta
 
+from .anime4k import (
+    ANIME4K_MODE_PRESETS,
+    download_anime4k_shaders,
+    is_anime4k_downloaded,
+    libplacebo_available,
+    list_shaders,
+    get_shader_dir,
+)
+from .artcnn import (
+    download_artcnn,
+    is_artcnn_downloaded,
+    get_artcnn_path,
+    get_artcnn_dir,
+)
+
 try:
     from .engine import (
         upscale_model,
         UPSCALE_AVAILABLE,
-        ANIME4K_MODE_PRESETS,
     )
 except ImportError:
     upscale_model = None
     UPSCALE_AVAILABLE = False
-    ANIME4K_MODE_PRESETS = {}
 
 __all__ = [
     "UPSCALE_REGISTRY",
@@ -59,4 +72,13 @@ __all__ = [
     "upscale_model",
     "UPSCALE_AVAILABLE",
     "ANIME4K_MODE_PRESETS",
+    "download_anime4k_shaders",
+    "is_anime4k_downloaded",
+    "libplacebo_available",
+    "list_shaders",
+    "get_shader_dir",
+    "download_artcnn",
+    "is_artcnn_downloaded",
+    "get_artcnn_path",
+    "get_artcnn_dir",
 ]

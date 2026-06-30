@@ -5,13 +5,19 @@ from typing import Optional
 
 import typer
 
-from ...ui import banner, console, make_table, ok, fail, dim
+from ...ui import banner, console, make_table, ok, fail
 from ...core.infra.config import get_models_dir
 from ...core.upscaling.registry import (
-    UPSCALE_REGISTRY, get_ml_models, get_shader_models, get_onnx_models, get_all_model_keys,
+    UPSCALE_REGISTRY, get_ml_models, get_onnx_models,
 )
 from ...core.upscaling.weight_loader import (
     WEIGHTS_DIR, get_weight_path, is_weight_downloaded, download_weights,
+)
+from ...core.upscaling.anime4k import (
+    download_anime4k_shaders, is_anime4k_downloaded, list_shaders, get_shader_dir,
+)
+from ...core.upscaling.artcnn import (
+    download_artcnn, is_artcnn_downloaded, get_artcnn_path,
 )
 
 
@@ -29,12 +35,12 @@ def _get_model_size(key):
     if entry.get("method") == "ml":
         path = get_weight_path(key)
     elif entry.get("method") == "onnx":
-        path = os.path.join(get_models_dir(), "artcnn", entry.get("file", ""))
+        path = get_artcnn_path(key)
     elif entry.get("method") == "shader":
-        import glob
-        shader_dir = os.path.join(get_models_dir(), "anime4k")
-        if os.path.exists(shader_dir):
-            return _format_size(sum(os.path.getsize(f) for f in glob.glob(os.path.join(shader_dir, "*.glsl"))))
+        shader_dir = get_shader_dir()
+        files = [os.path.join(shader_dir, f) for f in list_shaders()]
+        if files:
+            return _format_size(sum(os.path.getsize(f) for f in files))
         return "0 B"
     else:
         return "-"
@@ -50,89 +56,10 @@ def _is_downloaded(key):
     if entry.get("method") == "ml":
         return is_weight_downloaded(key)
     elif entry.get("method") == "onnx":
-        path = os.path.join(get_models_dir(), "artcnn", entry.get("file", ""))
-        return os.path.exists(path)
+        return is_artcnn_downloaded(key)
     elif entry.get("method") == "shader":
-        import glob
-        shader_dir = os.path.join(get_models_dir(), "anime4k")
-        return len(glob.glob(os.path.join(shader_dir, "*.glsl"))) > 0
+        return is_anime4k_downloaded()
     return False
-
-
-def _download_shaders(progress_cb=None):
-    import urllib.request
-    import ssl
-    import zipfile
-
-    entry = get_shader_models().get("anime4k", {})
-    url = entry.get("download_url", "")
-    if not url:
-        raise RuntimeError("No download URL for anime4k")
-
-    dest_dir = os.path.join(get_models_dir(), "anime4k")
-    os.makedirs(dest_dir, exist_ok=True)
-    zip_path = os.path.join(dest_dir, "Anime4K_v4.0.zip")
-
-    ctx = ssl._create_unverified_context()
-
-    if not os.path.exists(zip_path):
-        req = urllib.request.Request(url, headers={"User-Agent": "amverge/1.0"})
-        with urllib.request.urlopen(req, timeout=120, context=ctx) as resp:
-            total = int(resp.headers.get("Content-Length", 0))
-            downloaded = 0
-            chunk_size = 65536
-            with open(zip_path, "wb") as f:
-                while True:
-                    chunk = resp.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress_cb and total > 0:
-                        pct = min(99, int(downloaded * 100 / total))
-                        progress_cb(pct, f"Downloading shaders... {pct}%")
-
-    if progress_cb:
-        progress_cb(100, "Extracting shaders...")
-
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(dest_dir)
-
-    import glob
-    return [os.path.basename(p) for p in glob.glob(os.path.join(dest_dir, "*.glsl"))]
-
-
-def _download_onnx_model(model_key, progress_cb=None):
-    import urllib.request
-    import ssl
-
-    entry = get_onnx_models().get(model_key)
-    if not entry:
-        raise ValueError(f"Unknown ONNX model: {model_key}")
-
-    artcnn_dir = os.path.join(get_models_dir(), "artcnn")
-    os.makedirs(artcnn_dir, exist_ok=True)
-    dest_path = os.path.join(artcnn_dir, entry["file"])
-
-    if os.path.exists(dest_path):
-        return
-
-    ctx = ssl._create_unverified_context()
-    req = urllib.request.Request(entry["url"], headers={"User-Agent": "amverge/1.0"})
-    with urllib.request.urlopen(req, timeout=120, context=ctx) as resp:
-        total = int(resp.headers.get("Content-Length", 0))
-        downloaded = 0
-        chunk_size = 65536
-        with open(dest_path, "wb") as f:
-            while True:
-                chunk = resp.read(chunk_size)
-                if not chunk:
-                    break
-                f.write(chunk)
-                downloaded += len(chunk)
-                if progress_cb and total > 0:
-                    pct = min(99, int(downloaded * 100 / total))
-                    progress_cb(pct, f"Downloading {model_key}... {pct}%")
 
 
 def models(
@@ -165,7 +92,7 @@ def models(
                 fail(f"Not on disk: {delete}")
         elif delete == "anime4k":
             import glob
-            shader_dir = os.path.join(get_models_dir(), "anime4k")
+            shader_dir = get_shader_dir()
             deleted = 0
             if os.path.exists(shader_dir):
                 for fp in glob.glob(os.path.join(shader_dir, "*.glsl")):
@@ -173,8 +100,7 @@ def models(
                     deleted += 1
             ok(f"Deleted {deleted} shader files")
         elif delete in get_onnx_models():
-            entry = get_onnx_models()[delete]
-            path = os.path.join(get_models_dir(), "artcnn", entry["file"])
+            path = get_artcnn_path(delete)
             if os.path.exists(path):
                 os.unlink(path)
                 ok(f"Deleted: {delete}")
@@ -193,12 +119,12 @@ def models(
             ok(f"Downloaded: {download}") if success else fail(f"Failed: {download}")
         elif download == "anime4k":
             console.print("  Downloading [accent]Anime4K shaders[/accent]...")
-            shaders = _download_shaders()
+            shaders = download_anime4k_shaders()
             ok(f"Downloaded {len(shaders)} shader files")
         elif download in get_onnx_models():
             entry = get_onnx_models()[download]
             console.print(f"  Downloading [accent]{entry.get('name', download)}[/accent]...")
-            _download_onnx_model(download)
+            download_artcnn(download)
             ok(f"Downloaded: {download}")
         else:
             fail(f"Unknown key: {download}")

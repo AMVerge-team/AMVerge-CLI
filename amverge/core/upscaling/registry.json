@@ -88,6 +88,62 @@
       "file": "ArtCNN_R8F64.onnx",
       "input_channels": 1
     },
+    "R16F96": {
+      "method": "onnx",
+      "name": "ArtCNN R16F96",
+      "scales": [2],
+      "credit": "by Artoriuz",
+      "description": "Highest quality offline anime upscaler (4M params)",
+      "file": "ArtCNN_R16F96.onnx",
+      "input_channels": 1
+    },
+    "C4F16_DN": {
+      "method": "onnx",
+      "name": "ArtCNN C4F16 DN",
+      "scales": [2],
+      "credit": "by Artoriuz",
+      "description": "Lightweight real-time upscaler with denoise (soften)",
+      "file": "ArtCNN_C4F16_DN.onnx",
+      "input_channels": 1
+    },
+    "C4F16_DS": {
+      "method": "onnx",
+      "name": "ArtCNN C4F16 DS",
+      "scales": [2],
+      "credit": "by Artoriuz",
+      "description": "Lightweight real-time upscaler with denoise plus sharpen",
+      "file": "ArtCNN_C4F16_DS.onnx",
+      "input_channels": 1
+    },
+    "C4F32_DN": {
+      "method": "onnx",
+      "name": "ArtCNN C4F32 DN",
+      "scales": [2],
+      "credit": "by Artoriuz",
+      "description": "Balanced real-time upscaler with denoise (soften)",
+      "file": "ArtCNN_C4F32_DN.onnx",
+      "input_channels": 1
+    },
+    "R8F64_Chroma": {
+      "method": "onnx",
+      "name": "ArtCNN R8F64 + Chroma",
+      "scales": [2],
+      "credit": "by Artoriuz",
+      "description": "R8F64 luma 2x plus CNN chroma reconstruction (best quality)",
+      "file": "ArtCNN_R8F64.onnx",
+      "chroma_file": "ArtCNN_R8F64_Chroma.onnx",
+      "input_channels": 1
+    },
+    "R8F64_Chroma_DN": {
+      "method": "onnx",
+      "name": "ArtCNN R8F64 + Chroma DN",
+      "scales": [2],
+      "credit": "by Artoriuz",
+      "description": "R8F64 luma 2x plus CNN chroma reconstruction with denoise",
+      "file": "ArtCNN_R8F64.onnx",
+      "chroma_file": "ArtCNN_R8F64_Chroma_DN.onnx",
+      "input_channels": 1
+    },
     "realesrgan-x2": {
       "method": "ml",
       "name": "Real-ESRGAN x2",
