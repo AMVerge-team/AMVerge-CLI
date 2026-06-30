@@ -6,42 +6,36 @@ import urllib.error
 from http.client import IncompleteRead
 
 from ..infra.config import get_models_dir
-
+from .registry import get_model, get_ml_models
 
 WEIGHTS_DIR = get_models_dir()
 
-MODELS_URL = "https://github.com/moongetsu/AniSmooth-Models/releases/download/"
-
 MODEL_FILES = {
-    "shufflecugan":      ("upscale", "sudo_shuffle_cugan_9.584.969.pth"),
-    "adore":             ("upscale", "adore.pth"),
-    "fallin_soft":       ("upscale", "Fallin_soft.pth"),
-    "fallin_strong":     ("upscale", "Fallin_strong.pth"),
+    key: (entry["category"], entry["file"])
+    for key, entry in get_ml_models().items()
 }
 
 UPSCALE_MODEL_KEYS = list(MODEL_FILES.keys())
 
 MODEL_HASHES = {
-    "adore":             "443378bdc6db6cf4a75eea61ee7afc78b2c4b6a4d3b3981a40ff61f38bbc8f1a",
-    "fallin_soft":       "910aa56a9a1187df97c3284177da1bc66836679350b2613191340734937e9960",
-    "shufflecugan":      "88a6d89f04eaf27a9f7b60937857768a6bc04fb360670bd9951ef533acab0616",
-    "fallin_strong":     "14b8415199aa66a6507725408a66758ba2bff9286736f19f7f07524efd821a56",
+    key: entry["hash"]
+    for key, entry in get_ml_models().items()
+    if "hash" in entry
 }
 
 
 def _model_filename(model_key):
-    entry = MODEL_FILES.get(model_key)
-    if entry is None:
+    entry = get_model(model_key)
+    if entry is None or "file" not in entry:
         raise ValueError("Unknown model key: " + model_key)
-    return entry[1]
+    return entry["file"]
 
 
 def _model_url(model_key):
-    entry = MODEL_FILES.get(model_key)
+    entry = get_model(model_key)
     if entry is None:
         raise ValueError("Unknown model key: " + model_key)
-    category, filename = entry
-    return MODELS_URL + category + "/" + filename
+    return entry["url"]
 
 
 def ensure_weights_dir():
@@ -74,7 +68,8 @@ def _compute_sha256(file_path):
 
 
 def verify_weight_hash(model_key, weight_path):
-    expected_hash = MODEL_HASHES.get(model_key)
+    entry = get_model(model_key)
+    expected_hash = entry.get("hash") if entry else None
     if expected_hash is None:
         raise ValueError(f"No verified hash registered for {model_key}")
     calculated_hash = _compute_sha256(weight_path)
@@ -87,7 +82,11 @@ def verify_weight_hash(model_key, weight_path):
 
 
 def download_weights(model_key, force=False, retries=3, progress_cb=None):
-    filename = _model_filename(model_key)
+    entry = get_model(model_key)
+    if entry is None:
+        raise ValueError("Unknown model key: " + model_key)
+
+    filename = entry["file"]
     subdir = model_key
     folder_path = os.path.join(WEIGHTS_DIR, subdir)
     dest = os.path.join(folder_path, filename)
@@ -100,7 +99,7 @@ def download_weights(model_key, force=False, retries=3, progress_cb=None):
     os.makedirs(temp_folder, exist_ok=True)
     temp_path = os.path.join(temp_folder, filename)
 
-    url = _model_url(model_key)
+    url = entry["url"]
 
     for attempt in range(retries):
         try:
@@ -155,7 +154,7 @@ def download_weights(model_key, force=False, retries=3, progress_cb=None):
 
             os.rename(temp_path, dest)
 
-            expected_hash = MODEL_HASHES.get(model_key)
+            expected_hash = entry.get("hash")
             if expected_hash:
                 actual = _compute_sha256(dest)
                 if actual != expected_hash:

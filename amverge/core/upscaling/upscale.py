@@ -9,6 +9,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from ..infra.binaries import get_ffmpeg, get_ffprobe
+from .registry import QUALITY_PRESETS
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -28,14 +29,6 @@ except ImportError:
     pass
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-
-QUALITY_PRESETS = {
-    "archival": {"crf": 14, "x264": "slow",      "tune": "animation"},
-    "high":     {"crf": 17, "x264": "slow",      "tune": "animation"},
-    "balanced": {"crf": 20, "x264": "medium",    "tune": "animation"},
-    "fast":     {"crf": 22, "x264": "veryfast",  "tune": "animation"},
-    "draft":    {"crf": 26, "x264": "ultrafast", "tune": "animation"},
-}
 
 
 def _resolve_quality(key):

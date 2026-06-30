@@ -8,20 +8,14 @@ import typer
 from ...ui import banner, console, make_progress, ok, fail, dim
 from ...core.infra.diagnostics import get_gpu_info
 from ...core.infra.ffmpeg_bootstrap import is_portable_ffmpeg_installed, ensure_ffmpeg
-
-
-CREDITS_LINES = [
-    "ShuffleCUGAN models based on AniSmooth by moongetsu",
-    "Anime4K shaders by bloc97 (MIT License)",
-    "ArtCNN models by Artoriuz",
-]
-
-UPSCALE_MODELS = ["adore", "shufflecugan", "fallin_soft", "fallin_strong"]
-UPSCALE_METHODS = ["ml", "anime4k", "artcnn"]
-UPSCALE_SCALES = [2, 4]
-UPSCALE_PRESETS = ["archival", "high", "balanced", "fast", "draft"]
-ANIME4K_MODES = ["light", "medium", "strong"]
-ARTCNN_MODEL_NAMES = ["C4F16", "C4F32", "R8F64"]
+from ...core.upscaling.registry import (
+    UPSCALE_REGISTRY,
+    QUALITY_PRESETS,
+    get_ml_models,
+    get_onnx_models,
+    get_shader_models,
+    get_model_scales,
+)
 
 
 def _ensure_ffmpeg(auto_yes=False):
@@ -51,7 +45,9 @@ def _ensure_anime4k_shaders(auto_yes=False):
     if glsl_files:
         return
     console.print("  [warn]Anime4K shaders not downloaded.[/warn]")
-    if auto_yes or typer.confirm("  Download Anime4K shaders (by bloc97, MIT License)?", default=True):
+    entry = get_shader_models().get("anime4k", {})
+    credit = entry.get("credit", "")
+    if auto_yes or typer.confirm(f"  Download Anime4K shaders ({credit})?", default=True):
         from ...core.upscaling.anime4k import _download_anime4k_shaders
         with make_progress() as progress:
             task_id = progress.add_task("Downloading Anime4K shaders...", total=100)
@@ -72,42 +68,49 @@ def _ensure_ml_model(model_key, auto_yes=False):
     from ...core.upscaling.weight_loader import is_weight_downloaded, download_weights
     if is_weight_downloaded(model_key):
         return
-    console.print(f"  [warn]Model '{model_key}' not downloaded.[/warn]")
-    if auto_yes or typer.confirm(f"  Download {model_key}?", default=True):
+    entry = get_ml_models().get(model_key, {})
+    name = entry.get("name", model_key)
+    console.print(f"  [warn]Model '{name}' not downloaded.[/warn]")
+    if auto_yes or typer.confirm(f"  Download {name}?", default=True):
         with make_progress() as progress:
-            task_id = progress.add_task(f"Downloading {model_key}...", total=100)
+            task_id = progress.add_task(f"Downloading {name}...", total=100)
             def _cb(pct, msg):
                 progress.update(task_id, completed=pct, description=msg)
             if not download_weights(model_key, progress_cb=_cb):
-                fail(f"Download failed for {model_key}")
+                fail(f"Download failed for {name}")
                 raise typer.Exit(1)
-            ok(f"Model {model_key} downloaded")
+            ok(f"Model {name} downloaded")
     else:
-        fail(f"Model {model_key} is required")
+        fail(f"Model {name} is required")
         raise typer.Exit(1)
 
 
-def _ensure_artcnn_model(model_name, auto_yes=False):
+def _ensure_onnx_model(model_name, auto_yes=False):
     from ...core.upscaling.artcnn import _get_artcnn_dir, ARTCNN_MODELS
-    info = ARTCNN_MODELS[model_name]
+    info = ARTCNN_MODELS.get(model_name)
+    if info is None:
+        fail(f"Unknown ONNX model: {model_name}")
+        raise typer.Exit(1)
     path = os.path.join(_get_artcnn_dir(), info["file"])
     if os.path.exists(path):
         return
-    console.print(f"  [warn]ArtCNN {model_name} not downloaded.[/warn]")
-    if auto_yes or typer.confirm(f"  Download ArtCNN {model_name} (by Artoriuz)?", default=True):
+    entry = get_onnx_models().get(model_name, {})
+    name = entry.get("name", model_name)
+    console.print(f"  [warn]{name} not downloaded.[/warn]")
+    if auto_yes or typer.confirm(f"  Download {name}?", default=True):
         from ...core.upscaling.artcnn import _download_artcnn_model
         with make_progress() as progress:
-            task_id = progress.add_task(f"Downloading ArtCNN {model_name}...", total=100)
+            task_id = progress.add_task(f"Downloading {name}...", total=100)
             def _cb(pct, msg):
                 progress.update(task_id, completed=pct, description=msg)
             try:
                 _download_artcnn_model(model_name, progress_cb=_cb)
-                ok(f"ArtCNN {model_name} downloaded")
+                ok(f"{name} downloaded")
             except Exception as e:
                 fail(str(e))
                 raise typer.Exit(1)
     else:
-        fail(f"ArtCNN {model_name} is required")
+        fail(f"{name} is required")
         raise typer.Exit(1)
 
 
@@ -115,34 +118,49 @@ def upscale(
     input: Path = typer.Argument(None, help="Input video file"),
     output: Path = typer.Option(Path("upscaled.mp4"), "--output", "-o", help="Output video file"),
     method: str = typer.Option("ml", "--method", help="Upscale method: ml, anime4k, artcnn"),
-    model: str = typer.Option("adore", "--model", "-m", help="ML model: adore, shufflecugan, fallin_soft, fallin_strong"),
-    artcnn_model: str = typer.Option("C4F32", "--artcnn-model", help="ArtCNN model: C4F16, C4F32, R8F64"),
+    model: str = typer.Option("adore", "--model", "-m", help="ML model (see --list-models)"),
+    onnx_model: str = typer.Option("C4F32", "--onnx-model", help="ONNX model (see --list-models)"),
     anime4k_mode: str = typer.Option("medium", "--anime4k-mode", help="Anime4K mode: light, medium, strong"),
-    scale: int = typer.Option(2, "--scale", "-s", help="Scale factor: 2 or 4"),
-    preset: str = typer.Option("high", "--preset", "-p", help="Quality preset: archival, high, balanced, fast, draft"),
+    scale: int = typer.Option(2, "--scale", "-s", help="Scale factor (2 or 4)"),
+    preset: str = typer.Option("high", "--preset", "-p", help="Quality: archival, high, balanced, fast, draft"),
     fit_w: int = typer.Option(0, "--fit-w", help="Max output width (0 = no limit)"),
     fit_h: int = typer.Option(0, "--fit-h", help="Max output height (0 = no limit)"),
+    list_models: bool = typer.Option(False, "--list-models", help="List available models"),
     credits: bool = typer.Option(False, "--credits", help="Show credits for upscaling technologies"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm all download prompts"),
 ) -> None:
     """Upscale video using AI super-resolution.
 
     Methods:
-      ml      - Neural network models (ShuffleCUGAN via PyTorch/spandrel). Based on AniSmooth.
-      anime4k - GPU shader-based upscaler by bloc97. Fast, no ML deps.
-      artcnn  - Lightweight CNN models by Artoriuz (via ONNX Runtime).
+      ml      - Neural network models via PyTorch/spandrel. Based on AniSmooth.
+      anime4k - GPU shader-based via FFmpeg filters. Fast, no ML deps.
+      artcnn  - Lightweight CNN via ONNX Runtime.
 
+    Use --list-models to see all available models.
     Install: pip install amverge[upscale]
     """
+    if list_models:
+        banner("upscale models")
+        console.print()
+        for key, entry in UPSCALE_REGISTRY.items():
+            scales_str = "/".join(f"{s}x" for s in entry["scales"])
+            console.print(f"  [accent]{key}[/accent] dim:{entry['method']}  "
+                          f"{entry['name']} - {scales_str}")
+            console.print(f"    {entry.get('description', '')}")
+            console.print(f"    Credit: {entry.get('credit', '')}")
+        console.print()
+        return
+
     if credits:
         banner("upscale credits")
         console.print()
-        for line in CREDITS_LINES:
-            console.print(f"  [accent]+[/accent] {line}")
+        seen = set()
+        for entry in UPSCALE_REGISTRY.values():
+            cred = entry.get("credit", "")
+            if cred and cred not in seen:
+                console.print(f"  [accent]+[/accent] {cred}")
+                seen.add(cred)
         console.print()
-        console.print("  [dim]Anime4K: https://github.com/bloc97/Anime4K[/dim]")
-        console.print("  [dim]ArtCNN:  https://github.com/Artoriuz/ArtCNN[/dim]")
-        console.print("  [dim]AniSmooth: https://github.com/moongetsu/AniSmooth[/dim]")
         return
 
     if input is None:
@@ -152,21 +170,24 @@ def upscale(
         fail(f"File not found: {input}")
         raise typer.Exit(1)
 
-    if method not in UPSCALE_METHODS:
-        fail(f"Unknown method '{method}'. Valid: {', '.join(UPSCALE_METHODS)}")
+    if method not in ("ml", "anime4k", "artcnn"):
+        fail(f"Unknown method '{method}'. Valid: ml, anime4k, artcnn")
         raise typer.Exit(1)
-    if scale not in UPSCALE_SCALES:
+    if scale not in (2, 4):
         fail(f"Scale must be 2 or 4, got {scale}")
         raise typer.Exit(1)
-    if preset not in UPSCALE_PRESETS:
-        fail(f"Unknown preset '{preset}'. Valid: {', '.join(UPSCALE_PRESETS)}")
+    if preset not in QUALITY_PRESETS:
+        fail(f"Unknown preset '{preset}'. Valid: {', '.join(QUALITY_PRESETS.keys())}")
         raise typer.Exit(1)
 
     banner("upscale")
 
     if method == "anime4k":
-        if anime4k_mode not in ANIME4K_MODES:
-            fail(f"Unknown Anime4K mode '{anime4k_mode}'. Valid: {', '.join(ANIME4K_MODES)}")
+        shaders = get_shader_models()
+        entry = shaders.get("anime4k", {})
+        modes = entry.get("modes", ["medium"])
+        if anime4k_mode not in modes:
+            fail(f"Unknown Anime4K mode '{anime4k_mode}'. Valid: {', '.join(modes)}")
             raise typer.Exit(1)
 
         _ensure_ffmpeg(auto_yes=yes)
@@ -174,7 +195,7 @@ def upscale(
 
         from ...core.upscaling.anime4k import upscale_video_anime4k
 
-        console.print(f"  Method: [accent]Anime4K[/accent] (shader-based, no ML deps)")
+        console.print(f"  Method: [accent]{entry.get('name', 'Anime4K')}[/accent] (FFmpeg filters, no ML deps)")
         console.print(f"  Mode: [accent]{anime4k_mode}[/accent]  "
                       f"Scale: [accent]{scale}x[/accent]  "
                       f"Preset: [accent]{preset}[/accent]")
@@ -185,7 +206,6 @@ def upscale(
             task_id = progress.add_task("Upscaling...", total=100)
             def _progress_cb(pct, msg):
                 progress.update(task_id, completed=pct, description=msg)
-
             try:
                 upscale_video_anime4k(
                     str(input.resolve()),
@@ -202,17 +222,20 @@ def upscale(
                 raise typer.Exit(1)
 
     elif method == "artcnn":
-        if artcnn_model not in ARTCNN_MODEL_NAMES:
-            fail(f"Unknown ArtCNN model '{artcnn_model}'. Valid: {', '.join(ARTCNN_MODEL_NAMES)}")
+        onnx_models = get_onnx_models()
+        if onnx_model not in onnx_models:
+            valid = ', '.join(onnx_models.keys())
+            fail(f"Unknown ONNX model '{onnx_model}'. Valid: {valid}")
             raise typer.Exit(1)
 
         _ensure_ffmpeg(auto_yes=yes)
-        _ensure_artcnn_model(artcnn_model, auto_yes=yes)
+        _ensure_onnx_model(onnx_model, auto_yes=yes)
 
         from ...core.upscaling.artcnn import upscale_video_artcnn
 
-        console.print(f"  Method: [accent]ArtCNN[/accent] (ONNX Runtime)")
-        console.print(f"  Model: [accent]{artcnn_model}[/accent]  "
+        entry = onnx_models[onnx_model]
+        console.print(f"  Method: [accent]{entry.get('name', onnx_model)}[/accent] (ONNX Runtime)")
+        console.print(f"  Model: [accent]{onnx_model}[/accent]  "
                       f"Scale: [accent]{scale}x[/accent]  "
                       f"Preset: [accent]{preset}[/accent]")
         console.print(f"  Input: [dim]{input}[/dim]")
@@ -222,12 +245,11 @@ def upscale(
             task_id = progress.add_task("Upscaling...", total=100)
             def _progress_cb(pct, msg):
                 progress.update(task_id, completed=pct, description=msg)
-
             try:
                 upscale_video_artcnn(
                     str(input.resolve()),
                     str(output.resolve()),
-                    model_name=artcnn_model,
+                    model_name=onnx_model,
                     scale=scale,
                     preset=preset,
                     fit_w=fit_w,
@@ -239,13 +261,22 @@ def upscale(
                 raise typer.Exit(1)
 
     else:
-        if model not in UPSCALE_MODELS:
-            fail(f"Unknown model '{model}'. Valid: {', '.join(UPSCALE_MODELS)}")
+        ml_models = get_ml_models()
+        if model not in ml_models:
+            valid = ', '.join(ml_models.keys())
+            fail(f"Unknown ML model '{model}'. Valid: {valid}")
+            raise typer.Exit(1)
+
+        model_scales = get_model_scales(model)
+        if scale not in model_scales:
+            scales_str = '/'.join(f"{s}x" for s in model_scales)
+            fail(f"Model '{model}' supports scale {scales_str}, got {scale}x")
             raise typer.Exit(1)
 
         _ensure_ffmpeg(auto_yes=yes)
         _ensure_ml_model(model, auto_yes=yes)
 
+        entry = ml_models[model]
         try:
             from ...core.upscaling import UPSCALE_AVAILABLE, upscale_video
         except ImportError:
@@ -263,7 +294,7 @@ def upscale(
         else:
             console.print("  [warn]No NVIDIA GPU detected. Upscaling on CPU will be very slow.[/warn]")
 
-        console.print(f"  Model: [accent]{model}[/accent]  "
+        console.print(f"  Model: [accent]{entry.get('name', model)}[/accent]  "
                       f"Scale: [accent]{scale}x[/accent]  "
                       f"Preset: [accent]{preset}[/accent]")
         console.print(f"  Input: [dim]{input}[/dim]")
@@ -273,7 +304,6 @@ def upscale(
             task_id = progress.add_task("Upscaling...", total=100)
             def _progress_cb(pct, msg):
                 progress.update(task_id, completed=pct, description=msg)
-
             try:
                 upscale_video(
                     str(input.resolve()),

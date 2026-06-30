@@ -164,6 +164,18 @@ from .core.upscaling.artcnn import (
     ARTCNN_MODELS,
 )
 
+from .core.upscaling.registry import (
+    UPSCALE_REGISTRY,
+    get_model,
+    get_models_by_method,
+    get_ml_models,
+    get_shader_models,
+    get_onnx_models,
+    get_all_model_keys,
+    get_model_scales,
+    get_model_credit,
+)
+
 __all__ = [
     "__version__",
     # Pipeline
@@ -233,4 +245,7 @@ __all__ = [
     "verify_weight_hash", "load_weights_if_available",
     "upscale_video_anime4k", "ANIME4K_MODE_PRESETS", "ANIME4K_SHADER_FILES",
     "upscale_video_artcnn", "ARTCNN_MODELS",
+    "UPSCALE_REGISTRY", "get_model", "get_models_by_method",
+    "get_ml_models", "get_shader_models", "get_onnx_models",
+    "get_all_model_keys", "get_model_scales", "get_model_credit",
 ]

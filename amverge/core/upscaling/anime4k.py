@@ -6,6 +6,7 @@ from typing import Callable, Optional
 
 from ..infra.binaries import get_ffmpeg
 from ..infra.config import get_models_dir
+from .registry import QUALITY_PRESETS, get_model
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -178,7 +179,7 @@ def upscale_video_anime4k(
     fit_h: int = 0,
     progress_cb: Optional[Callable[[int, str], None]] = None,
 ) -> None:
-    from ...core.upscaling.upscale import QUALITY_PRESETS, _resolve_quality
+    from ...core.upscaling.upscale import _resolve_quality
 
     input_path = Path(input_path).resolve()
     output_path = Path(output_path).resolve()

@@ -5,32 +5,23 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from ..infra.config import get_models_dir
+from .registry import QUALITY_PRESETS, get_model, get_onnx_models
+
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 ARTCNN_MODELS = {
-    "C4F16": {
-        "file": "ArtCNN_C4F16.onnx",
-        "scale": 2,
-        "download": "https://github.com/Artoriuz/ArtCNN/releases/download/v1.6.2/ArtCNN_C4F16.onnx",
-        "sha256": None,
-    },
-    "C4F32": {
-        "file": "ArtCNN_C4F32.onnx",
-        "scale": 2,
-        "download": "https://github.com/Artoriuz/ArtCNN/releases/download/v1.6.2/ArtCNN_C4F32.onnx",
-        "sha256": None,
-    },
-    "R8F64": {
-        "file": "ArtCNN_R8F64.onnx",
-        "scale": 2,
-        "download": "https://github.com/Artoriuz/ArtCNN/releases/download/v1.6.2/ArtCNN_R8F64.onnx",
-        "sha256": None,
-    },
+    key: {
+        "file": entry["file"],
+        "scale": entry["scales"][0],
+        "download": entry["url"],
+        "sha256": entry.get("hash"),
+    }
+    for key, entry in get_onnx_models().items()
 }
 
 
 def _get_artcnn_dir():
-    from ..infra.config import get_models_dir
     return os.path.join(get_models_dir(), "artcnn")
 
 
@@ -106,7 +97,6 @@ def upscale_video_artcnn(
     fit_h: int = 0,
     progress_cb: Optional[Callable[[int, str], None]] = None,
 ) -> None:
-    from ...core.upscaling.upscale import QUALITY_PRESETS, _resolve_quality
     from ..infra.binaries import get_ffmpeg, get_ffprobe
 
     input_path = Path(input_path).resolve()
