@@ -1,0 +1,85 @@
+{
+  "_source": {
+    "ml": "https://example.com/models/",
+    "shader": "https://example.com/shaders/release.zip",
+    "custom": "https://example.com/other/"
+  },
+  "presets": {
+    "archival": {"crf": 14, "x264": "slow",      "tune": "animation"},
+    "high":     {"crf": 17, "x264": "slow",      "tune": "animation"},
+    "balanced": {"crf": 20, "x264": "medium",    "tune": "animation"},
+    "fast":     {"crf": 22, "x264": "veryfast",  "tune": "animation"},
+    "draft":    {"crf": 26, "x264": "ultrafast", "tune": "animation"}
+  },
+  "models": {
+
+    "adore": {
+      "_comment": "ML model (PyTorch/spandrel)",
+      "method": "ml",
+      "name": "Adore",
+      "scales": [2, 4],
+      "credit": "based on SomeProject by author",
+      "description": "High quality anime upscaler",
+      "category": "upscale",
+      "file": "adore.pth",
+      "hash": "443378bdc6db6cf4a75eea61ee7afc78b2c4b6a4d3b3981a40ff61f38bbc8f1a"
+    },
+
+    "anime4k": {
+      "_comment": "Shader-based (FFmpeg filters, no ML deps)",
+      "method": "shader",
+      "name": "Anime4K",
+      "scales": [2, 4],
+      "credit": "by bloc97 (MIT License)",
+      "description": "GPU shader-based upscaler, no ML deps",
+      "modes": ["light", "medium", "strong"],
+      "default_mode": "medium"
+    },
+
+    "C4F32": {
+      "_comment": "ONNX model (luma-only, 1-channel input)",
+      "method": "onnx",
+      "name": "ArtCNN C4F32",
+      "scales": [2],
+      "credit": "by Artoriuz",
+      "description": "Balanced real-time anime upscaler",
+      "file": "ArtCNN_C4F32.onnx",
+      "input_channels": 1
+    },
+
+    "my-new-model": {
+      "_comment": "Example - copy this and fill in",
+      "method": "ml",
+      "name": "My New Model",
+      "scales": [2],
+      "credit": "by YourName",
+      "description": "What this model does",
+      "category": "upscale",
+      "file": "my_model.pth",
+      "hash": "abc123..."
+    },
+
+    "my-shader": {
+      "_comment": "Example shader method",
+      "method": "shader",
+      "name": "My Shader Upscaler",
+      "scales": [2],
+      "credit": "by YourName (License)",
+      "description": "Fast filter-based upscaler",
+      "modes": ["light", "strong"],
+      "default_mode": "light"
+    },
+
+    "my-onnx": {
+      "_comment": "Example ONNX method",
+      "method": "onnx",
+      "name": "My ONNX Model",
+      "scales": [2, 4],
+      "credit": "by YourName",
+      "description": "Custom luma upscaler",
+      "file": "MyModel.onnx",
+      "input_channels": 1
+    }
+
+  }
+}

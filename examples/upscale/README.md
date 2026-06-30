@@ -2,9 +2,13 @@
 
 AI video upscaling with three methods:
 
-- **ML** - ShuffleCUGAN neural network (needs `amverge[upscale]`)
-- **Anime4K** - GPU shader-based (FFmpeg only, fastest)
+- **ML** - RealCUGAN neural network (needs `amverge[upscale]`)
+- **Anime4K** - FFmpeg filter-based (lanczos+unsharp+smartblur, no ML deps)
 - **ArtCNN** - Lightweight CNN via ONNX Runtime (needs `amverge[upscale]`)
+
+## Adding Models
+
+Models are defined in `core/upscaling/registry.json`. See [`registry.example.json`](registry.example.json) for the format.
 
 ## Requirements
 
@@ -19,6 +23,7 @@ amverge models --download anime4k    # pre-download Anime4K shaders
 
 | File | What It Does |
 |------|-------------|
-| `01_ml_upscale.py` | Upscale with ShuffleCUGAN model (adore, 2x) |
-| `02_anime4k_upscale.py` | Fast shader-based upscale with Anime4K |
+| `01_ml_upscale.py` | Upscale with adore model (2x) |
+| `02_anime4k_upscale.py` | Fast filter-based upscale with Anime4K |
 | `03_manage_models.py` | List, download, and delete model files |
+| `registry.example.json` | Annotated registry format for adding models |
