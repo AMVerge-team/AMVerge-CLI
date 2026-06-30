@@ -192,6 +192,18 @@ from .core.interpolation import (
     set_flowframes_path,
     get_flowframes_path,
     FLOWFRAMES_VERSION,
+    INTERPOLATION_REGISTRY,
+    interpolate_video,
+    INTERPOLATION_AVAILABLE as _INTERP_AVAILABLE,
+    get_model as get_interp_model,
+    get_rife_models,
+    get_all_model_keys as get_all_interp_model_keys,
+    get_model_credit as get_interp_model_credit,
+    download_weights as download_interp_weights,
+    is_weight_downloaded as is_interp_weight_downloaded,
+    get_weight_path as get_interp_weight_path,
+    verify_weight_hash as verify_interp_weight_hash,
+    load_weights_if_available as load_interp_weights_if_available,
 )
 
 __all__ = [
@@ -271,4 +283,9 @@ __all__ = [
     # Interpolation
     "flowframes_available", "run_flowframes", "cancel_flowframes",
     "set_flowframes_path", "get_flowframes_path", "FLOWFRAMES_VERSION",
+    "INTERPOLATION_REGISTRY", "interpolate_video",
+    "get_interp_model", "get_rife_models", "get_all_interp_model_keys",
+    "get_interp_model_credit", "download_interp_weights",
+    "is_interp_weight_downloaded", "get_interp_weight_path",
+    "verify_interp_weight_hash", "load_interp_weights_if_available",
 ]

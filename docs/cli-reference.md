@@ -299,6 +299,33 @@ amverge cache ./scenes --clear-all         # clear all caches in directory
 
 ---
 
+### `amverge interpolate`
+
+AI frame interpolation using RIFE (PyTorch CUDA/CPU). Python-based, no external .exe needed.
+
+```bash
+amverge interpolate episode.mp4
+amverge interpolate episode.mp4 -f 4 -m rife4.25-heavy
+amverge interpolate episode.mp4 -p archival -m rife4.25-heavy
+amverge interpolate --list-models
+amverge interpolate --credits
+amverge interpolate episode.mp4 -f 2 -y     # auto-download weights
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `INPUT` (arg) | required | Input video file |
+| `--output / -o` | `interpolated.mp4` | Output video file |
+| `--model / -m` | `rife4.25` | Model key: rife4.25, rife4.25-heavy |
+| `--factor / -f` | `2` | Frame rate multiplier (2-16) |
+| `--preset / -p` | `high` | Quality: archival, high, balanced, fast, draft |
+| `--list-models` | false | List available models |
+| `--credits` | false | Show credits |
+| `--yes / -y` | false | Auto-confirm downloads |
+
+Requires `pip install amverge[ml]`. CUDA auto-detected, CPU fallback.
+Weights auto-downloaded on first run to `%APPDATA%/com.amverge.cli/models/interpolation/`.
+
 ### `amverge flowframes`
 
 Run Flowframes 1.42.0 frame interpolation. Requires Flowframes 1.42.0 Patreon installed.

@@ -479,40 +479,48 @@ secs = Path("scenes") / f"{prefix}_secs.npy"
 check_if_path_exists(str(secs))  # raises FileNotFoundError if missing
 ```
 
-### Interpolation
+### `amverge interpolate`
+
+```python
+from amverge import (
+    interpolate_video, INTERPOLATION_REGISTRY,
+    get_interp_model, get_rife_models,
+    download_interp_weights, is_interp_weight_downloaded,
+    get_interp_weight_path, verify_interp_weight_hash,
+    load_interp_weights_if_available,
+)
+
+# Query registry
+print("Models:", list(INTERPOLATION_REGISTRY.keys()))
+for key, entry in INTERPOLATION_REGISTRY.items():
+    print(f"  {key}: {entry['name']} ({entry['description']})")
+    print(f"    Credit: {entry['credit']}")
+
+# Run interpolation
+interpolate_video(
+    input_path="episode.mp4",
+    output_path="interpolated.mp4",
+    model_key="rife4.25",
+    factor=2,
+    preset="high",
+    progress_cb=lambda pct, msg: print(f"[{pct}%] {msg}"),
+)
+
+# Weight management
+if not is_interp_weight_downloaded("rife4.25-heavy"):
+    download_interp_weights("rife4.25-heavy",
+        progress_cb=lambda pct, msg: print(f"[{pct}%] {msg}"))
+```
+
+---
+
+### `amverge flowframes`
 
 ```python
 from amverge import (
     flowframes_available, run_flowframes, cancel_flowframes,
     get_flowframes_path, set_flowframes_path, FLOWFRAMES_VERSION,
 )
-
-# Check availability
-if flowframes_available():
-    print(f"Flowframes {FLOWFRAMES_VERSION} ready")
-
-# Run interpolation
-output = run_flowframes(
-    input_path="episode.mp4",
-    output_dir="./interpolated",
-    factor=2,
-    ai="RifeCuda",
-    model="RIFE 4.13.2",
-    output_format="Mp4",
-    encoder="X264",
-    pix_fmt="Yuv420P",
-    progress_cb=lambda pct, msg: print(f"[{pct}%] {msg}"),
-    log_cb=lambda line: print(line),
-)
-print(f"Output: {output}")
-
-# Cancel running interpolation
-cancel_flowframes()
-
-# Configure Flowframes.exe path
-set_flowframes_path("C:\\Flowframes\\Flowframes.exe")
-current = get_flowframes_path()
-```
 
 ---
 

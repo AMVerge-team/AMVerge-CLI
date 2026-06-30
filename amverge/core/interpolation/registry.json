@@ -1,0 +1,23 @@
+{
+  "_source": {
+    "interpolation": "https://github.com/moongetsu/AniSmooth-Models/releases/download/interpolation"
+  },
+  "rife4.25": {
+    "method": "rife",
+    "name": "RIFE 4.25",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.25 (light)",
+    "file": "rife425.pth",
+    "heavy": false,
+    "hash": "040ed973997570f4f85489be3d8eb64be9c0cffdf0a9f049443b6a4838ed88f1"
+  },
+  "rife4.25-heavy": {
+    "method": "rife",
+    "name": "RIFE 4.25 Heavy",
+    "credit": "by hzwer / megvii-research",
+    "description": "RIFE v4.25 heavy variant (2x channel width, higher quality)",
+    "file": "rife425_heavy.pth",
+    "heavy": true,
+    "hash": "49f7c82d3866860683992042ba8eb559b9c01fbe2600b80a53c56de05bb13b6f"
+  }
+}

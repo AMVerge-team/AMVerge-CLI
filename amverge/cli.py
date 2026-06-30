@@ -20,6 +20,7 @@ from .commands.upscaling.upscale import upscale
 from .commands.upscaling.models import models
 from .commands.interpolation.flowframes import flowframes
 from .commands.interpolation.flowframes_path import flowframes_path as flowframes_path_cmd
+from .commands.interpolation.interpolate import interpolate
 from .commands.sidecar.backend import backend
 from .commands.sidecar.rpc_server import rpc_server
 
@@ -53,6 +54,7 @@ app.command()(upscale)
 app.command()(models)
 
 # Interpolation
+app.command()(interpolate)
 app.command(name="flowframes")(flowframes)
 app.command(name="flowframes-path")(flowframes_path_cmd)
 

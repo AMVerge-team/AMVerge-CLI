@@ -86,6 +86,7 @@ AMVerge-CLI/
 │   │   │   ├── upscale.py       amverge upscale  (ml / anime4k / artcnn methods, --credits)
 │   │   │   └── models.py        amverge models  (list/delete/download upscale model weights)
 │   │   ├── interpolation/
+│   │   │   ├── interpolate.py       amverge interpolate  (Python RIFE inference)
 │   │   │   ├── flowframes.py    amverge flowframes  (Flowframes 1.42.0 external process)
 │   │   │   └── flowframes_path.py   amverge flowframes-path  (set/show Flowframes.exe path)
 │   │   ├── info/
@@ -139,8 +140,13 @@ AMVerge-CLI/
 │       │   ├── __init__.py          exports: UPSCALE_REGISTRY, upscale_model, download_*, is_*_downloaded, ...
 │       │   └── weight_loader.py     download_weights(), verify_weight_hash(), load_weights_if_available() (ml .pth only)
 │       ├── interpolation/
-│       │   ├── flowframes.py         run_flowframes(), flowframes_available(), cancel_flowframes() - Flowframes 1.42.0 integration
-│       │   └── __init__.py           exports: run_flowframes, flowframes_available, get_flowframes_path, set_flowframes_path
+│       │   ├── rife_arch.py           RIFEModel + IFNet (light/heavy IFBlock channel widths)
+│       │   ├── registry.json          declarative model registry - add models here, CLI auto-discovers
+│       │   ├── registry.py             loads registry.json, builds URLs, query functions
+│       │   ├── weight_loader.py        download_weights(), verify_weight_hash(), load_weights_if_available()
+│       │   ├── engine.py               interpolate_video() - RIFE PyTorch CUDA/CPU inference
+│       │   ├── flowframes.py           run_flowframes(), flowframes_available(), cancel_flowframes() - Flowframes 1.42.0 integration
+│       │   └── __init__.py             exports: interpolate_video, run_flowframes, INTERPOLATION_REGISTRY, download_weights, ...
 │       ├── video/
 │       │   ├── probe_utils.py   probe_video_fps/duration/dimensions/total_frames via ffprobe
 │       │   ├── scene_utils.py   scenes_to_objects(), scenes_frames_to_seconds()
@@ -256,6 +262,8 @@ for scene in result.scenes:
 | `core/upscaling/artcnn.py` | `upscale_video_artcnn()` - ArtCNN ONNX (luma-only 2x doublers). Downloads to `models/upscale/artcnn/<file>` (single dir - was a path-mismatch bug vs weight_loader's per-key dir). Per-frame: BGR→YUV, run Y `[1,1,H,W]` → `[1,1,2H,2W]`, lanczos-upscale U/V, recombine, rawvideo pipe. Session uses `enable_cpu_mem_arena=False` + per-frame `del`/`gc` (HD full-frame inference OOMs otherwise). **Chroma models** (entry has `chroma_file`, e.g. `R8F64_Chroma`): loads a 2nd session; chroma net takes `[1,3,H,W]` (Y_2x + bilinear-upscaled U/V) → `[1,2,H,W]` reconstructed U/V, replacing the lanczos chroma path. `download_artcnn` fetches all `_model_files(entry)`; `is_artcnn_downloaded` checks all. Input/output tensor names auto-detected. v1.6.2 assets verified. Credit: ArtCNN by Artoriuz. |
 | `core/interpolation/flowframes.py` | Flowframes 1.42.0 integration. Spawns external `Flowframes.exe` with `-a -nc -mdc` args. Strips `NoDefaultCurrentDirectoryInExePath` from child env (Flowframes' bare-name ffprobe fails otherwise). Kills existing instance before spawn. Tails `FlowframesData/logs/<session>/sessionlog.txt` for progress (`Interpolated X/Y Frames`, `%`). Locates output by newest media file in `-o` dir with size stability check. Four cut modes: `copy` (start on keyframe), `snapped_copy` (HEVC CPU - snaps to nearest keyframe within 5s), `smartcut` (H.264 - encode tiny head + lossless tail), `reencode` (full fallback). Never remove the HEVC CPU path - HEVC re-encode without CUDA takes 10+ minutes. |
 | `commands/sidecar/rpc_server.py` | Hidden sidecar: `amverge rpc-server`. Long-lived process; Rust spawns it once and sends JSON commands via stdin (`{"type":"update","details":"...","state":"..."}`, `{"type":"clear"}`, `{"type":"shutdown"}`). Throttles Discord updates to max 1 per 15s. Exits when stdin closes or parent dies. |
+| `core/interpolation/engine.py` | `interpolate_video()` - RIFE PyTorch CUDA/CPU inference. Pad frames to mod-32, cache encoded features per pair, loop `factor-1` inter-steps with saved feature restore (IFNet.forward overwrites `self.f0/f1`). FFmpeg rawvideo stdin pipe for output. Muxes source audio. Never import torch at module level outside engine/arch files. |
+| `core/interpolation/rife_arch.py` | RIFEModel + IFNet architecture. Light/heavy determines IFBlock channel widths (m=1 vs m=2). `cachePair()` encodes img pair for reuse across inter-steps. Grid cache (`_tenGrid`, `_tenFlowDiv`) keyed by device/size/dtype. Parameter remapping in weight_loader handles `module.` prefix mismatches. |
 | `commands/sidecar/backend.py` | V2 backend. Positional interface: `amverge backend <video_path> <output_dir> [import_method]`. Rust replaces `python app.py <video> <dir>` with `amverge backend <video> <dir>` - no Rust changes needed. Emits V2 IPC events. Outputs JSON schema v1.0 with `schema_version`, `run_id`, `video` metadata block. |
 
 ## Theme
