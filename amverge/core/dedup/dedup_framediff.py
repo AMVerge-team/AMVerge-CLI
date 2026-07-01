@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Tuple
 
 from ..infra.binaries import get_ffmpeg, get_ffprobe
 
@@ -24,7 +24,7 @@ def dedup_framediff(
     threshold: float = 10.0,
     min_change_pct: float = 2.0,
     progress_cb: Optional[Callable[[int, str], None]] = None,
-) -> str:
+) -> Tuple[str, Dict]:
     """Remove duplicate frames by pixel difference comparison.
 
     Compares consecutive grayscale frames via absdiff. A frame is kept
@@ -145,7 +145,14 @@ def dedup_framediff(
     if r.returncode != 0:
         raise RuntimeError(f"FFmpeg encode failed: {r.stderr.strip()}")
 
-    if progress_cb:
-        progress_cb(100, f"Complete ({saved}/{frame_idx + 1} frames kept)")
+    stats = {
+        "frames_in": frame_idx + 1,
+        "frames_out": saved,
+        "frames_removed": max(0, (frame_idx + 1) - saved),
+        "pct_removed": round((1 - saved / max(1, frame_idx + 1)) * 100, 1),
+    }
 
-    return output_path
+    if progress_cb:
+        progress_cb(100, f"Complete ({saved}/{frame_idx + 1} frames kept, {stats['pct_removed']}% removed)")
+
+    return output_path, stats

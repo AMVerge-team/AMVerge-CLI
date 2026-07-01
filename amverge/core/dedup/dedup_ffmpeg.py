@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Tuple
 
 from ..infra.binaries import get_ffmpeg, get_ffprobe
 
@@ -15,19 +15,41 @@ def dedup_ffmpeg(
     output_path: str,
     threshold: float = 2.0,
     progress_cb: Optional[Callable[[int, str], None]] = None,
-) -> str:
-    """Remove duplicate frames using FFmpeg mpdecimate filter.
-
-    Args:
-        video_path: Path to input video.
-        output_path: Path for output video.
-        threshold: Maximum number of duplicate frames to drop per batch (hi param).
-        progress_cb: Optional (pct, msg) callback.
-
-    Returns:
-        Output path on success.
-    """
+) -> Tuple[str, Dict]:
     ffmpeg = get_ffmpeg()
+    ffprobe = get_ffprobe()
+
+    def _probe_frames(path):
+        try:
+            r = subprocess.run(
+                [ffprobe, "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=nb_read_packets",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path],
+                capture_output=True, text=True, timeout=30,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            val = r.stdout.strip()
+            if val.isdigit():
+                return int(val)
+        except Exception:
+            pass
+
+        try:
+            r = subprocess.run(
+                [ffprobe, "-v", "error", "-select_streams", "v:0",
+                 "-count_frames", "-show_entries", "stream=nb_read_frames",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path],
+                capture_output=True, text=True, timeout=30,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            val = r.stdout.strip()
+            if val.isdigit():
+                return int(val)
+        except Exception:
+            pass
+        return 0
+
+    frames_in = _probe_frames(video_path)
 
     if progress_cb:
         progress_cb(0, "Removing duplicate frames (mpdecimate)...")
@@ -50,7 +72,16 @@ def dedup_ffmpeg(
     except subprocess.TimeoutExpired:
         raise RuntimeError("FFmpeg mpdecimate timed out after 1 hour")
 
-    if progress_cb:
-        progress_cb(100, "Complete")
+    frames_out = _probe_frames(output_path)
 
-    return output_path
+    stats = {
+        "frames_in": frames_in,
+        "frames_out": frames_out,
+        "frames_removed": max(0, frames_in - frames_out),
+        "pct_removed": round((1 - frames_out / max(1, frames_in)) * 100, 1),
+    }
+
+    if progress_cb:
+        progress_cb(100, f"Complete ({frames_out}/{frames_in} frames kept, {stats['pct_removed']}% removed)")
+
+    return output_path, stats

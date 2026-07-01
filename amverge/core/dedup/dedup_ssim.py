@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Tuple
 
 from ..infra.binaries import get_ffmpeg, get_ffprobe
 
@@ -49,7 +49,7 @@ def dedup_ssim(
     output_path: str,
     threshold: float = 0.987,
     progress_cb: Optional[Callable[[int, str], None]] = None,
-) -> str:
+) -> Tuple[str, Dict]:
     if not SSIM_AVAILABLE:
         raise ImportError(
             "SSIM dedup requires opencv and scikit-image. "
@@ -131,7 +131,14 @@ def dedup_ssim(
     if r.returncode != 0:
         raise RuntimeError(f"FFmpeg encode failed: {r.stderr.strip()}")
 
-    if progress_cb:
-        progress_cb(100, f"Complete ({saved}/{frame_idx + 1} frames kept)")
+    stats = {
+        "frames_in": frame_idx + 1,
+        "frames_out": saved,
+        "frames_removed": max(0, (frame_idx + 1) - saved),
+        "pct_removed": round((1 - saved / max(1, frame_idx + 1)) * 100, 1),
+    }
 
-    return output_path
+    if progress_cb:
+        progress_cb(100, f"Complete ({saved}/{frame_idx + 1} frames kept, {stats['pct_removed']}% removed)")
+
+    return output_path, stats
