@@ -13,25 +13,31 @@ from ...core.dedup import DEDUP_METHODS
 def dedup(
     input: Path = typer.Argument(..., help="Input video file"),
     output: Path = typer.Option(None, "--output", "-o", help="Output video file"),
-    method: str = typer.Option("ffmpeg", "--method", "-m", help="Dedup method: ffmpeg, ssim, framediff"),
+    method: str = typer.Option("advanced", "--method", "-m", help="Dedup method: ffmpeg, ssim, framediff, advanced"),
     threshold: float = typer.Option(None, "--threshold", "-t", help="Detection threshold (method-specific)"),
     min_change_pct: float = typer.Option(2.0, "--min-change-pct", help="Min changed pixel %% for framediff method"),
+    region_sensitivity: int = typer.Option(1, "--region-sensitivity", "-rs", help="Min regions to change for advanced (1-4)"),
+    no_optical_flow: bool = typer.Option(False, "--no-optical-flow", help="Disable optical flow in advanced method"),
+    no_camera_comp: bool = typer.Option(False, "--no-camera-comp", help="Disable camera motion compensation in advanced"),
+    keep_camera_only: bool = typer.Option(False, "--keep-camera-only", help="Keep static-subject frames in advanced"),
     list_methods: bool = typer.Option(False, "--list-methods", help="List available dedup methods"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm download prompts"),
     no_monitor: bool = typer.Option(False, "--no-monitor", help="Disable system monitor during dedup"),
 ) -> None:
     """Remove duplicate / dead frames from a video.
 
-    Supports three methods: ffmpeg (mpdecimate, no deps), ssim (OpenCV, quality-aware),
-    and framediff (OpenCV, pixel motion detection with adaptive threshold).
+    Supports four methods: ffmpeg (mpdecimate), ssim (OpenCV), framediff (OpenCV),
+    and advanced (optical flow + camera compensation + static subject detection).
+    Advanced is the default and best for anime content.
     """
     if list_methods:
         banner("dedup methods")
         console.print()
         for key, entry in DEDUP_METHODS.items():
             req = entry.get("requires") or "none"
-            default_t = {"ffmpeg": 2.0, "ssim": 0.987, "framediff": 10.0}.get(key, "-")
-            console.print(f"  [accent]{key}[/accent] - {entry['name']}")
+            default_t = {"ffmpeg": 2.0, "ssim": 0.987, "framediff": 10.0, "advanced": 0.95}.get(key, "-")
+            tag = " [default]" if key == "advanced" else ""
+            console.print(f"  [accent]{key}[/accent]{tag} - {entry['name']}")
             console.print(f"    {entry['description']}")
             console.print(f"    Default threshold: [dim]{default_t}[/]")
             console.print(f"    Requires: [dim]{req}[/]")
@@ -47,7 +53,7 @@ def dedup(
         raise typer.Exit(1)
 
     if threshold is None:
-        threshold = {"ffmpeg": 2.0, "ssim": 0.987, "framediff": 10.0}.get(method, 2.0)
+        threshold = {"ffmpeg": 2.0, "ssim": 0.987, "framediff": 10.0, "advanced": 0.95}.get(method, 2.0)
 
     if output is None:
         output = input.parent / f"{input.stem}_deduped{input.suffix}"
@@ -83,10 +89,15 @@ def dedup(
     console.print(f"  Threshold: [accent]{threshold}[/accent]")
     if method == "framediff":
         console.print(f"  Min change: [accent]{min_change_pct}%[/accent]")
+    if method == "advanced":
+        console.print(f"  Region sensitivity: [accent]{region_sensitivity}[/accent]")
+        console.print(f"  Optical flow: [accent]{'off' if no_optical_flow else 'on'}[/accent]")
+        console.print(f"  Camera comp: [accent]{'off' if no_camera_comp else 'on'}[/accent]")
+        console.print(f"  Static subject: [accent]{'keep' if keep_camera_only else 'remove'}[/accent]")
     console.print(f"  Input:  [dim]{input}[/dim]")
     console.print(f"  Output: [dim]{output}[/dim]")
 
-    monitor = SystemMonitor(enabled=not no_monitor and method in ("ssim", "framediff"))
+    monitor = SystemMonitor(enabled=not no_monitor and method in ("ssim", "framediff", "advanced"))
     monitor.stats["gpu_name"] = gpu_info.get("gpu_name", "GPU")
     monitor.start()
 
@@ -172,6 +183,22 @@ def dedup(
                 fail("FrameDiff method requires opencv. Run: pip install opencv-python")
                 raise typer.Exit(1)
             _, stats = dedup_framediff(str(input.resolve()), str(output.resolve()), threshold, min_change_pct, _progress_cb)
+        elif method == "advanced":
+            from ...core.dedup import dedup_advanced, ADVANCED_AVAILABLE
+            if not ADVANCED_AVAILABLE:
+                monitor.stop()
+                if hasattr(_update_display, "live"):
+                    _update_display.live.stop()
+                fail("Advanced method requires opencv. Run: pip install opencv-python")
+                raise typer.Exit(1)
+            _, stats = dedup_advanced(
+                str(input.resolve()), str(output.resolve()), threshold,
+                region_sensitivity=region_sensitivity,
+                use_optical_flow=not no_optical_flow,
+                camera_motion_compensation=not no_camera_comp,
+                remove_static_subject=not keep_camera_only,
+                progress_cb=_progress_cb,
+            )
     except Exception as e:
         monitor.stop()
         if hasattr(_update_display, "live"):
@@ -189,6 +216,6 @@ def dedup(
         console.print(f"  Frames in:    [label]{stats['frames_in']}[/]")
         console.print(f"  Frames kept:  [accent]{stats['frames_out']}[/]")
         console.print(f"  Removed:      [warn]{stats['frames_removed']}[/]  ([warn]{stats['pct_removed']}%[/])")
+        if stats.get("cadence"):
+            console.print(f"  Cadence:      [dim]every {stats['cadence']} frames[/]")
         ok(f"Saved: {output} ({monitor.stats['elapsed_s']:.1f}s)")
-    else:
-        ok(f"Saved: {output}")
