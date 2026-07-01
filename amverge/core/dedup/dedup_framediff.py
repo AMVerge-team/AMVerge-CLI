@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional, Tuple
 
+from ..video.probe_utils import probe_video_fps
 from ._encode import build_stats, encode_selected, probe_frame_count
 
 FRAMEDIFF_AVAILABLE = False
@@ -15,24 +16,17 @@ except ImportError:
 _ANALYZE_MAX_WIDTH = 640
 
 
-def dedup_framediff(
+def analyze_framediff(
     video_path: str,
-    output_path: str,
     threshold: float = 10.0,
     min_change_pct: float = 2.0,
     progress_cb: Optional[Callable[[int, str], None]] = None,
-) -> Tuple[str, dict]:
-    """Remove near-duplicate frames by pixel-difference motion detection.
-
-    A frame is kept when the fraction of pixels differing from the last kept
-    frame (by more than ``threshold`` intensity) exceeds an adaptive area
-    threshold: ``max(min_change_pct, median_noise_floor * 1.5)``. Analysis runs
-    on a grayscale downscale; output is encoded from the full-resolution source
-    with audio, color and bit depth preserved.
-
-    Returns:
-        (output_path, stats) with frames_in/out/removed/pct_removed.
-    """
+    progress_hi: int = 95,
+) -> Tuple[List[int], int, float]:
+    """Return (keep_indices, frames_in, fps). A frame is kept when the fraction
+    of pixels differing from the last kept frame (by more than ``threshold``)
+    exceeds ``max(min_change_pct, median_noise_floor * 1.5)``. Aborts on VFR
+    sources whose decoded count diverges from the container count."""
     if not FRAMEDIFF_AVAILABLE:
         raise ImportError(
             "FrameDiff dedup requires opencv. Run: pip install amverge[dedup]"
@@ -109,7 +103,7 @@ def dedup_framediff(
             prev_gray = curr_gray
 
         if progress_cb:
-            pct = min(94, int((frame_idx / max(1, total_frames - 1)) * 95))
+            pct = min(progress_hi - 1, int((frame_idx / max(1, total_frames - 1)) * progress_hi))
             if pct != last_pct:
                 progress_cb(pct, f"Dedup (framediff)... {len(keep_indices)}/{frame_idx + 1}")
                 last_pct = pct
@@ -124,10 +118,34 @@ def dedup_framediff(
             "source is likely VFR. Use the ffmpeg method or re-encode to CFR first."
         )
 
+    return keep_indices, frames_in, probe_video_fps(video_path)
+
+
+def dedup_framediff(
+    video_path: str,
+    output_path: str,
+    threshold: float = 10.0,
+    min_change_pct: float = 2.0,
+    progress_cb: Optional[Callable[[int, str], None]] = None,
+    codec: Optional[str] = None,
+    crf: int = 18,
+) -> Tuple[str, dict]:
+    """Remove near-duplicate frames by pixel-difference motion detection.
+
+    Analysis runs on a grayscale downscale; output is encoded from the
+    full-resolution source with audio, color and bit depth preserved.
+
+    Returns:
+        (output_path, stats) with frames_in/out/removed/pct_removed.
+    """
+    keep_indices, frames_in, _ = analyze_framediff(
+        video_path, threshold, min_change_pct, progress_cb
+    )
+
     if progress_cb:
         progress_cb(95, "Encoding output...")
 
-    encode_selected(video_path, output_path, keep_indices,
+    encode_selected(video_path, output_path, keep_indices, crf=crf, codec=codec,
                     progress_cb=progress_cb, progress_lo=95, progress_hi=99)
     stats = build_stats(frames_in, len(keep_indices))
 

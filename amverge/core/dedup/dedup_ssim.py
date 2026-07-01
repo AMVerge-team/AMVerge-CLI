@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional, Tuple
 
+from ..video.probe_utils import probe_video_fps
 from ._encode import build_stats, encode_selected, probe_frame_count
 
 SSIM_AVAILABLE = False
@@ -35,21 +36,15 @@ if SSIM_AVAILABLE:
         return float(ssim_map.mean())
 
 
-def dedup_ssim(
+def analyze_ssim(
     video_path: str,
-    output_path: str,
     threshold: float = 0.987,
     progress_cb: Optional[Callable[[int, str], None]] = None,
-) -> Tuple[str, dict]:
-    """Remove near-duplicate frames using structural similarity (SSIM).
-
-    A frame is kept only if its windowed SSIM against the last kept frame is
-    below threshold. Analysis runs on a grayscale downscale for speed; the
-    output is encoded from the full-resolution source and preserves audio.
-
-    Returns:
-        (output_path, stats) with frames_in/out/removed/pct_removed.
-    """
+    progress_hi: int = 95,
+) -> Tuple[List[int], int, float]:
+    """Return (keep_indices, frames_in, fps). Keeps a frame when its windowed
+    SSIM against the last kept frame is below threshold. Aborts on VFR sources
+    whose decoded count diverges from the container count (indices misalign)."""
     if not SSIM_AVAILABLE:
         raise ImportError(
             "SSIM dedup requires opencv. Run: pip install amverge[dedup]"
@@ -92,7 +87,7 @@ def dedup_ssim(
             prev_gray = curr_gray
 
         if progress_cb:
-            pct = min(94, int((frame_idx / max(1, total_frames - 1)) * 95))
+            pct = min(progress_hi - 1, int((frame_idx / max(1, total_frames - 1)) * progress_hi))
             if pct != last_pct:
                 progress_cb(pct, f"Dedup (SSIM)... {len(keep_indices)}/{frame_idx + 1}")
                 last_pct = pct
@@ -107,10 +102,31 @@ def dedup_ssim(
             "source is likely VFR. Use the ffmpeg method or re-encode to CFR first."
         )
 
+    return keep_indices, frames_in, probe_video_fps(video_path)
+
+
+def dedup_ssim(
+    video_path: str,
+    output_path: str,
+    threshold: float = 0.987,
+    progress_cb: Optional[Callable[[int, str], None]] = None,
+    codec: Optional[str] = None,
+    crf: int = 18,
+) -> Tuple[str, dict]:
+    """Remove near-duplicate frames using structural similarity (SSIM).
+
+    Analysis runs on a grayscale downscale; the output is encoded from the
+    full-resolution source and preserves audio, color and bit depth.
+
+    Returns:
+        (output_path, stats) with frames_in/out/removed/pct_removed.
+    """
+    keep_indices, frames_in, _ = analyze_ssim(video_path, threshold, progress_cb)
+
     if progress_cb:
         progress_cb(95, "Encoding output...")
 
-    encode_selected(video_path, output_path, keep_indices,
+    encode_selected(video_path, output_path, keep_indices, crf=crf, codec=codec,
                     progress_cb=progress_cb, progress_lo=95, progress_hi=99)
     stats = build_stats(frames_in, len(keep_indices))
 

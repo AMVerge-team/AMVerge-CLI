@@ -60,12 +60,52 @@ def is_interlaced(video_path: str) -> bool:
     return _probe_field(video_path, "field_order") in ("tt", "bb", "tb", "bt")
 
 
-def pick_pixfmt_profile(video_path: str) -> Tuple[str, str]:
-    """Return (pix_fmt, x264 profile) preserving source bit depth (8 vs 10)."""
+def is_10bit_source(video_path: str) -> bool:
     pix = _probe_field(video_path, "pix_fmt")
-    if "10" in pix or "12" in pix or pix.startswith("p010"):
-        return "yuv420p10le", "high10"
-    return "yuv420p", "high"
+    return "10" in pix or "12" in pix or pix.startswith("p010")
+
+
+def _pix_for_profile(key: str, is_10bit: bool) -> str:
+    if "4444" in key or "high444" in key:
+        return "yuv444p10le"
+    if "422" in key:
+        return "yuv422p10le"
+    if "10" in key or "12" in key or is_10bit:
+        return "yuv420p10le"
+    return "yuv420p"
+
+
+def build_video_args(
+    codec: Optional[str], crf: int, is_10bit: bool, preset: str = "fast"
+) -> List[str]:
+    """Build ffmpeg video-encode args for a codec profile key (or default x264).
+
+    ``-preset`` is only emitted for encoders that accept it (libx264/libx265);
+    prores/av1 would error on it.
+    """
+    if not codec or codec == "default":
+        pix = "yuv420p10le" if is_10bit else "yuv420p"
+        prof = "high10" if is_10bit else "high"
+        return ["-c:v", "libx264", "-crf", str(int(crf)), "-preset", preset,
+                "-profile:v", prof, "-pix_fmt", pix]
+
+    from ..codec.codec_utils import CODEC_ALIASES, CODEC_PROFILES, PRORES_CODECS
+
+    key = CODEC_ALIASES.get(codec, codec)
+    prof = CODEC_PROFILES.get(key)
+    if prof is None:
+        valid = ", ".join(sorted(CODEC_PROFILES) + sorted(CODEC_ALIASES))
+        raise ValueError(f"Unknown codec '{codec}'. Valid: {valid}")
+
+    enc = prof["cpu"]
+    extra = prof["args"].split() if prof["args"] else []
+    if key in PRORES_CODECS:
+        return ["-c:v", enc, "-pix_fmt", "yuv422p10le", *extra]
+    pix = _pix_for_profile(key, is_10bit)
+    args = ["-c:v", enc, "-crf", str(int(crf))]
+    if enc in ("libx264", "libx265"):
+        args += ["-preset", preset]
+    return args + ["-pix_fmt", pix, *extra]
 
 
 def build_stats(frames_in: int, frames_out: int) -> dict:
@@ -77,6 +117,36 @@ def build_stats(frames_in: int, frames_out: int) -> dict:
         "frames_removed": removed,
         "pct_removed": round(pct, 2),
     }
+
+
+def _tc(frame: int, fps: float) -> str:
+    if fps <= 0:
+        return ""
+    t = frame / fps
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = t % 60
+    return f"{h:02d}:{m:02d}:{s:06.3f}"
+
+
+def export_frame_list(
+    path: str,
+    keep_indices: Sequence[int],
+    frames_in: int,
+    fps: float,
+) -> str:
+    """Write a CSV of kept and removed frame ranges with timecodes."""
+    keep = set(keep_indices)
+    kept_ranges = _ranges([i for i in range(frames_in) if i in keep])
+    removed_ranges = _ranges([i for i in range(frames_in) if i not in keep])
+    rows = [("kept", a, b) for a, b in kept_ranges]
+    rows += [("removed", a, b) for a, b in removed_ranges]
+    rows.sort(key=lambda r: r[1])
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write("type,start_frame,end_frame,start_tc,end_tc,count\n")
+        for kind, a, b in rows:
+            f.write(f"{kind},{a},{b},{_tc(a, fps)},{_tc(b + 1, fps)},{b - a + 1}\n")
+    return path
 
 
 def run_ffmpeg_progress(
@@ -161,6 +231,7 @@ def encode_selected(
     keep_indices: Sequence[int],
     crf: int = 18,
     preset: str = "fast",
+    codec: Optional[str] = None,
     progress_cb: Optional[Callable[[int, str], None]] = None,
     progress_lo: int = 0,
     progress_hi: int = 100,
@@ -177,7 +248,7 @@ def encode_selected(
     expr = _build_select_expr(keep_indices)
     pre = "yadif=0," if is_interlaced(video_path) else ""
     graph = f"[0:v]{pre}select='{expr}'[v]"
-    pix_fmt, profile = pick_pixfmt_profile(video_path)
+    video_args = build_video_args(codec, crf, is_10bit_source(video_path), preset)
 
     fd, script = tempfile.mkstemp(suffix=".txt", text=True)
     try:
@@ -189,8 +260,7 @@ def encode_selected(
             "-i", video_path,
             "-filter_complex_script", script,
             "-map", "[v]", "-map", "0:a?",
-            "-c:v", "libx264", "-crf", str(int(crf)), "-preset", preset,
-            "-profile:v", profile, "-pix_fmt", pix_fmt,
+            *video_args,
             "-c:a", "copy",
             "-fps_mode", "vfr",
             *get_color_args(video_path),
