@@ -75,7 +75,7 @@ def interpolate(
 ) -> None:
     """Interpolate video frames using AI frame interpolation (RIFE).
 
-    Python-based RIFE inference with PyTorch CUDA/CPU. Requires PyTorch and OpenCV.
+    Python-based RIFE inference with PyTorch CUDA/CPU. Requires pip install amverge[interpolation].
     For Flowframes 1.42.0 external process (free 1.36.0 planned), use: amverge flowframes
     """
     if list_models:
@@ -137,7 +137,7 @@ def interpolate(
 
     from ...core.interpolation.engine import INTERPOLATION_AVAILABLE
     if not INTERPOLATION_AVAILABLE:
-        fail("Interpolation requires torch and opencv. Run: pip install amverge[ml]")
+        fail("Interpolation requires torch and opencv. Run: pip install amverge[interpolation]")
         raise typer.Exit(1)
 
     _ensure_ffmpeg_interactive(auto_yes=yes)

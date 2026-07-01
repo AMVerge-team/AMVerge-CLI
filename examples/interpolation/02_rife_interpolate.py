@@ -28,7 +28,7 @@ while i < len(sys.argv):
         i += 1
 
 if not INTERPOLATION_AVAILABLE:
-    print("Interpolation requires torch and opencv. Run: pip install amverge[ml]")
+    print("Interpolation requires torch and opencv. Run: pip install amverge[interpolation]")
     sys.exit(1)
 
 gpu_info = get_gpu_info()

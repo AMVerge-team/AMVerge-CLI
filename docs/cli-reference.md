@@ -336,7 +336,7 @@ amverge interpolate episode.mp4 -f 2 -y     # auto-download weights
 | `--download` | false | Download weights without running |
 | `--no-monitor` | false | Disable live GPU/CPU/RAM/ETA display |
 
-Requires `pip install amverge[ml]`. CUDA auto-detected, CPU fallback.
+Requires `pip install amverge[interpolation]`. CUDA auto-detected, CPU fallback.
 Weights auto-downloaded on first run to `%APPDATA%/com.amverge.cli/models/interpolation/`.
 
 ### `amverge flowframes`

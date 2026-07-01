@@ -132,7 +132,7 @@ def run_flowframes(
     exe = _find_flowframes_exe()
     if not exe:
         raise RuntimeError(
-            "Flowframes.exe not found. Set with: amverge interpolate --ff-path <path>"
+            "Flowframes.exe not found. Set with: amverge flowframes-path <path>"
         )
 
     os.makedirs(output_dir, exist_ok=True)

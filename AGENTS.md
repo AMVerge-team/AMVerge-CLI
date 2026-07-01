@@ -18,6 +18,9 @@ AMVerge features as a CLI tool and Python library. Ports the AMVerge desktop app
 pip install -e .           # base install (keyframe detection only)
 pip install -e ".[edge]"   # + OpenCV for edge detection method
 pip install -e ".[ml]"     # + TransNetV2 ML detection (torch, GPU optional)
+pip install -e ".[interpolation]"   # + RIFE PyTorch CUDA/CPU inference
+pip install -e ".[flowframes]"      # no extra deps (external Flowframes.exe)
+pip install -e ".[upscale]"         # + OpenCV, spandrel, onnxruntime for upscaling
 ```
 
 No build step. Pure Python package, `hatchling` backend.
@@ -52,7 +55,7 @@ twine upload dist/*
 | GPU | PyTorch (CUDA auto-detected, CPU fallback) |
 | Edge detection | OpenCV (optional, `[edge]` extra) |
 | Package | hatchling, PyPI name `amverge` |
-| Frame interpolation | Flowframes 1.42.0 (external .exe, Windows-only, NVIDIA GPU recommended; free 1.36.0 planned) |
+| Frame interpolation | Flowframes 1.42.0 (external .exe, Windows-only, NVIDIA GPU recommended; free 1.36.0 planned; `[flowframes]` extra) |
 | Discord RPC | pypresence (optional, `[discord]` extra) |
 
 ## Directory Map

@@ -22,9 +22,11 @@ Install AMVerge with the dependencies you need:
 ```bash
 pip install amverge               # basic (keyframe, export, merge, info)
 pip install amverge[ml]           # + TransNetV2 ML detection
+pip install amverge[interpolation] # + RIFE AI frame interpolation
+pip install amverge[flowframes]    # no extra deps (external Flowframes.exe)
 pip install amverge[edge]         # + Canny edge detection
 pip install amverge[discord]      # + Discord Rich Presence
-pip install amverge[ml,edge,discord,upscale]  # everything
+pip install amverge[ml,edge,discord,upscale,interpolation]  # everything
 ```
 
 Then run any script:
@@ -51,7 +53,7 @@ Scripts accept a video path as command-line argument. If none given, defaults to
 | [diagnostics/](diagnostics/) | GPU check, version info, health check | - |
 | [discord-rpc/](discord-rpc/) | Discord Rich Presence status updates | [discord] |
 | [upscale/](upscale/) | AI video upscaling: ML, Anime4K shaders, ArtCNN | [upscale] for ML/ArtCNN |
-| [interpolation/](interpolation/) | RIFE PyTorch + Flowframes 1.42.0 frame interpolation (free 1.36.0 planned) | [ml] for RIFE, Flowframes for FF |
+| [interpolation/](interpolation/) | RIFE PyTorch + Flowframes 1.42.0 frame interpolation (free 1.36.0 planned) | [interpolation] for RIFE, Flowframes for FF |
 | [custom-pipeline/](custom-pipeline/) | full end-to-end pipeline from scratch | [ml] |
 
 ---

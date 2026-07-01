@@ -57,9 +57,11 @@ def flowframes(
 ) -> None:
     """Run Flowframes 1.42.0 frame interpolation.
 
-    Requires Flowframes 1.42.0 Patreon installed. Auto-detects at %LOCALAPPDATA%\\Flowframes\\Flowframes.exe
+    Requires Flowframes 1.42.0 Patreon installed. No extra Python deps needed.
+    Auto-detects at %LOCALAPPDATA%\\Flowframes\\Flowframes.exe
     or configure with: amverge flowframes-path PATH
 
+    Install: pip install amverge[flowframes]  (no extra deps)
     Support for free Flowframes 1.36.0 is planned (delivery TBD - differs from 1.42.0 Patreon version).
     """
     if ff_path:
@@ -77,7 +79,8 @@ def flowframes(
         fail(
             "Flowframes.exe (1.42.0) not found.\n"
             "  Set path:  amverge flowframes-path PATH\n"
-            "  Free Flowframes 1.36.0 support is planned (delivery TBD)."
+            "  Free Flowframes 1.36.0 support is planned (delivery TBD).\n"
+            "  No extra deps needed - Flowframes is external software."
         )
         raise typer.Exit(1)
 
