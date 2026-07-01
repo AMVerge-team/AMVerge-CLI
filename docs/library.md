@@ -145,15 +145,21 @@ if secs_path.exists():
 
 ```python
 from amverge import UPSCALE_REGISTRY, get_ml_models, get_onnx_models, get_shader_models
+from amverge import INTERPOLATION_REGISTRY
 
-# Query the registry (loaded from registry.json)
-print("All models:", list(UPSCALE_REGISTRY.keys()))
+# Upscale registry
+print("All upscale models:", list(UPSCALE_REGISTRY.keys()))
 print("ML models:", list(get_ml_models().keys()))
 print("ONNX models:", list(get_onnx_models().keys()))
 
-# Model metadata
 for key, entry in UPSCALE_REGISTRY.items():
     print(f"{key}: {entry['name']} ({entry['method']}) {entry['scales']}")
+    print(f"  {entry.get('description', '')}")
+
+# Interpolation registry
+print("All interpolation models:", list(INTERPOLATION_REGISTRY.keys()))
+for key, entry in INTERPOLATION_REGISTRY.items():
+    print(f"{key}: {entry['name']} (rife) heavy={entry.get('heavy', False)}")
     print(f"  {entry.get('description', '')}")
 
 from amverge import MODEL_FILES, UPSCALE_MODEL_KEYS, is_weight_downloaded
@@ -161,6 +167,11 @@ from amverge import MODEL_FILES, UPSCALE_MODEL_KEYS, is_weight_downloaded
 print("Available ML models:", UPSCALE_MODEL_KEYS)
 for key in UPSCALE_MODEL_KEYS:
     print(f"  {key}: {'downloaded' if is_weight_downloaded(key) else 'not downloaded'}")
+
+from amverge.core.interpolation import is_weight_downloaded as interp_dl_check
+
+for key in INTERPOLATION_REGISTRY:
+    print(f"  {key}: {'downloaded' if interp_dl_check(key) else 'not downloaded'}")
 ```
 
 ---

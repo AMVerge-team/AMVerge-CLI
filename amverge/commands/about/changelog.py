@@ -8,6 +8,13 @@ from ...ui import banner, console
 
 _CLI_ENTRIES = [
     ("v0.2.1", [
+        "Interpolation: RIFE PyTorch CUDA/CPU inference (interpolate command)",
+        "Interpolation: 18 RIFE models (4.6 through 4.25-heavy, Elexor, PerVFI)",
+        "Interpolation: SystemMonitor live display (GPU util/temp/VRAM, CPU/RAM, ETA)",
+        "Interpolation: Flowframes 1.42.0 external process (flowframes command)",
+        "Models: show both upscale and interpolation tables by default",
+        "Models: --upscale / --interpolation flags to filter (was --type)",
+        "Models: --delete and --download search both registries automatically",
         "Anime4K: real GLSL shaders via FFmpeg libplacebo (was lanczos approximation)",
         "Anime4K: auto-detect libplacebo, lanczos+unsharp fallback when unavailable",
         "Anime4K: shader chains per mode (light/medium/strong), 2 passes for 4x",

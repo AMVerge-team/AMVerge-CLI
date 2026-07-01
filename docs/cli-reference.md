@@ -233,7 +233,7 @@ amverge upscale episode.mp4 -m adore -y                 # auto-confirm downloads
 | `onnx` | fast | `[upscale]` | ONNX Runtime inference (ArtCNN) |
 | `ml` | medium | `[upscale]` | Spandrel auto-arch detection (RealCUGAN, ESRGAN, etc.) |
 
-**System monitor:** During ml and onnx upscaling, a live panel shows GPU utilization, VRAM, CPU%, RAM, ETA, and fps. Use `--no-monitor` to disable.
+**System monitor:** During ml, onnx upscaling and RIFE interpolation, a live panel shows GPU utilization, VRAM, CPU%, RAM, ETA, and fps. Use `--no-monitor` to disable.
 
 **Adding models:** Edit `amverge/core/upscaling/registry.json`. One JSON entry per model. See `docs/registry.md` for format.
 
@@ -243,26 +243,34 @@ Models and FFmpeg are auto-downloaded to `%APPDATA%/com.amverge.cli/`. On first 
 
 ### `amverge models`
 
-Manage upscaling model files. Lists all models from the registry.
+Manage upscaling and interpolation model files. Shows both registries by default.
 
 ```bash
-amverge models                             # list all downloaded models
+amverge models                             # list all models (upscale + interpolation)
+amverge models --interpolation             # interpolation models only
+amverge models --upscale                   # upscale models only
 amverge models --download adore            # download a model
 amverge models --download anime4k          # download Anime4K shaders
 amverge models --download C4F32            # download ArtCNN model
+amverge models --download rife4.25         # download RIFE interpolation model
 amverge models --delete shufflecugan       # delete a model from disk
+amverge models --delete rife4.25           # delete interpolation model from disk
 amverge models --delete anime4k            # delete all Anime4K shaders
 amverge models --storage                   # show cache directories
+amverge models --verbose                   # show file paths and hashes
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--upscale / -u` | false | Show only upscale models |
+| `--interpolation / -i` | false | Show only interpolation models |
 | `--download` | - | Download a model by key |
 | `--delete` | - | Delete a model by key |
 | `--storage` | false | Show storage directories |
+| `--verbose / -v` | false | Show file paths and hashes |
 
-**Model keys:** Use `amverge upscale --list-models` for the full list. Keys come from `registry.json`.
-Storage: `%APPDATA%/com.amverge.cli/models/upscale/{key}/`
+**Model keys:** Use `amverge upscale --list-models` or `amverge interpolate --list-models` for full lists.
+Storage: `%APPDATA%/com.amverge.cli/models/upscale/{key}/` and `.../interpolation/{key}/`.
 
 ---
 
@@ -326,6 +334,7 @@ amverge interpolate episode.mp4 -f 2 -y     # auto-download weights
 | `--credits` | false | Show credits |
 | `--yes / -y` | false | Auto-confirm downloads |
 | `--download` | false | Download weights without running |
+| `--no-monitor` | false | Disable live GPU/CPU/RAM/ETA display |
 
 Requires `pip install amverge[ml]`. CUDA auto-detected, CPU fallback.
 Weights auto-downloaded on first run to `%APPDATA%/com.amverge.cli/models/interpolation/`.

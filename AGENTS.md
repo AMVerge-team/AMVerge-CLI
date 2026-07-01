@@ -84,7 +84,7 @@ AMVerge-CLI/
 │   │   │   └── merge.py         amverge merge
 │   │   ├── upscaling/
 │   │   │   ├── upscale.py       amverge upscale  (ml / anime4k / artcnn methods, --credits)
-│   │   │   └── models.py        amverge models  (list/delete/download upscale model weights)
+│   │   │   └── models.py        amverge models  (list/delete/download upscale + interpolation model weights)
 │   │   ├── interpolation/
 │   │   │   ├── interpolate.py       amverge interpolate  (Python RIFE inference)
 │   │   │   ├── flowframes.py    amverge flowframes  (Flowframes 1.42.0 external process)
@@ -136,7 +136,7 @@ AMVerge-CLI/
 │       │   ├── anime4k.py           upscale_video_anime4k() - real Anime4K GLSL via libplacebo, lanczos fallback
 │       │   ├── artcnn.py            upscale_video_artcnn() - ArtCNN ONNX inference (luma 2x), download helpers
 │       │   ├── ffmpeg_helpers.py    shared: mux_audio(), build_ffmpeg_pipe(), get_video_dims_ffprobe(), CREATE_NO_WINDOW
-│       │   ├── monitor.py           SystemMonitor - GPU/CPU/RAM sampling + ETA during upscale
+│       │   ├── monitor.py           SystemMonitor - GPU/CPU/RAM sampling + ETA during upscale and interpolation
 │       │   ├── __init__.py          exports: UPSCALE_REGISTRY, upscale_model, download_*, is_*_downloaded, ...
 │       │   └── weight_loader.py     download_weights(), verify_weight_hash(), load_weights_if_available() (ml .pth only)
 │       ├── interpolation/

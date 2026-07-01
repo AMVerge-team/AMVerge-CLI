@@ -61,7 +61,7 @@ amverge merge clip1.mp4 clip2.mp4 --output out.mp4
 amverge info episode.mp4
 amverge upscale episode.mp4 --method ml --model adore -s 2
 amverge upscale episode.mp4 --method anime4k --anime4k-mode medium
-amverge models                           # manage upscale model files
+amverge models                           # manage upscale & interpolation model files
 amverge interpolate episode.mp4 -f 2     # AI frame interpolation (RIFE, PyTorch)
 amverge flowframes episode.mp4 -f 2      # frame interpolation via Flowframes 1.42.0
 amverge flowframes-path PATH             # configure Flowframes.exe location
@@ -125,7 +125,7 @@ AMVerge-CLI/
 │   │   ├── detection/           detect, bench, cache, scenes, keyframes
 │   │   ├── export/              export, merge
 │   │   ├── upscaling/           upscale, models
-│   │   ├── interpolation/       flowframes, flowframes-path
+│   │   ├── interpolation/       interpolate, flowframes, flowframes-path
 │   │   ├── info/                info, probe
 │   │   ├── sidecar/             backend, rpc_server (hidden)
 │   │   └── system/              doctor, gpu, version
@@ -142,7 +142,7 @@ AMVerge-CLI/
 │       ├── thumbnails/          thumbnail generation + streaming
 │       ├── transnet/            TransNetV2 constants
 │       ├── upscaling/           ml, anime4k, artcnn, registry
-│       ├── interpolation/       Flowframes 1.42.0 integration
+│       ├── interpolation/       RIFE PyTorch inference, Flowframes 1.42.0 integration
 │       ├── video/               probe_utils, scene_utils, video metadata
 │       └── wrappers/            public class wrappers (AmvergeVideo, SceneDetector, etc.)
 │

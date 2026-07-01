@@ -170,8 +170,10 @@ The model appears in these commands automatically:
 ```
 amverge upscale --list-models     model listed with name, method, description
 amverge upscale --credits         credit added (deduplicated)
-amverge upscale episode.mp4 -m <key>    dispatched to correct pipeline automatically
-amverge models                    listed in appropriate category table
+amverge interpolate --list-models  interpolation models listed
+amverge models                    both upscale and interpolation tables shown
+amverge models --upscale          upscale models only
+amverge models --interpolation    interpolation models only
 amverge models --download <key>   downloads to correct path
 amverge models --delete <key>     deletes from disk
 ```
