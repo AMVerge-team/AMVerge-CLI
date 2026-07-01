@@ -19,12 +19,17 @@ from ...core.cutting.smart_cut import cut_all_scenes
 def backend(
     video_path: str = typer.Argument(..., help="Input video file"),
     output_dir: str = typer.Argument(..., help="Output directory for scene data"),
+    scene_detection_method: str = typer.Argument("transnetv2_gpu", hidden=True),
     import_method: str = typer.Argument("video_files", hidden=True),
 ) -> None:
     """Drop-in replacement for the AMVerge Python backend sidecar (V2).
 
     Called by Rust exactly like the original backend:
-        amverge backend <video_path> <output_dir>
+        amverge backend <video_path> <output_dir> <scene_detection_method> <import_method>
+
+    ``scene_detection_method`` is accepted for positional compatibility with the
+    Rust caller but is currently unused (detection always runs TransNetV2), matching
+    the original backend which read only ``sys.argv[4]`` (import_method).
 
     Emits IPC events to stderr and final JSON to stdout.
     """
