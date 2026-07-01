@@ -23,6 +23,7 @@ def dedup(
     list_methods: bool = typer.Option(False, "--list-methods", help="List available dedup methods"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm download prompts"),
     no_monitor: bool = typer.Option(False, "--no-monitor", help="Disable system monitor during dedup"),
+    gpu: bool = typer.Option(False, "--gpu", help="Enable GPU acceleration for advanced method (needs OpenCV CUDA)"),
 ) -> None:
     """Remove duplicate / dead frames from a video.
 
@@ -94,10 +95,11 @@ def dedup(
         console.print(f"  Optical flow: [accent]{'off' if no_optical_flow else 'on'}[/accent]")
         console.print(f"  Camera comp: [accent]{'off' if no_camera_comp else 'on'}[/accent]")
         console.print(f"  Static subject: [accent]{'keep' if keep_camera_only else 'remove'}[/accent]")
+        console.print(f"  GPU: [accent]{'on' if gpu else 'off'}[/accent]")
     console.print(f"  Input:  [dim]{input}[/dim]")
     console.print(f"  Output: [dim]{output}[/dim]")
 
-    monitor = SystemMonitor(enabled=not no_monitor and method in ("ssim", "framediff", "advanced"))
+    monitor = SystemMonitor(enabled=not no_monitor)
     monitor.stats["gpu_name"] = gpu_info.get("gpu_name", "GPU")
     monitor.start()
 
@@ -197,6 +199,7 @@ def dedup(
                 use_optical_flow=not no_optical_flow,
                 camera_motion_compensation=not no_camera_comp,
                 remove_static_subject=not keep_camera_only,
+                use_gpu=gpu,
                 progress_cb=_progress_cb,
             )
     except Exception as e:

@@ -224,6 +224,7 @@ def dedup_advanced(
     use_optical_flow: bool = True,
     camera_motion_compensation: bool = True,
     remove_static_subject: bool = True,
+    use_gpu: bool = False,
     progress_cb: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[str, Dict]:
     if not ADVANCED_AVAILABLE:
@@ -248,7 +249,7 @@ def dedup_advanced(
         use_optical_flow=use_optical_flow,
         camera_motion_compensation=camera_motion_compensation,
         remove_static_subject=remove_static_subject,
-        use_gpu=True,
+        use_gpu=use_gpu,
     )
 
     ffmpeg_cmd = [
