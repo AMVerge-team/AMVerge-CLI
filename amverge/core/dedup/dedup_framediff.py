@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Tuple
 
-from ..infra.binaries import get_ffmpeg, get_ffprobe
-
-CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+from ._encode import build_stats, encode_selected, probe_frame_count
 
 FRAMEDIFF_AVAILABLE = False
 try:
@@ -17,6 +12,8 @@ try:
 except ImportError:
     pass
 
+_ANALYZE_MAX_WIDTH = 640
+
 
 def dedup_framediff(
     video_path: str,
@@ -24,128 +21,117 @@ def dedup_framediff(
     threshold: float = 10.0,
     min_change_pct: float = 2.0,
     progress_cb: Optional[Callable[[int, str], None]] = None,
-) -> str:
-    """Remove duplicate frames by pixel difference comparison.
+) -> Tuple[str, dict]:
+    """Remove near-duplicate frames by pixel-difference motion detection.
 
-    Compares consecutive grayscale frames via absdiff. A frame is kept
-    only if more than min_change_pct% of pixels differ by > threshold.
-
-    Args:
-        video_path: Path to input video.
-        output_path: Path for output video.
-        threshold: Pixel intensity difference threshold (0-255).
-        min_change_pct: Minimum percentage of changed pixels to keep a frame.
-        progress_cb: Optional (pct, msg) callback.
+    A frame is kept when the fraction of pixels differing from the last kept
+    frame (by more than ``threshold`` intensity) exceeds an adaptive area
+    threshold: ``max(min_change_pct, median_noise_floor * 1.5)``. Analysis runs
+    on a grayscale downscale; output is encoded from the full-resolution source
+    with audio, color and bit depth preserved.
 
     Returns:
-        Output path on success.
+        (output_path, stats) with frames_in/out/removed/pct_removed.
     """
     if not FRAMEDIFF_AVAILABLE:
         raise ImportError(
-            "FrameDiff dedup requires opencv. "
-            "Run: pip install opencv-python"
+            "FrameDiff dedup requires opencv. Run: pip install amverge[dedup]"
         )
-
-    ffmpeg = get_ffmpeg()
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Failed to open: {video_path}")
 
-    fps_val = cap.get(cv2.CAP_PROP_FPS)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
-    total_pixels = w * h
+    scale = min(1.0, _ANALYZE_MAX_WIDTH / max(1, w))
 
-    tmp_path = output_path + ".tmp.mp4"
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(tmp_path, fourcc, fps_val, (w, h))
-    if not out.isOpened():
-        cap.release()
-        raise RuntimeError(f"Failed to create output: {tmp_path}")
+    def _prep(frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if scale < 1.0:
+            gray = cv2.resize(gray, None, fx=scale, fy=scale,
+                              interpolation=cv2.INTER_AREA)
+        return gray
 
-    success, prev_frame = cap.read()
+    success, frame = cap.read()
     if not success:
         cap.release()
-        out.release()
         raise RuntimeError("No frames in video")
 
     if progress_cb:
-        progress_cb(0, "Sampling adaptive threshold...")
+        progress_cb(0, "Sampling noise floor...")
 
+    prev_gray = _prep(frame)
+    area_pixels = prev_gray.size
     sample_count = min(30, total_frames - 1)
-    total_movement = 0.0
-    sample_frames = 0
-    while sample_frames < sample_count:
-        success, curr_frame = cap.read()
+    noise_fracs: List[float] = []
+    for _ in range(sample_count):
+        success, frame = cap.read()
         if not success:
             break
-        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-        curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
-        total_movement += float(np.sum(cv2.absdiff(prev_gray, curr_gray)))
-        prev_frame = curr_frame
-        sample_frames += 1
+        curr_gray = _prep(frame)
+        diff = cv2.absdiff(prev_gray, curr_gray)
+        changed = int(np.count_nonzero(diff > threshold))
+        noise_fracs.append(100.0 * changed / area_pixels)
+        prev_gray = curr_gray
 
-    average_diff = total_movement / max(1, sample_frames) / max(1, total_pixels)
-    adaptive_threshold = threshold + average_diff
+    if noise_fracs:
+        ordered = sorted(noise_fracs)
+        noise_floor = ordered[len(ordered) // 2]
+    else:
+        noise_floor = 0.0
+    area_threshold_pct = max(min_change_pct, noise_floor * 1.5)
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    success, prev_frame = cap.read()
+    cap.release()
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Failed to reopen: {video_path}")
 
-    out.write(prev_frame)
+    success, frame = cap.read()
+    keep_indices: List[int] = [0]
+    prev_gray = _prep(frame)
     frame_idx = 0
-    saved = 1
     last_pct = -1
 
     while True:
-        success, curr_frame = cap.read()
+        success, frame = cap.read()
         if not success:
             break
         frame_idx += 1
 
+        curr_gray = _prep(frame)
+        diff = cv2.absdiff(prev_gray, curr_gray)
+        changed = int(np.count_nonzero(diff > threshold))
+        changed_pct = 100.0 * changed / area_pixels
+
+        if changed_pct > area_threshold_pct:
+            keep_indices.append(frame_idx)
+            prev_gray = curr_gray
+
         if progress_cb:
-            pct = min(99, int((frame_idx / max(1, total_frames - 1)) * 100))
+            pct = min(94, int((frame_idx / max(1, total_frames - 1)) * 95))
             if pct != last_pct:
-                progress_cb(pct, f"Dedup (framediff)... {saved}/{frame_idx + 1}")
+                progress_cb(pct, f"Dedup (framediff)... {len(keep_indices)}/{frame_idx + 1}")
                 last_pct = pct
 
-        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-        curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
-        frame_diff = cv2.absdiff(prev_gray, curr_gray)
-        changed_pixels = np.count_nonzero(frame_diff > adaptive_threshold)
-
-        if changed_pixels > total_pixels * (min_change_pct / 100.0):
-            out.write(curr_frame)
-            saved += 1
-            prev_frame = curr_frame
-
     cap.release()
-    out.release()
+    frames_in = frame_idx + 1
+
+    probe_n = probe_frame_count(video_path)
+    if probe_n > 0 and abs(probe_n - frames_in) > max(2, int(0.01 * probe_n)):
+        raise RuntimeError(
+            f"Frame count mismatch (decoded {frames_in}, container {probe_n}) - "
+            "source is likely VFR. Use the ffmpeg method or re-encode to CFR first."
+        )
 
     if progress_cb:
         progress_cb(95, "Encoding output...")
 
-    cmd = [
-        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-        "-i", tmp_path,
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        output_path,
-    ]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
-                       creationflags=CREATE_NO_WINDOW)
-    if os.path.exists(tmp_path):
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-    if r.returncode != 0:
-        raise RuntimeError(f"FFmpeg encode failed: {r.stderr.strip()}")
+    encode_selected(video_path, output_path, keep_indices,
+                    progress_cb=progress_cb, progress_lo=95, progress_hi=99)
+    stats = build_stats(frames_in, len(keep_indices))
 
     if progress_cb:
-        progress_cb(100, f"Complete ({saved}/{frame_idx + 1} frames kept)")
+        progress_cb(100, f"Complete ({len(keep_indices)}/{frames_in} frames kept)")
 
-    return output_path
+    return output_path, stats

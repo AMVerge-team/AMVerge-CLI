@@ -52,6 +52,7 @@ amverge = "amverge.cli:app"
 [project.optional-dependencies]
 ml            = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0"]
 edge          = ["opencv-python-headless>=4.9"]
+dedup         = ["opencv-python-headless>=4.9"]
 discord       = ["pypresence>=4.3"]
 upscale       = ["torch>=2.0", "opencv-python-headless>=4.9", "spandrel>=0.3", "onnxruntime>=1.16"]
 interpolation = ["torch>=2.0", "opencv-python-headless>=4.9"]
