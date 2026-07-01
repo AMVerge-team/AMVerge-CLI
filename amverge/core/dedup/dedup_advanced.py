@@ -18,6 +18,13 @@ try:
 except ImportError:
     pass
 
+_GPU_ENABLED = False
+if ADVANCED_AVAILABLE:
+    try:
+        _GPU_ENABLED = cv2.cuda.getCudaEnabledDeviceCount() > 0
+    except Exception:
+        pass
+
 
 if ADVANCED_AVAILABLE:
 
@@ -51,6 +58,7 @@ if ADVANCED_AVAILABLE:
             use_optical_flow=True,
             camera_motion_compensation=True,
             remove_static_subject=True,
+            use_gpu=False,
         ):
             self.threshold = threshold
             self.region_grid = region_grid
@@ -59,6 +67,20 @@ if ADVANCED_AVAILABLE:
             self.camera_motion_compensation = camera_motion_compensation
             self.remove_static_subject = remove_static_subject
             self.cadence = _CadenceDetector()
+            self._gpu = use_gpu and _GPU_ENABLED
+            self._flow_gpu = None
+
+        def _to_gpu(self, mat):
+            if not self._gpu:
+                return mat
+            gpu_mat = cv2.cuda_GpuMat()
+            gpu_mat.upload(mat)
+            return gpu_mat
+
+        def _from_gpu(self, gpu_mat):
+            if isinstance(gpu_mat, np.ndarray):
+                return gpu_mat
+            return gpu_mat.download()
 
         def _region_analysis(self, gray1, gray2):
             h, w = gray1.shape
@@ -78,9 +100,24 @@ if ADVANCED_AVAILABLE:
             return changed, total_diff / max(1, total_regions), total_diff
 
         def _optical_flow(self, gray1, gray2):
-            flow = cv2.calcOpticalFlowFarneback(
-                gray1, gray2, None, 0.5, 3, 15, 3, 5, 1.2, 0
-            )
+            if self._gpu:
+                try:
+                    g1 = self._to_gpu(gray1)
+                    g2 = self._to_gpu(gray2)
+                    if self._flow_gpu is None:
+                        self._flow_gpu = cv2.cuda_FarnebackOpticalFlow.create(
+                            5, 0.5, False, 15, 3, 5, 1.2, 0
+                        )
+                    flow = self._from_gpu(self._flow_gpu.calc(g1, g2, None))
+                except Exception:
+                    flow = cv2.calcOpticalFlowFarneback(
+                        gray1, gray2, None, 0.5, 3, 15, 3, 5, 1.2, 0
+                    )
+                    self._gpu = False
+            else:
+                flow = cv2.calcOpticalFlowFarneback(
+                    gray1, gray2, None, 0.5, 3, 15, 3, 5, 1.2, 0
+                )
             mag = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
             mean_mag = float(np.mean(mag))
             std_mag = float(np.std(mag))
@@ -152,17 +189,14 @@ if ADVANCED_AVAILABLE:
 
         def is_duplicate(self, prev_frame, curr_frame):
             scale = min(1.0, 640 / max(prev_frame.shape[1], prev_frame.shape[0]))
-            if scale < 1.0:
-                p = cv2.resize(prev_frame, None, fx=scale, fy=scale)
-                c = cv2.resize(curr_frame, None, fx=scale, fy=scale)
-            else:
-                p, c = prev_frame, curr_frame
+            p = cv2.resize(prev_frame, None, fx=scale, fy=scale) if scale < 1.0 else prev_frame
+            c = cv2.resize(curr_frame, None, fx=scale, fy=scale) if scale < 1.0 else curr_frame
 
             gray1 = cv2.cvtColor(p, cv2.COLOR_BGR2GRAY) if len(p.shape) == 3 else p
             gray2 = cv2.cvtColor(c, cv2.COLOR_BGR2GRAY) if len(c.shape) == 3 else c
 
             changed_regions, region_score, _ = self._region_analysis(gray1, gray2)
-            flow_info = self._optical_flow(gray1, gray2)
+            flow_info = self._optical_flow(gray1, gray2) if self.use_optical_flow else {"magnitude": 0, "is_camera": False, "is_bg_only": False, "dx": 0, "dy": 0}
 
             if self.remove_static_subject and self.camera_motion_compensation:
                 is_static, _ = self._center_similarity(gray1, gray2, flow_info["dx"], flow_info["dy"])
@@ -214,6 +248,7 @@ def dedup_advanced(
         use_optical_flow=use_optical_flow,
         camera_motion_compensation=camera_motion_compensation,
         remove_static_subject=remove_static_subject,
+        use_gpu=True,
     )
 
     ffmpeg_cmd = [
