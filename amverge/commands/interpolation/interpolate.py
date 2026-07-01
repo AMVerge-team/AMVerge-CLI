@@ -76,7 +76,7 @@ def interpolate(
     """Interpolate video frames using AI frame interpolation (RIFE).
 
     Python-based RIFE inference with PyTorch CUDA/CPU. Requires PyTorch and OpenCV.
-    For Flowframes 1.42.0 external process, use: amverge flowframes
+    For Flowframes 1.42.0 external process (free 1.36.0 planned), use: amverge flowframes
     """
     if list_models:
         banner("interpolate models")

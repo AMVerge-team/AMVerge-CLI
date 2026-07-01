@@ -51,7 +51,7 @@ Scripts accept a video path as command-line argument. If none given, defaults to
 | [diagnostics/](diagnostics/) | GPU check, version info, health check | - |
 | [discord-rpc/](discord-rpc/) | Discord Rich Presence status updates | [discord] |
 | [upscale/](upscale/) | AI video upscaling: ML, Anime4K shaders, ArtCNN | [upscale] for ML/ArtCNN |
-| [interpolation/](interpolation/) | RIFE PyTorch + Flowframes 1.42.0 frame interpolation | [ml] for RIFE, Flowframes for FF |
+| [interpolation/](interpolation/) | RIFE PyTorch + Flowframes 1.42.0 frame interpolation (free 1.36.0 planned) | [ml] for RIFE, Flowframes for FF |
 | [custom-pipeline/](custom-pipeline/) | full end-to-end pipeline from scratch | [ml] |
 
 ---

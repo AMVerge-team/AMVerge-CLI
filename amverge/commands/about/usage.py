@@ -50,7 +50,7 @@ def usage() -> None:
     t3.add_row("",           "[--mode light|medium|strong] [--fit-w W] [--fit-h H]", "")
     t3.add_row("interpolate","VIDEO  [--model KEY] [--factor 2-64] [--preset high]", "RIFE AI frame interpolation")
     t3.add_row("",           "[--target-size-mb N] [--no-monitor]", "")
-    t3.add_row("flowframes", "VIDEO  [--factor 2-64] [--ai engine] [--model name]", "Flowframes 1.42.0 interpolation")
+    t3.add_row("flowframes", "VIDEO  [--factor 2-64] [--ai engine] [--model name]", "Flowframes 1.42.0 (free 1.36.0 planned)")
     t3.add_row("models",     "[--upscale] [--interpolation] [--download KEY]", "manage upscale + interpolation model files")
     t3.add_row("",           "[--delete KEY] [--storage] [--verbose]", "")
     console.print(t3)

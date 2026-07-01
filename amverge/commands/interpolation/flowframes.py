@@ -59,6 +59,8 @@ def flowframes(
 
     Requires Flowframes 1.42.0 Patreon installed. Auto-detects at %LOCALAPPDATA%\\Flowframes\\Flowframes.exe
     or configure with: amverge flowframes-path PATH
+
+    Support for free Flowframes 1.36.0 is planned (delivery TBD - differs from 1.42.0 Patreon version).
     """
     if ff_path:
         if not ff_path.exists():
@@ -74,7 +76,8 @@ def flowframes(
     if not flowframes_available():
         fail(
             "Flowframes.exe (1.42.0) not found.\n"
-            "  Set path:  amverge flowframes-path PATH"
+            "  Set path:  amverge flowframes-path PATH\n"
+            "  Free Flowframes 1.36.0 support is planned (delivery TBD)."
         )
         raise typer.Exit(1)
 

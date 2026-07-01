@@ -15,7 +15,7 @@ if not Path(video_path).exists():
     sys.exit(1)
 
 if not flowframes_available():
-    print("Flowframes.exe (1.42.0) not found.")
+    print("Flowframes.exe (1.42.0) not found. Free 1.36.0 support planned.")
     print("  Set path:  amverge flowframes-path PATH")
     sys.exit(1)
 

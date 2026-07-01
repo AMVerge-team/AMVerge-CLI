@@ -19,6 +19,7 @@ def flowframes_path(
 
     Without arguments, displays the current configured path.
     With a path argument, sets and persists it for all future runs.
+    Currently supports Flowframes 1.42.0 Patreon. Free 1.36.0 support planned (delivery TBD).
     """
     if path is None:
         current = get_flowframes_path()

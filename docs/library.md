@@ -527,6 +527,8 @@ if not is_interp_weight_downloaded("rife4.25-heavy"):
 
 ### `amverge flowframes`
 
+Run Flowframes 1.42.0 frame interpolation (free 1.36.0 support planned). Requires Flowframes.exe installed.
+
 ```python
 from amverge import (
     flowframes_available, run_flowframes, cancel_flowframes,

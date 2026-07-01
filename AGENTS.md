@@ -52,7 +52,7 @@ twine upload dist/*
 | GPU | PyTorch (CUDA auto-detected, CPU fallback) |
 | Edge detection | OpenCV (optional, `[edge]` extra) |
 | Package | hatchling, PyPI name `amverge` |
-| Frame interpolation | Flowframes 1.42.0 (external .exe, Windows-only, NVIDIA GPU recommended) |
+| Frame interpolation | Flowframes 1.42.0 (external .exe, Windows-only, NVIDIA GPU recommended; free 1.36.0 planned) |
 | Discord RPC | pypresence (optional, `[discord]` extra) |
 
 ## Directory Map
@@ -87,7 +87,7 @@ AMVerge-CLI/
 │   │   │   └── models.py        amverge models  (list/delete/download upscale + interpolation model weights)
 │   │   ├── interpolation/
 │   │   │   ├── interpolate.py       amverge interpolate  (Python RIFE inference)
-│   │   │   ├── flowframes.py    amverge flowframes  (Flowframes 1.42.0 external process)
+│       │   │   ├── flowframes.py    amverge flowframes  (Flowframes 1.42.0 external process; free 1.36.0 planned)
 │   │   │   └── flowframes_path.py   amverge flowframes-path  (set/show Flowframes.exe path)
 │   │   ├── info/
 │   │   │   ├── info.py          amverge info  (stream metadata via PyAV)
@@ -145,7 +145,7 @@ AMVerge-CLI/
 │       │   ├── registry.py             loads registry.json, builds URLs, query functions
 │       │   ├── weight_loader.py        download_weights(), verify_weight_hash(), load_weights_if_available()
 │       │   ├── engine.py               interpolate_video() - RIFE PyTorch CUDA/CPU inference
-│       │   ├── flowframes.py           run_flowframes(), flowframes_available(), cancel_flowframes() - Flowframes 1.42.0 integration
+│       │   ├── flowframes.py           run_flowframes(), flowframes_available(), cancel_flowframes() - Flowframes 1.42.0 integration; free 1.36.0 planned
 │       │   └── __init__.py             exports: interpolate_video, run_flowframes, INTERPOLATION_REGISTRY, download_weights, ...
 │       ├── video/
 │       │   ├── probe_utils.py   probe_video_fps/duration/dimensions/total_frames via ffprobe

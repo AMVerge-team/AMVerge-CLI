@@ -21,7 +21,7 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 - **Keyframe detection** - fast I-frame based splitting, no re-encode
 - **Edge detection** - Canny edges + cosine similarity for difficult encodes
 - **AI Upscaling** - ShuffleCUGAN (ML), Anime4K (shaders), ArtCNN (ONNX) super-resolution
-- **Frame Interpolation** - Python RIFE (PyTorch CUDA/CPU) + Flowframes 1.42.0 integration
+- **Frame Interpolation** - Python RIFE (PyTorch CUDA/CPU) + Flowframes 1.42.0 integration (free 1.36.0 planned)
 - **Smart cut** - automatic lossless copy / smartcut / re-encode per scene
 - **15 codec profiles** - H.264, HEVC, AV1, ProRes with hardware (NVENC) support
 - **10 audio codecs** - AAC, FLAC, Opus, PCM, MP3, pass-through
@@ -63,7 +63,7 @@ amverge upscale episode.mp4 --method ml --model adore -s 2
 amverge upscale episode.mp4 --method anime4k --anime4k-mode medium
 amverge models                           # manage upscale & interpolation model files
 amverge interpolate episode.mp4 -f 2     # AI frame interpolation (RIFE, PyTorch)
-amverge flowframes episode.mp4 -f 2      # frame interpolation via Flowframes 1.42.0
+amverge flowframes episode.mp4 -f 2      # frame interpolation via Flowframes 1.42.0 (free 1.36.0 planned)
 amverge flowframes-path PATH             # configure Flowframes.exe location
 ```
 
@@ -101,7 +101,7 @@ HEVC on CPU uses snapped-copy (nearest keyframe within 5s) to avoid slow re-enco
 **Thumbnails:** Decoded via PyAV, resized to 960px, saved as progressive JPEG in parallel.
 **Similarity:** Adjacent thumbnails compared via cosine similarity on 8x8 pooled pixels.
 
-**Interpolation:** RIFE PyTorch inference (CUDA/CPU) with mod-32 padded frames, encoded feature caching, and FFmpeg rawvideo pipe. Flowframes 1.42.0 external process integration with session log tailing and output discovery.
+**Interpolation:** RIFE PyTorch inference (CUDA/CPU) with mod-32 padded frames, encoded feature caching, and FFmpeg rawvideo pipe. Flowframes 1.42.0 external process integration with session log tailing and output discovery. Support for free Flowframes 1.36.0 is planned (delivery TBD - differs from 1.42.0 Patreon version).
 
 </details>
 
@@ -187,7 +187,7 @@ Runnable Python scripts for every feature. Each with its own README:
 | [discord-rpc/](examples/discord-rpc/) | Discord Rich Presence |
 | [custom-pipeline/](examples/custom-pipeline/) | full end-to-end custom pipeline |
 | [upscale/](examples/upscale/) | ML / Anime4K / ArtCNN super-resolution |
-| [interpolation/](examples/interpolation/) | Flowframes 1.42.0 frame interpolation |
+| [interpolation/](examples/interpolation/) | RIFE PyTorch + Flowframes 1.42.0 (free 1.36.0 planned) |
 
 ```bash
 pip install amverge[ml,edge,discord]

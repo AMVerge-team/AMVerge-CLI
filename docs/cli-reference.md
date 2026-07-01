@@ -343,6 +343,8 @@ Weights auto-downloaded on first run to `%APPDATA%/com.amverge.cli/models/interp
 
 Run Flowframes 1.42.0 frame interpolation. Requires Flowframes 1.42.0 Patreon installed.
 
+> Support for the free Flowframes version (1.36.0) is planned and will take some time since it differs from the Patreon version (1.42.0).
+
 ```bash
 amverge flowframes episode.mp4
 amverge flowframes episode.mp4 -f 4 --ai RifeCuda --model "RIFE 4.13.2"
@@ -369,7 +371,7 @@ amverge flowframes episode.mp4 -f 2 --max-height 720 --timeout 3600
 | `--ff-path` | auto | Path to Flowframes.exe |
 | `--timeout` | `36000` | Max runtime in seconds |
 
-Auto-detects Flowframes.exe at `%LOCALAPPDATA%\Flowframes\`. Use `--ff-path` to set (persisted).
+Auto-detects Flowframes.exe at `%LOCALAPPDATA%\Flowframes\`. Use `--ff-path` to set (persisted). Support for free Flowframes 1.36.0 planned.
 
 ### `amverge flowframes-path`
 

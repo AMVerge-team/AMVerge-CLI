@@ -1,11 +1,12 @@
 # Interpolation Examples
 
-Frame interpolation via Python RIFE (PyTorch) and Flowframes 1.42.0.
+Frame interpolation via Python RIFE (PyTorch) and Flowframes 1.42.0 (free 1.36.0 planned).
 
 Requirements:
 
 - For Python RIFE: `pip install amverge[ml]` (PyTorch + OpenCV)
 - For Flowframes: Flowframes 1.42.0 Patreon installed, NVIDIA GPU recommended
+  - Support for free Flowframes 1.36.0 is planned (delivery TBD since it differs from 1.42.0)
 - Set path: `amverge flowframes-path PATH`
 
 ## Examples
