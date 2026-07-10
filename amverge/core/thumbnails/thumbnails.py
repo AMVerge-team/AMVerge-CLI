@@ -60,8 +60,7 @@ def make_thumbnail(clip_path: str, thumb_path: str, first_keyframe: bool = True)
                 _save(frame.to_image())
                 return True
 
-        # Fallback: the keyframe-only pass decoded nothing (a copy clip that
-        # starts mid-GOP with no early keyframe) — decode the first frame.
+        # Fallback: if the keyframe-only pass decoded nothing, then decode the first frame.
         if first_keyframe:
             with av.open(clip_path) as container:
                 stream = container.streams.video[0]

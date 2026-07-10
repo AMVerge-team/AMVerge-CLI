@@ -22,8 +22,7 @@ def backend(
     scene_detection_method: str = typer.Argument("transnetv2_gpu", hidden=True),
     import_method: str = typer.Argument("video_files", hidden=True),
 ) -> None:
-    """Drop-in replacement for the AMVerge Python backend sidecar (V2).
-
+    """
     Called by Rust exactly like the original backend:
         amverge backend <video_path> <output_dir> <scene_detection_method> <import_method>
 
@@ -110,13 +109,8 @@ def backend(
             scenes_out_dir = out_dir / "scenes"
 
             def _poster_path(scene_index: int) -> Path:
-                # Mirrors the cut clip naming (scene_XXXX.mp4) so the app resolves
-                # each scene's poster from a predictable path.
                 return scenes_out_dir / f"scene_{scene_index:04d}.jpg"
 
-            # The grid renders a static jpg poster per scene at rest. Point each clip
-            # at its (not-yet-generated) poster and mark it not-ready so the app shows
-            # a skeleton until THUMBNAIL_READY fires (matches the original backend).
             initial_clips = [
                 {
                     "scene_index": s["scene_index"],
@@ -152,16 +146,13 @@ def backend(
 
             cut_by_idx: dict[int, dict] = {}
 
-            # Posters run in their own pool (in-process PyAV, no ffmpeg spawn) so
-            # they never block the cut/reencode workers.
+
             import concurrent.futures as _futures
 
             thumb_pool = _futures.ThreadPoolExecutor(max_workers=4)
             thumb_futures: list = []
 
             def _gen_thumb(scene_index: int, clip_path: str, is_copy: bool) -> None:
-                # Copy clips can start mid-GOP -> read the first keyframe (fast).
-                # Re-encodes have an IDR at frame 0 -> read the true first frame.
                 if make_thumbnail(clip_path, str(_poster_path(scene_index)), first_keyframe=is_copy):
                     emit_event(f"THUMBNAIL_READY|{scene_index}")
                 else:
