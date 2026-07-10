@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import sys
 import uuid
 from pathlib import Path
 
 import typer
 
 from ...core.infra.ipc import emit_progress, emit_event, log, check_if_path_exists, build_video_cache_prefix
+from ...core.thumbnails import make_thumbnail
 from ...core.detection.ai_scene_detection import decode_video_frames_nelux, run_model_one_pass
 from ...core.video.probe_utils import probe_video_duration, probe_video_fps, probe_video_dimensions
 from ...core.video.scene_utils import scenes_to_objects
@@ -19,12 +19,17 @@ from ...core.cutting.smart_cut import cut_all_scenes
 def backend(
     video_path: str = typer.Argument(..., help="Input video file"),
     output_dir: str = typer.Argument(..., help="Output directory for scene data"),
+    scene_detection_method: str = typer.Argument("transnetv2_gpu", hidden=True),
     import_method: str = typer.Argument("video_files", hidden=True),
 ) -> None:
     """Drop-in replacement for the AMVerge Python backend sidecar (V2).
 
     Called by Rust exactly like the original backend:
-        amverge backend <video_path> <output_dir>
+        amverge backend <video_path> <output_dir> <scene_detection_method> <import_method>
+
+    ``scene_detection_method`` selects the device for TransNetV2 inference:
+    a ``*_cpu`` value forces CPU, anything else (e.g. ``transnetv2_gpu``) uses
+    CUDA when available and falls back to CPU otherwise.
 
     Emits IPC events to stderr and final JSON to stdout.
     """
@@ -32,13 +37,14 @@ def backend(
     out_dir = Path(output_dir)
 
     import numpy as np
-    try:    
+    try:
         import torch
     except ImportError:
         print(f"Install with: pip install amverge[ml]")
         raise SystemExit(1)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    force_cpu = scene_detection_method.lower().endswith("_cpu")
+    device = "cpu" if force_cpu else ("cuda" if torch.cuda.is_available() else "cpu")
 
     def _error_exit(error: Exception) -> None:
         import traceback
@@ -100,13 +106,25 @@ def backend(
         if import_method == "video_files":
             source_str = str(input_video)
             source_name = input_video.name
+
+            scenes_out_dir = out_dir / "scenes"
+
+            def _poster_path(scene_index: int) -> Path:
+                # Mirrors the cut clip naming (scene_XXXX.mp4) so the app resolves
+                # each scene's poster from a predictable path.
+                return scenes_out_dir / f"scene_{scene_index:04d}.jpg"
+
+            # The grid renders a static jpg poster per scene at rest. Point each clip
+            # at its (not-yet-generated) poster and mark it not-ready so the app shows
+            # a skeleton until THUMBNAIL_READY fires (matches the original backend).
             initial_clips = [
                 {
                     "scene_index": s["scene_index"],
                     "start_sec": s["start_sec"],
                     "end_sec": s["end_sec"],
                     "path": source_str,
-                    "thumbnail": source_str,
+                    "thumbnail": str(_poster_path(s["scene_index"])),
+                    "thumbnail_ready": False,
                     "original_file": source_name,
                     "original_path": source_str,
                     "clip_path": None,
@@ -132,14 +150,34 @@ def backend(
                 f"{len(phase2_scenes)} re-encodes"
             )
 
-            scenes_out_dir = out_dir / "scenes"
             cut_by_idx: dict[int, dict] = {}
 
+            # Posters run in their own pool (in-process PyAV, no ffmpeg spawn) so
+            # they never block the cut/reencode workers.
+            import concurrent.futures as _futures
+
+            thumb_pool = _futures.ThreadPoolExecutor(max_workers=4)
+            thumb_futures: list = []
+
+            def _gen_thumb(scene_index: int, clip_path: str, is_copy: bool) -> None:
+                # Copy clips can start mid-GOP -> read the first keyframe (fast).
+                # Re-encodes have an IDR at frame 0 -> read the true first frame.
+                if make_thumbnail(clip_path, str(_poster_path(scene_index)), first_keyframe=is_copy):
+                    emit_event(f"THUMBNAIL_READY|{scene_index}")
+                else:
+                    log(f"Thumbnail produced no frame for scene {scene_index}")
+
             def _on_clip_ready(result: dict) -> None:
-                cut_by_idx[result["scene_index"]] = result
+                scene_index = result["scene_index"]
+                cut_by_idx[scene_index] = result
                 clip_path = result.get("clip_path") or ""
                 clip_mode = result.get("clip_mode") or "failed"
-                emit_event(f"CLIP_READY|{result['scene_index']}|{clip_path}|{clip_mode}")
+                emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
+                # Queue the poster off the cut worker threads.
+                if clip_path and Path(clip_path).exists():
+                    thumb_futures.append(
+                        thumb_pool.submit(_gen_thumb, scene_index, clip_path, clip_mode == "copy")
+                    )
 
             cut_all_scenes(
                 input_file=input_video,
@@ -179,10 +217,20 @@ def backend(
                 emit_progress_updates=False,
             )
 
+            # Wait for every queued poster so the final manifest's thumbnail_ready
+            # flags reflect which jpgs actually exist on disk.
+            for _f in thumb_futures:
+                _f.result()
+            thumb_pool.shutdown(wait=True)
+
             for scene in scenes:
-                cut = cut_by_idx.get(scene["scene_index"], {})
+                scene_index = scene["scene_index"]
+                cut = cut_by_idx.get(scene_index, {})
                 scene["clip_path"] = cut.get("clip_path")
                 scene["clip_mode"] = cut.get("clip_mode", "failed")
+                poster = _poster_path(scene_index)
+                scene["thumbnail"] = str(poster)
+                scene["thumbnail_ready"] = poster.exists()
 
         emit_progress(97, "Finalizing scene manifest...")
 
