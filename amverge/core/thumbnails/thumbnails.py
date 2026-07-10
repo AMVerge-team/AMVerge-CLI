@@ -51,11 +51,12 @@ def make_thumbnail(clip_path: str, thumb_path: str, first_keyframe: bool = True)
         with av.open(clip_path) as container:
             if not container.streams.video:
                 return False
-
             stream = container.streams.video[0]
             if first_keyframe:
                 stream.codec_context.skip_frame = "NONKEY"
 
+        with av.open(clip_path) as container:
+            stream = container.streams.video[0]
             for frame in container.decode(stream):
                 _save(frame.to_image())
                 return True

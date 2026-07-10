@@ -14,6 +14,7 @@ from ...core.video.scene_utils import scenes_to_objects
 from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
 from ...core.codec.codec_utils import check_if_hevc
 from ...core.cutting.smart_cut import cut_all_scenes
+from ...core.thumbnails import make_thumbnail
 
 
 def backend(
@@ -44,6 +45,14 @@ def backend(
 
     force_cpu = scene_detection_method.lower().endswith("_cpu")
     device = "cpu" if force_cpu else ("cuda" if torch.cuda.is_available() else "cpu")
+
+    from ...core.detection.nelux_runtime import nelux_available
+    _gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none"
+    log(
+        f"[diag] scene backend via AMVerge CLI | torch={torch.__version__} "
+        f"cuda_available={torch.cuda.is_available()} device={device} "
+        f"gpu={_gpu_name} nelux_available={nelux_available()}"
+    )
 
     def _error_exit(error: Exception) -> None:
         import traceback
@@ -87,11 +96,22 @@ def backend(
             scenes_frames = np.load(scenes_frames_path)
             emit_progress(20, "Loaded cached scene detection results.")
         else:
+            import time as _time
             emit_progress(20, "Decoding frames for TransNetV2...")
+            _t_decode = _time.perf_counter()
             frames = decode_video_frames_nelux(input_video)
+            log(
+                f"[diag] decode done: {len(frames)} frames in "
+                f"{_time.perf_counter() - _t_decode:.2f}s (device={device})"
+            )
 
             emit_progress(55, "Running TransNetV2 scene detection...")
+            _t_infer = _time.perf_counter()
             scenes_secs, scenes_frames = run_model_one_pass(frames, input_video)
+            log(
+                f"[diag] inference done: {len(scenes_secs)} scenes in "
+                f"{_time.perf_counter() - _t_infer:.2f}s (device={device})"
+            )
 
             np.save(scenes_secs_path, scenes_secs)
             np.save(scenes_frames_path, scenes_frames)
