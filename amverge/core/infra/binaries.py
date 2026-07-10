@@ -57,6 +57,22 @@ def get_binary(name: str) -> str:
             exe_dir / "bin",
         ])
 
+    try:
+        from .ffmpeg_bootstrap import get_portable_ffmpeg_path as _pfp
+        pp = _pfp()
+        if pp:
+            search_dirs.append(Path(pp).parent)
+    except Exception:
+        pass
+
+    try:
+        from .ffmpeg_bootstrap import get_portable_ffprobe_path as _pfpp
+        pp = _pfpp()
+        if pp and Path(pp).parent not in search_dirs:
+            search_dirs.append(Path(pp).parent)
+    except Exception:
+        pass
+
     names = _platform_names(name)
 
     for directory in search_dirs:

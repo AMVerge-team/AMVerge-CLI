@@ -20,6 +20,8 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 - **TransNetV2 ML detection** - deep learning scene boundary detection (GPU/CPU)
 - **Keyframe detection** - fast I-frame based splitting, no re-encode
 - **Edge detection** - Canny edges + cosine similarity for difficult encodes
+- **AI Upscaling** - ShuffleCUGAN (ML), Anime4K (shaders), ArtCNN (ONNX) super-resolution
+- **Frame Interpolation** - Python RIFE (PyTorch CUDA/CPU) + Flowframes 1.42.0 integration (free 1.36.0 planned)
 - **Smart cut** - automatic lossless copy / smartcut / re-encode per scene
 - **15 codec profiles** - H.264, HEVC, AV1, ProRes with hardware (NVENC) support
 - **10 audio codecs** - AAC, FLAC, Opus, PCM, MP3, pass-through
@@ -57,6 +59,12 @@ amverge detect episode.mp4
 amverge export episode.mp4 --scenes episode_scenes/scenes.json --select 0,2,5-8
 amverge merge clip1.mp4 clip2.mp4 --output out.mp4
 amverge info episode.mp4
+amverge upscale episode.mp4 --method ml --model adore -s 2
+amverge upscale episode.mp4 --method anime4k --anime4k-mode medium
+amverge models                           # manage upscale & interpolation model files
+amverge interpolate episode.mp4 -f 2     # AI frame interpolation (RIFE, PyTorch)
+amverge flowframes episode.mp4 -f 2      # frame interpolation via Flowframes 1.42.0 (free 1.36.0 planned)
+amverge flowframes-path PATH             # configure Flowframes.exe location
 ```
 
 ```python
@@ -75,9 +83,9 @@ for scene in result.scenes:
 ```txt
 amverge CLI  /  Python library
           ↓
-   amverge package
-          ↓
-    PyAV  +  FFmpeg  +  PyTorch (optional)
+    amverge package
+           ↓
+    PyAV  +  FFmpeg  +  PyTorch (optional)  +  ONNX (optional)
 ```
 
 **Detection:** Keyframe mode extracts I-frame timestamps via PyAV packet demux.
@@ -88,8 +96,12 @@ TransNetV2 runs a deep CNN on 48x27 RGB frames (GPU auto-detected, CPU fallback)
 Non-aligned scenes get smartcut (encode head + copy tail) or full re-encode.
 HEVC on CPU uses snapped-copy (nearest keyframe within 5s) to avoid slow re-encode.
 
+**Upscaling:** Three methods. ML mode runs ShuffleCUGAN U-Net via PyTorch/spandrel. Anime4K applies GLSL shaders via FFmpeg libplacebo (no ML deps). ArtCNN infers ONNX models via onnxruntime. All cache weights to `%APPDATA%/amverge/`.
+
 **Thumbnails:** Decoded via PyAV, resized to 960px, saved as progressive JPEG in parallel.
 **Similarity:** Adjacent thumbnails compared via cosine similarity on 8x8 pooled pixels.
+
+**Interpolation:** RIFE PyTorch inference (CUDA/CPU) with mod-32 padded frames, encoded feature caching, and FFmpeg rawvideo pipe. Flowframes 1.42.0 external process integration with session log tailing and output discovery. Support for free Flowframes 1.36.0 is planned (delivery TBD - differs from 1.42.0 Patreon version).
 
 </details>
 
@@ -112,6 +124,8 @@ AMVerge-CLI/
 │   │   ├── about/               about, credits, changelog, usage
 │   │   ├── detection/           detect, bench, cache, scenes, keyframes
 │   │   ├── export/              export, merge
+│   │   ├── upscaling/           upscale, models
+│   │   ├── interpolation/       interpolate, flowframes, flowframes-path
 │   │   ├── info/                info, probe
 │   │   ├── sidecar/             backend, rpc_server (hidden)
 │   │   └── system/              doctor, gpu, version
@@ -127,6 +141,8 @@ AMVerge-CLI/
 │       ├── similarity/          cosine similarity pair detection
 │       ├── thumbnails/          thumbnail generation + streaming
 │       ├── transnet/            TransNetV2 constants
+│       ├── upscaling/           ml, anime4k, artcnn, registry
+│       ├── interpolation/       RIFE PyTorch inference, Flowframes 1.42.0 integration
 │       ├── video/               probe_utils, scene_utils, video metadata
 │       └── wrappers/            public class wrappers (AmvergeVideo, SceneDetector, etc.)
 │
@@ -170,6 +186,8 @@ Runnable Python scripts for every feature. Each with its own README:
 | [diagnostics/](examples/diagnostics/) | GPU, CUDA, dependency versions |
 | [discord-rpc/](examples/discord-rpc/) | Discord Rich Presence |
 | [custom-pipeline/](examples/custom-pipeline/) | full end-to-end custom pipeline |
+| [upscale/](examples/upscale/) | ML / Anime4K / ArtCNN super-resolution |
+| [interpolation/](examples/interpolation/) | RIFE PyTorch + Flowframes 1.42.0 (free 1.36.0 planned) |
 
 ```bash
 pip install amverge[ml,edge,discord]

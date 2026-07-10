@@ -22,9 +22,11 @@ Install AMVerge with the dependencies you need:
 ```bash
 pip install amverge               # basic (keyframe, export, merge, info)
 pip install amverge[ml]           # + TransNetV2 ML detection
+pip install amverge[interpolation] # + RIFE AI frame interpolation
+pip install amverge[flowframes]    # no extra deps (external Flowframes.exe)
 pip install amverge[edge]         # + Canny edge detection
 pip install amverge[discord]      # + Discord Rich Presence
-pip install amverge[ml,edge,discord]  # everything
+pip install amverge[ml,edge,discord,upscale,interpolation]  # everything
 ```
 
 Then run any script:
@@ -50,6 +52,8 @@ Scripts accept a video path as command-line argument. If none given, defaults to
 | [similarity/](similarity/) | detect visually similar adjacent scenes | - |
 | [diagnostics/](diagnostics/) | GPU check, version info, health check | - |
 | [discord-rpc/](discord-rpc/) | Discord Rich Presence status updates | [discord] |
+| [upscale/](upscale/) | AI video upscaling: ML, Anime4K shaders, ArtCNN | [upscale] for ML/ArtCNN |
+| [interpolation/](interpolation/) | RIFE PyTorch + Flowframes 1.42.0 frame interpolation (free 1.36.0 planned) | [interpolation] for RIFE, Flowframes for FF |
 | [custom-pipeline/](custom-pipeline/) | full end-to-end pipeline from scratch | [ml] |
 
 ---
@@ -96,6 +100,15 @@ examples/
 ├── discord-rpc/
 │   ├── README.md
 │   └── 01_basic_rpc.py
+├── upscale/
+│   ├── README.md
+│   ├── 01_ml_upscale.py
+│   ├── 02_anime4k_upscale.py
+│   └── 03_manage_models.py
+├── interpolation/
+│   ├── README.md
+│   ├── 01_flowframes_interpolate.py
+│   └── 02_rife_interpolate.py
 ├── custom-pipeline/
 │   ├── README.md
 │   └── full_pipeline.py

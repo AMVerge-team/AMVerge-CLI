@@ -18,6 +18,9 @@ AMVerge features as a CLI tool and Python library. Ports the AMVerge desktop app
 pip install -e .           # base install (keyframe detection only)
 pip install -e ".[edge]"   # + OpenCV for edge detection method
 pip install -e ".[ml]"     # + TransNetV2 ML detection (torch, GPU optional)
+pip install -e ".[interpolation]"   # + RIFE PyTorch CUDA/CPU inference
+pip install -e ".[flowframes]"      # no extra deps (external Flowframes.exe)
+pip install -e ".[upscale]"         # + OpenCV, spandrel, onnxruntime for upscaling
 ```
 
 No build step. Pure Python package, `hatchling` backend.
@@ -52,6 +55,7 @@ twine upload dist/*
 | GPU | PyTorch (CUDA auto-detected, CPU fallback) |
 | Edge detection | OpenCV (optional, `[edge]` extra) |
 | Package | hatchling, PyPI name `amverge` |
+| Frame interpolation | Flowframes 1.42.0 (external .exe, Windows-only, NVIDIA GPU recommended; free 1.36.0 planned; `[flowframes]` extra) |
 | Discord RPC | pypresence (optional, `[discord]` extra) |
 
 ## Directory Map
@@ -81,6 +85,13 @@ AMVerge-CLI/
 │   │   ├── export/
 │   │   │   ├── export.py        amverge export  (CODEC_PROFILES/AUDIO_FFMPEG dicts - wizard imports these)
 │   │   │   └── merge.py         amverge merge
+│   │   ├── upscaling/
+│   │   │   ├── upscale.py       amverge upscale  (ml / anime4k / artcnn methods, --credits)
+│   │   │   └── models.py        amverge models  (list/delete/download upscale + interpolation model weights)
+│   │   ├── interpolation/
+│   │   │   ├── interpolate.py       amverge interpolate  (Python RIFE inference)
+│       │   │   ├── flowframes.py    amverge flowframes  (Flowframes 1.42.0 external process; free 1.36.0 planned)
+│   │   │   └── flowframes_path.py   amverge flowframes-path  (set/show Flowframes.exe path)
 │   │   ├── info/
 │   │   │   ├── info.py          amverge info  (stream metadata via PyAV)
 │   │   │   └── probe.py         amverge probe  (V2 diagnostics: codec/HEVC/keyframes/scene cache)
@@ -121,6 +132,24 @@ AMVerge-CLI/
 │       │   └── thumbnails_streaming.py  streaming thumbnail gen with IPC events (V1 backend mode)
 │       ├── transnet/
 │       │   └── transnet_constants.py    FRAME_WIDTH/HEIGHT/CHANNELS/BYTES, WINDOW_SIZE, STRIDE
+│       ├── upscaling/
+│       │   ├── registry.json       declarative model registry - add models here, CLI auto-discovers
+│       │   ├── registry.py          loads registry.json, builds URLs, query functions
+│       │   ├── engine.py            upscale_model() - dispatches ml (spandrel) / shader / onnx; owns ml path only
+│       │   ├── anime4k.py           upscale_video_anime4k() - real Anime4K GLSL via libplacebo, lanczos fallback
+│       │   ├── artcnn.py            upscale_video_artcnn() - ArtCNN ONNX inference (luma 2x), download helpers
+│       │   ├── ffmpeg_helpers.py    shared: mux_audio(), build_ffmpeg_pipe(), get_video_dims_ffprobe(), CREATE_NO_WINDOW
+│       │   ├── monitor.py           SystemMonitor - GPU/CPU/RAM sampling + ETA during upscale and interpolation
+│       │   ├── __init__.py          exports: UPSCALE_REGISTRY, upscale_model, download_*, is_*_downloaded, ...
+│       │   └── weight_loader.py     download_weights(), verify_weight_hash(), load_weights_if_available() (ml .pth only)
+│       ├── interpolation/
+│       │   ├── rife_arch.py           RIFEModel + IFNet (light/heavy IFBlock channel widths)
+│       │   ├── registry.json          declarative model registry - add models here, CLI auto-discovers
+│       │   ├── registry.py             loads registry.json, builds URLs, query functions
+│       │   ├── weight_loader.py        download_weights(), verify_weight_hash(), load_weights_if_available()
+│       │   ├── engine.py               interpolate_video() - RIFE PyTorch CUDA/CPU inference
+│       │   ├── flowframes.py           run_flowframes(), flowframes_available(), cancel_flowframes() - Flowframes 1.42.0 integration; free 1.36.0 planned
+│       │   └── __init__.py             exports: interpolate_video, run_flowframes, INTERPOLATION_REGISTRY, download_weights, ...
 │       ├── video/
 │       │   ├── probe_utils.py   probe_video_fps/duration/dimensions/total_frames via ffprobe
 │       │   ├── scene_utils.py   scenes_to_objects(), scenes_frames_to_seconds()
@@ -228,7 +257,16 @@ for scene in result.scenes:
 | `core/keyframes/keyframe_align.py` | `get_keyframe_timestamps_pyav` uses PyAV demux with `type(stream.discard).nonkey` enum (PyAV 17.x; was `"NONKEY"` string in older PyAV). `classify_scenes_by_keyframe_alignment` partitions scenes for Phase 1 vs Phase 2 cutting. |
 | `core/thumbnails/thumbnails_streaming.py` | V1 backend mode only. Emits events as each thumbnail completes. Not used in V2 backend. |
 | `core/discord/discord_rpc.py` | Uses same CLIENT_ID as AMVerge app (`1497922104065134823`). Silently no-ops if pypresence not installed. `--no-rpc` flag on detect/export/merge to disable. Methods: idle/detecting/selecting/navigating/exporting/merging/complete/error. |
+| `core/upscaling/engine.py` | `upscale_model(key, ...)` - unified dispatch. Reads model from registry, routes ml → `_upscale_ml()` (spandrel, in-file), shader → `anime4k.upscale_video_anime4k()`, onnx → `artcnn.upscale_video_artcnn()`. Engine owns the ml path only; shader/onnx live in their own modules. |
+| `core/upscaling/registry.json` | Declarative model registry. To add a model, add one JSON entry with method, name, scales, credit, description, file/hash. CLI auto-discovers everything. `_source` holds the ml/anime4k/artcnn base URLs; `registry.py` builds per-model `url` (ml/onnx) or `download_url` (shader zip). |
+| `core/upscaling/ffmpeg_helpers.py` | Shared FFmpeg utilities used by engine/anime4k/artcnn (avoids circular import): `mux_audio()` (copies source audio with `-c:a copy`, AAC re-encode only as fallback), `build_ffmpeg_pipe()` (rawvideo stdin pipe), `get_color_args()` (probe + pass through source color primaries/transfer/matrix/range), `get_video_dims_ffprobe()`, `encode_thread_count()`, `ensure_ffmpeg()`, `CREATE_NO_WINDOW`. All encoders use `-profile:v high` with NO explicit `-level` (x264 auto-selects; hardcoding 5.1 produced non-compliant streams for 4x-of-HD outputs). |
+| `core/upscaling/weight_loader.py` | Downloads ml `.pth` weights to `models/upscale/<key>/<file>`. Resume support (HTTP Range), SHA-256 integrity verification, 3 retries. ml-only; ONNX downloads live in `artcnn.py`. |
+| `core/upscaling/anime4k.py` | `upscale_video_anime4k()` - REAL Anime4K. Downloads v4.0.1 GLSL shaders (`models/upscale/anime4k/`), concatenates the mode's shader chain into `_chain_<mode>_<scale>x.glsl`, applies via FFmpeg `libplacebo=custom_shader_path`. Auto-detects libplacebo (`ffmpeg -filters`); falls back to lanczos+unsharp if absent. Modes light/medium/strong = Upscale_CNN_x2_{S,M,VL} (+ Restore_CNN for medium/strong); scale=4 adds a 2nd upscale pass. **Two FFmpeg gotchas (do not reintroduce):** (1) NEVER pass global `-init_hw_device vulkan` - it breaks libplacebo output negotiation (EINVAL); libplacebo self-inits its Vulkan device. (2) `custom_shader_path` cannot take an absolute Windows path (drive colon = filtergraph option separator, no escaping survives). The chain is staged into the OUTPUT file's dir, ffmpeg runs with `cwd=that dir`, path passed as bare basename, file deleted after. |
+| `core/upscaling/artcnn.py` | `upscale_video_artcnn()` - ArtCNN ONNX (luma-only 2x doublers). Downloads to `models/upscale/artcnn/<file>` (single dir - was a path-mismatch bug vs weight_loader's per-key dir). Per-frame: BGR→YUV, run Y `[1,1,H,W]` → `[1,1,2H,2W]`, lanczos-upscale U/V, recombine, rawvideo pipe. Session uses `enable_cpu_mem_arena=False` + per-frame `del`/`gc` (HD full-frame inference OOMs otherwise). **Chroma models** (entry has `chroma_file`, e.g. `R8F64_Chroma`): loads a 2nd session; chroma net takes `[1,3,H,W]` (Y_2x + bilinear-upscaled U/V) → `[1,2,H,W]` reconstructed U/V, replacing the lanczos chroma path. `download_artcnn` fetches all `_model_files(entry)`; `is_artcnn_downloaded` checks all. Input/output tensor names auto-detected. v1.6.2 assets verified. Credit: ArtCNN by Artoriuz. |
+| `core/interpolation/flowframes.py` | Flowframes 1.42.0 integration. Spawns external `Flowframes.exe` with `-a -nc -mdc` args. Strips `NoDefaultCurrentDirectoryInExePath` from child env (Flowframes' bare-name ffprobe fails otherwise). Kills existing instance before spawn. Tails `FlowframesData/logs/<session>/sessionlog.txt` for progress (`Interpolated X/Y Frames`, `%`). Locates output by newest media file in `-o` dir with size stability check. Four cut modes: `copy` (start on keyframe), `snapped_copy` (HEVC CPU - snaps to nearest keyframe within 5s), `smartcut` (H.264 - encode tiny head + lossless tail), `reencode` (full fallback). Never remove the HEVC CPU path - HEVC re-encode without CUDA takes 10+ minutes. |
 | `commands/sidecar/rpc_server.py` | Hidden sidecar: `amverge rpc-server`. Long-lived process; Rust spawns it once and sends JSON commands via stdin (`{"type":"update","details":"...","state":"..."}`, `{"type":"clear"}`, `{"type":"shutdown"}`). Throttles Discord updates to max 1 per 15s. Exits when stdin closes or parent dies. |
+| `core/interpolation/engine.py` | `interpolate_video()` - RIFE PyTorch CUDA/CPU inference. Pad frames to mod-32, cache encoded features per pair, loop `factor-1` inter-steps with saved feature restore (IFNet.forward overwrites `self.f0/f1`). FFmpeg rawvideo stdin pipe for output. Muxes source audio. Never import torch at module level outside engine/arch files. |
+| `core/interpolation/rife_arch.py` | RIFEModel + IFNet architecture. Light/heavy determines IFBlock channel widths (m=1 vs m=2). `cachePair()` encodes img pair for reuse across inter-steps. Grid cache (`_tenGrid`, `_tenFlowDiv`) keyed by device/size/dtype. Parameter remapping in weight_loader handles `module.` prefix mismatches. |
 | `commands/sidecar/backend.py` | V2 backend. Positional interface: `amverge backend <video_path> <output_dir> [import_method]`. Rust replaces `python app.py <video> <dir>` with `amverge backend <video> <dir>` - no Rust changes needed. Emits V2 IPC events. Outputs JSON schema v1.0 with `schema_version`, `run_id`, `video` metadata block. |
 
 ## Theme

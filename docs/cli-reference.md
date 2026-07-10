@@ -195,6 +195,85 @@ amverge bench episode.mp4 --skip-ml
 
 ## Utility Commands
 
+### `amverge upscale`
+
+Upscale video using AI super-resolution or GPU-accelerated filters.
+Method is auto-detected from the model key in registry.json.
+
+```bash
+amverge upscale episode.mp4 -m adore -s 2               # ML model (GPU recommended)
+amverge upscale episode.mp4 -m anime4k --mode medium    # shader (fast, no ML)
+amverge upscale episode.mp4 -m C4F32 -s 2               # ONNX (lightweight)
+amverge upscale episode.mp4 -m realesrgan-x2            # Real-ESRGAN x2
+amverge upscale episode.mp4 -m adore -s 4 -p archival   # archive quality 4x
+amverge upscale --list-models                           # browse all models
+amverge upscale --credits                               # show credits
+amverge upscale episode.mp4 -m adore -y                 # auto-confirm downloads
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model / -m` | `adore` | Model key from registry (see --list-models) |
+| `--output / -o` | `upscaled.mp4` | Output video file |
+| `--scale / -s` | `2` | Scale factor (model-specific, 2 or 4) |
+| `--preset / -p` | `high` | Quality: archival, high, balanced, fast, draft |
+| `--mode` | `medium` | Shader intensity: light, medium, strong |
+| `--fit-w` | `0` | Max output width (0 = no limit) |
+| `--fit-h` | `0` | Max output height (0 = no limit) |
+| `--list-models` | false | Show all available models and descriptions |
+| `--credits` | false | Show credits for all upscaling technologies |
+| `--yes / -y` | false | Auto-confirm all download prompts |
+| `--no-monitor` | false | Disable live GPU/CPU/RAM/ETA display |
+
+**Method dispatch** (automatic from registry.json):
+
+| method | speed | deps | description |
+|--------|-------|------|-------------|
+| `shader` | fastest | FFmpeg only | Lanczos + unsharp + smartblur filters |
+| `onnx` | fast | `[upscale]` | ONNX Runtime inference (ArtCNN) |
+| `ml` | medium | `[upscale]` | Spandrel auto-arch detection (RealCUGAN, ESRGAN, etc.) |
+
+**System monitor:** During ml, onnx upscaling and RIFE interpolation, a live panel shows GPU utilization, VRAM, CPU%, RAM, ETA, and fps. Use `--no-monitor` to disable.
+
+**Adding models:** Edit `amverge/core/upscaling/registry.json`. One JSON entry per model. See `docs/registry.md` for format.
+
+Models and FFmpeg are auto-downloaded to `%APPDATA%/com.amverge.cli/`. On first run, prompts ask before downloading (skip with `--yes`).
+
+---
+
+### `amverge models`
+
+Manage upscaling and interpolation model files. Shows both registries by default.
+
+```bash
+amverge models                             # list all models (upscale + interpolation)
+amverge models --interpolation             # interpolation models only
+amverge models --upscale                   # upscale models only
+amverge models --download adore            # download a model
+amverge models --download anime4k          # download Anime4K shaders
+amverge models --download C4F32            # download ArtCNN model
+amverge models --download rife4.25         # download RIFE interpolation model
+amverge models --delete shufflecugan       # delete a model from disk
+amverge models --delete rife4.25           # delete interpolation model from disk
+amverge models --delete anime4k            # delete all Anime4K shaders
+amverge models --storage                   # show cache directories
+amverge models --verbose                   # show file paths and hashes
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--upscale / -u` | false | Show only upscale models |
+| `--interpolation / -i` | false | Show only interpolation models |
+| `--download` | - | Download a model by key |
+| `--delete` | - | Delete a model by key |
+| `--storage` | false | Show storage directories |
+| `--verbose / -v` | false | Show file paths and hashes |
+
+**Model keys:** Use `amverge upscale --list-models` or `amverge interpolate --list-models` for full lists.
+Storage: `%APPDATA%/com.amverge.cli/models/upscale/{key}/` and `.../interpolation/{key}/`.
+
+---
+
 ### `amverge keyframes`
 
 Dump keyframe timestamps from a video.
@@ -224,6 +303,83 @@ List or clear TransNetV2 `.npy` scene caches.
 amverge cache ./scenes                    # list caches in directory
 amverge cache ./scenes --clear episode.mp4 # clear cache for specific video
 amverge cache ./scenes --clear-all         # clear all caches in directory
+```
+
+---
+
+### `amverge interpolate`
+
+AI frame interpolation using RIFE (PyTorch CUDA/CPU). Python-based, no external .exe needed.
+
+```bash
+amverge interpolate episode.mp4
+amverge interpolate episode.mp4 -f 4 -m rife4.25-heavy
+amverge interpolate episode.mp4 -p archival -m rife4.25-heavy
+amverge interpolate --list-models
+amverge interpolate --credits
+amverge interpolate episode.mp4 -f 2 -y     # auto-download weights
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `INPUT` (arg) | required | Input video file |
+| `--output / -o` | `interpolated.mp4` | Output video file |
+| `--model / -m` | `rife4.25` | Model key: rife4.25, rife4.25-heavy |
+| `--factor / -f` | `2` | Frame rate multiplier (2-64) |
+| `--preset / -p` | `high` | Quality: archival, high, balanced, fast, draft |
+| `--target-size-mb` | `0` | Target file size in MB (two-pass x264) |
+| `--fit-w` | `0` | Max output width (0 = no limit) |
+| `--fit-h` | `0` | Max output height (0 = no limit) |
+| `--list-models` | false | List available models |
+| `--credits` | false | Show credits |
+| `--yes / -y` | false | Auto-confirm downloads |
+| `--download` | false | Download weights without running |
+| `--no-monitor` | false | Disable live GPU/CPU/RAM/ETA display |
+
+Requires `pip install amverge[interpolation]`. CUDA auto-detected, CPU fallback.
+Weights auto-downloaded on first run to `%APPDATA%/com.amverge.cli/models/interpolation/`.
+
+### `amverge flowframes`
+
+Run Flowframes 1.42.0 frame interpolation. Requires Flowframes 1.42.0 Patreon installed.
+
+> Support for the free Flowframes version (1.36.0) is planned and will take some time since it differs from the Patreon version (1.42.0).
+
+```bash
+amverge flowframes episode.mp4
+amverge flowframes episode.mp4 -f 4 --ai RifeCuda --model "RIFE 4.13.2"
+amverge flowframes episode.mp4 -f 2 --encoder H264 --quality 20
+amverge flowframes episode.mp4 --scene-change --scene-sensitivity 0.2
+amverge flowframes episode.mp4 -f 2 --max-height 720 --timeout 3600
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `INPUT` (arg) | required | Input video file |
+| `--output / -o` | `interpolated.mp4` | Output video file |
+| `--factor / -f` | `2` | Frame rate multiplier (2-16) |
+| `--ai` | `RifeNcnn` | AI: RifeCuda, RifeNcnn, RifeNcnnVs, FlavrCuda, DainNcnn, XvfiCuda |
+| `--model / -m` | `RIFE 4.26` | Model name (varies by AI) |
+| `--format` | `Mp4` | Output container |
+| `--encoder / -e` | `X264` | Video encoder |
+| `--pix-fmt` | `Yuv420P` | Pixel format |
+| `--quality / -q` | - | Quality setting (integer) |
+| `--max-fps` | - | Output FPS cap |
+| `--max-height` | - | Output height cap |
+| `--scene-change` | false | Enable scene change detection |
+| `--scene-sensitivity` | - | Scene change sensitivity |
+| `--ff-path` | auto | Path to Flowframes.exe |
+| `--timeout` | `36000` | Max runtime in seconds |
+
+Auto-detects Flowframes.exe at `%LOCALAPPDATA%\Flowframes\`. Use `--ff-path` to set (persisted). Support for free Flowframes 1.36.0 planned.
+
+### `amverge flowframes-path`
+
+Show or set the Flowframes.exe path.
+
+```bash
+amverge flowframes-path                           # show current path
+amverge flowframes-path "C:\Flowframes\Flowframes.exe"   # set and persist
 ```
 
 ---

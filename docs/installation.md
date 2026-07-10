@@ -51,10 +51,52 @@ pip install amverge[discord]
 
 Adds pypresence for Discord RPC status updates during long operations.
 
+### AI Upscaling
+
+```bash
+pip install amverge[upscale]
+```
+
+Adds torch + opencv + spandrel for AI video upscaling (ShuffleCUGAN / ArtCNN ONNX).
+Anime4K shader-based upscaling uses FFmpeg only - no extra deps needed.
+
+```bash
+amverge upscale episode.mp4 --method ml --model adore -s 2
+amverge upscale episode.mp4 --method artcnn --artcnn-model C4F32
+amverge upscale episode.mp4 --method anime4k --anime4k-mode medium
+```
+
+### AI Frame Interpolation (Python RIFE)
+
+```bash
+pip install amverge[interpolation]
+```
+
+Adds torch + opencv for RIFE PyTorch CUDA/CPU frame interpolation.
+
+```bash
+amverge interpolate episode.mp4 -f 2 -m rife4.25
+amverge interpolate episode.mp4 -f 4 -m rife4.25-heavy
+```
+
+### Flowframes (External)
+
+```bash
+pip install amverge[flowframes]
+```
+
+No extra Python deps. Requires Flowframes 1.42.0 Patreon installed separately.
+Free 1.36.0 support planned.
+
+```bash
+amverge flowframes episode.mp4 -f 2
+amverge flowframes-path "C:\Flowframes\Flowframes.exe"
+```
+
 ### All at once
 
 ```bash
-pip install amverge[ml,edge,discord]
+pip install amverge[ml,edge,discord,upscale,interpolation]
 ```
 
 ---
@@ -99,5 +141,5 @@ amverge version   # all dependency versions
 git clone https://github.com/AMVerge-team/AMVerge-CLI
 cd AMVerge-CLI
 pip install -e .
-pip install -e ".[ml,edge,discord]"
+pip install -e ".[ml,edge,discord,upscale,interpolation]"
 ```

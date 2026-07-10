@@ -141,6 +141,72 @@ if secs_path.exists():
     print("Cache cleared")
 ```
 
+### `amverge models`
+
+```python
+from amverge import UPSCALE_REGISTRY, get_ml_models, get_onnx_models, get_shader_models
+from amverge import INTERPOLATION_REGISTRY
+
+# Upscale registry
+print("All upscale models:", list(UPSCALE_REGISTRY.keys()))
+print("ML models:", list(get_ml_models().keys()))
+print("ONNX models:", list(get_onnx_models().keys()))
+
+for key, entry in UPSCALE_REGISTRY.items():
+    print(f"{key}: {entry['name']} ({entry['method']}) {entry['scales']}")
+    print(f"  {entry.get('description', '')}")
+
+# Interpolation registry
+print("All interpolation models:", list(INTERPOLATION_REGISTRY.keys()))
+for key, entry in INTERPOLATION_REGISTRY.items():
+    print(f"{key}: {entry['name']} (rife) heavy={entry.get('heavy', False)}")
+    print(f"  {entry.get('description', '')}")
+
+from amverge import MODEL_FILES, UPSCALE_MODEL_KEYS, is_weight_downloaded
+
+print("Available ML models:", UPSCALE_MODEL_KEYS)
+for key in UPSCALE_MODEL_KEYS:
+    print(f"  {key}: {'downloaded' if is_weight_downloaded(key) else 'not downloaded'}")
+
+from amverge.core.interpolation import is_weight_downloaded as interp_dl_check
+
+for key in INTERPOLATION_REGISTRY:
+    print(f"  {key}: {'downloaded' if interp_dl_check(key) else 'not downloaded'}")
+```
+
+---
+
+### `amverge upscale`
+
+```python
+from amverge import upscale_model, UPSCALE_AVAILABLE
+
+# All methods dispatched automatically from registry
+if UPSCALE_AVAILABLE:
+    upscale_model("adore", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
+
+# Shader method (FFmpeg only, no ML)
+upscale_model("anime4k", "episode.mp4", "upscaled.mp4", scale=2, mode="medium")
+
+# ONNX method (lightweight)
+upscale_model("C4F32", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
+
+# Full options
+upscale_model(
+    "adore",
+    "episode.mp4",
+    "upscaled.mp4",
+    scale=2,
+    preset="archival",
+    fit_w=1920,
+    fit_h=1080,
+    mode="medium",
+    progress_cb=lambda pct, msg: print(f"[{pct}%] {msg}"),
+)
+```
+
+---
+
 ### `amverge version`
 
 ```python
@@ -422,4 +488,101 @@ prefix = build_video_cache_prefix(Path("episode.mp4"))
 secs = Path("scenes") / f"{prefix}_secs.npy"
 
 check_if_path_exists(str(secs))  # raises FileNotFoundError if missing
+```
+
+### `amverge interpolate`
+
+```python
+from amverge import (
+    interpolate_video, INTERPOLATION_REGISTRY,
+    get_interp_model, get_rife_models,
+    download_interp_weights, is_interp_weight_downloaded,
+    get_interp_weight_path, verify_interp_weight_hash,
+    load_interp_weights_if_available,
+)
+
+# Query registry
+print("Models:", list(INTERPOLATION_REGISTRY.keys()))
+for key, entry in INTERPOLATION_REGISTRY.items():
+    print(f"  {key}: {entry['name']} ({entry['description']})")
+    print(f"    Credit: {entry['credit']}")
+
+# Run interpolation
+interpolate_video(
+    input_path="episode.mp4",
+    output_path="interpolated.mp4",
+    model_key="rife4.25",
+    factor=2,
+    preset="high",
+    progress_cb=lambda pct, msg: print(f"[{pct}%] {msg}"),
+)
+
+# Weight management
+if not is_interp_weight_downloaded("rife4.25-heavy"):
+    download_interp_weights("rife4.25-heavy",
+        progress_cb=lambda pct, msg: print(f"[{pct}%] {msg}"))
+```
+
+---
+
+### `amverge flowframes`
+
+Run Flowframes 1.42.0 frame interpolation (free 1.36.0 support planned). Requires Flowframes.exe installed.
+
+```python
+from amverge import (
+    flowframes_available, run_flowframes, cancel_flowframes,
+    get_flowframes_path, set_flowframes_path, FLOWFRAMES_VERSION,
+)
+
+---
+
+### Upscaling
+
+```python
+from amverge import (
+    UPSCALE_AVAILABLE, QUALITY_PRESETS,
+    UPSCALE_REGISTRY, get_ml_models, get_onnx_models, get_shader_models,
+    upscale_model,
+    download_weights, is_weight_downloaded, get_weight_path,
+    verify_weight_hash, load_weights_if_available,
+    ANIME4K_MODE_PRESETS,
+)
+
+# Check availability
+print("Upscale available:", UPSCALE_AVAILABLE)
+
+# Quality presets (from registry.json)
+print("Presets:", list(QUALITY_PRESETS.keys()))
+# {'archival': {'crf': 14, 'x264': 'slow', 'tune': 'animation'}, ...}
+
+# Model registry - all models from registry.json
+for key, entry in UPSCALE_REGISTRY.items():
+    print(f"{key}: {entry['name']} ({entry['method']}) scales={entry['scales']}")
+    print(f"  {entry.get('description')} | {entry.get('credit')}")
+
+# Query by method
+ml_models = get_ml_models()          # {"adore": {...}, "shufflecugan": {...}, ...}
+onnx_models = get_onnx_models()      # {"C4F16": {...}, "C4F32": {...}, ...}
+shader_models = get_shader_models()  # {"anime4k": {...}}
+
+# Anime4K shader modes
+print("Anime4K modes:", list(ANIME4K_MODE_PRESETS.keys()))  # ['light', 'medium', 'strong']
+
+# Weight management
+download_weights("adore")                  # downloads from registry URL
+is_weight_downloaded("shufflecugan")       # True/False
+path = get_weight_path("adore")            # full path to .pth file
+verify_weight_hash("adore", path)          # SHA-256 integrity check
+
+# Unified upscale - dispatches from registry method type automatically
+if UPSCALE_AVAILABLE:
+    upscale_model("adore", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
+    upscale_model("realesrgan-x2", "episode.mp4", "upscaled.mp4", scale=2)
+
+# Shader method (FFmpeg only, no ML deps)
+upscale_model("anime4k", "episode.mp4", "upscaled.mp4", scale=2, mode="medium")
+
+# ONNX method (needs onnxruntime)
+upscale_model("C4F32", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
 ```

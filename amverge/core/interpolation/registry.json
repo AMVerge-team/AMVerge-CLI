@@ -1,0 +1,151 @@
+{
+  "_source": {
+    "interpolation": "https://github.com/moongetsu/AniSmooth-Models/releases/download/interpolation"
+  },
+  "rife4.6": {
+    "method": "rife",
+    "name": "RIFE 4.6",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.6 (v1 arch, 4-ch head)",
+    "file": "rife46.pth",
+    "heavy": false
+  },
+  "rife4.13-lite": {
+    "method": "rife",
+    "name": "RIFE 4.13 Lite",
+    "credit": "by hzwer / megvii-research",
+    "description": "RIFE v4.13 lite variant (v1 arch)",
+    "file": "rife413_lite.pth",
+    "heavy": false
+  },
+  "rife4.14": {
+    "method": "rife",
+    "name": "RIFE 4.14",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.14 (v1 arch)",
+    "file": "rife414.pth",
+    "heavy": false
+  },
+  "rife4.15": {
+    "method": "rife",
+    "name": "RIFE 4.15",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.15 (v1 arch)",
+    "file": "rife415.pth",
+    "heavy": false
+  },
+  "rife4.15-lite": {
+    "method": "rife",
+    "name": "RIFE 4.15 Lite",
+    "credit": "by hzwer / megvii-research",
+    "description": "RIFE v4.15 lite variant (v1 arch)",
+    "file": "rife415_lite.pth",
+    "heavy": false
+  },
+  "rife4.16-lite": {
+    "method": "rife",
+    "name": "RIFE 4.16 Lite",
+    "credit": "by hzwer / megvii-research",
+    "description": "RIFE v4.16 lite variant (v1 arch)",
+    "file": "rife416_lite.pth",
+    "heavy": false
+  },
+  "rife4.17": {
+    "method": "rife",
+    "name": "RIFE 4.17",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.17 (v1 arch)",
+    "file": "rife417.pth",
+    "heavy": false
+  },
+  "rife4.17-lite": {
+    "method": "rife",
+    "name": "RIFE 4.17 Lite",
+    "credit": "by hzwer / megvii-research",
+    "description": "RIFE v4.17 lite variant (v1 arch)",
+    "file": "rife417_lite.pth",
+    "heavy": false
+  },
+  "rife4.18": {
+    "method": "rife",
+    "name": "RIFE 4.18",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.18 (v1 arch)",
+    "file": "rife418.pth",
+    "heavy": false
+  },
+  "rife4.20": {
+    "method": "rife",
+    "name": "RIFE 4.20",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.20 (v2 arch, 8-ch head, 61 MB)",
+    "file": "rife420.pth",
+    "heavy": false
+  },
+  "rife4.21": {
+    "method": "rife",
+    "name": "RIFE 4.21",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.21 (v2 arch)",
+    "file": "rife421.pth",
+    "heavy": false
+  },
+  "rife4.22": {
+    "method": "rife",
+    "name": "RIFE 4.22",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.22 (v2 arch)",
+    "file": "rife422.pth",
+    "heavy": false
+  },
+  "rife4.22-lite": {
+    "method": "rife",
+    "name": "RIFE 4.22 Lite",
+    "credit": "by hzwer / megvii-research",
+    "description": "RIFE v4.22 lite variant (v2 arch)",
+    "file": "rife422_lite.pth",
+    "heavy": false
+  },
+  "rife4.25": {
+    "method": "rife",
+    "name": "RIFE 4.25",
+    "credit": "by hzwer / megvii-research",
+    "description": "Real-time Intermediate Flow Estimation v4.25 (light, 22 MB)",
+    "file": "rife425.pth",
+    "heavy": false,
+    "hash": "040ed973997570f4f85489be3d8eb64be9c0cffdf0a9f049443b6a4838ed88f1"
+  },
+  "rife4.25-heavy": {
+    "method": "rife",
+    "name": "RIFE 4.25 Heavy",
+    "credit": "by hzwer / megvii-research",
+    "description": "RIFE v4.25 heavy variant (2x channel width, 87 MB)",
+    "file": "rife425_heavy.pth",
+    "heavy": true,
+    "hash": "49f7c82d3866860683992042ba8eb559b9c01fbe2600b80a53c56de05bb13b6f"
+  },
+  "rife4.25-lite": {
+    "method": "rife",
+    "name": "RIFE 4.25 Lite",
+    "credit": "by hzwer / megvii-research",
+    "description": "RIFE v4.25 lite variant",
+    "file": "rife425_lite.pth",
+    "heavy": false
+  },
+  "rife-elexor": {
+    "method": "rife",
+    "name": "RIFE Elexor",
+    "credit": "by hzwer / megvii-research",
+    "description": "RIFE Elexor variant (optimized for anime)",
+    "file": "rife_elexor.pth",
+    "heavy": false
+  },
+  "pervfi": {
+    "method": "rife",
+    "name": "PerVFI",
+    "credit": "by yhzhai / PKU-IMRE",
+    "description": "Perception-oriented Video Frame Interpolation (35 MB)",
+    "file": "pervfi.pth",
+    "heavy": false
+  }
+}

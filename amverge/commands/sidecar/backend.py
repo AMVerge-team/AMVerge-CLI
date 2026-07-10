@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import sys
 import uuid
 from pathlib import Path
 
 import typer
 
 from ...core.infra.ipc import emit_progress, emit_event, log, check_if_path_exists, build_video_cache_prefix
+from ...core.thumbnails import make_thumbnail
 from ...core.detection.ai_scene_detection import decode_video_frames_nelux, run_model_one_pass
 from ...core.video.probe_utils import probe_video_duration, probe_video_fps, probe_video_dimensions
 from ...core.video.scene_utils import scenes_to_objects
@@ -23,14 +23,13 @@ def backend(
     scene_detection_method: str = typer.Argument("transnetv2_gpu", hidden=True),
     import_method: str = typer.Argument("video_files", hidden=True),
 ) -> None:
-    """Drop-in replacement for the AMVerge Python backend sidecar (V2).
-
+    """
     Called by Rust exactly like the original backend:
         amverge backend <video_path> <output_dir> <scene_detection_method> <import_method>
 
-    ``scene_detection_method`` is accepted for positional compatibility with the
-    Rust caller but is currently unused (detection always runs TransNetV2), matching
-    the original backend which read only ``sys.argv[4]`` (import_method).
+    ``scene_detection_method`` selects the device for TransNetV2 inference:
+    a ``*_cpu`` value forces CPU, anything else (e.g. ``transnetv2_gpu``) uses
+    CUDA when available and falls back to CPU otherwise.
 
     Emits IPC events to stderr and final JSON to stdout.
     """
@@ -44,7 +43,8 @@ def backend(
         print(f"Install with: pip install amverge[ml]")
         raise SystemExit(1)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    force_cpu = scene_detection_method.lower().endswith("_cpu")
+    device = "cpu" if force_cpu else ("cuda" if torch.cuda.is_available() else "cpu")
 
     from ...core.detection.nelux_runtime import nelux_available
     _gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none"
@@ -126,8 +126,10 @@ def backend(
             source_str = str(input_video)
             source_name = input_video.name
 
-            def _thumb_path(idx: int) -> str:
-                return str(out_dir / f"thumb_{idx:04d}.jpg")
+            scenes_out_dir = out_dir / "scenes"
+
+            def _poster_path(scene_index: int) -> Path:
+                return scenes_out_dir / f"scene_{scene_index:04d}.jpg"
 
             initial_clips = [
                 {
@@ -135,7 +137,7 @@ def backend(
                     "start_sec": s["start_sec"],
                     "end_sec": s["end_sec"],
                     "path": source_str,
-                    "thumbnail": _thumb_path(s["scene_index"]),
+                    "thumbnail": str(_poster_path(s["scene_index"])),
                     "thumbnail_ready": False,
                     "original_file": source_name,
                     "original_path": source_str,
@@ -162,30 +164,30 @@ def backend(
                 f"{len(phase2_scenes)} re-encodes"
             )
 
-            scenes_out_dir = out_dir / "scenes"
             cut_by_idx: dict[int, dict] = {}
 
-            import concurrent.futures as _futures
-            _thumb_pool = _futures.ThreadPoolExecutor(max_workers=4)
-            _thumb_futs: list = []
 
-            def _gen_thumb(idx: int, clip_path: str) -> None:
-                try:
-                    if make_thumbnail(clip_path, _thumb_path(idx)):
-                        emit_event(f"THUMBNAIL_READY|{idx}")
-                    else:
-                        log(f"Thumbnail produced no frame for scene {idx}")
-                except Exception as exc:  # noqa: BLE001
-                    log(f"Thumbnail failed for scene {idx}: {exc}")
+            import concurrent.futures as _futures
+
+            thumb_pool = _futures.ThreadPoolExecutor(max_workers=4)
+            thumb_futures: list = []
+
+            def _gen_thumb(scene_index: int, clip_path: str, is_copy: bool) -> None:
+                if make_thumbnail(clip_path, str(_poster_path(scene_index)), first_keyframe=is_copy):
+                    emit_event(f"THUMBNAIL_READY|{scene_index}")
+                else:
+                    log(f"Thumbnail produced no frame for scene {scene_index}")
 
             def _on_clip_ready(result: dict) -> None:
-                cut_by_idx[result["scene_index"]] = result
+                scene_index = result["scene_index"]
+                cut_by_idx[scene_index] = result
                 clip_path = result.get("clip_path") or ""
                 clip_mode = result.get("clip_mode") or "failed"
-                emit_event(f"CLIP_READY|{result['scene_index']}|{clip_path}|{clip_mode}")
+                emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
+                # Queue the poster off the cut worker threads.
                 if clip_path and Path(clip_path).exists():
-                    _thumb_futs.append(
-                        _thumb_pool.submit(_gen_thumb, result["scene_index"], clip_path)
+                    thumb_futures.append(
+                        thumb_pool.submit(_gen_thumb, scene_index, clip_path, clip_mode == "copy")
                     )
 
             cut_all_scenes(
@@ -226,18 +228,20 @@ def backend(
                 emit_progress_updates=False,
             )
 
-            # drain the poster pool so the final manifest reflects which jpgs exist.
-            for _f in _thumb_futs:
+            # Wait for every queued poster so the final manifest's thumbnail_ready
+            # flags reflect which jpgs actually exist on disk.
+            for _f in thumb_futures:
                 _f.result()
-            _thumb_pool.shutdown(wait=True)
+            thumb_pool.shutdown(wait=True)
 
             for scene in scenes:
-                cut = cut_by_idx.get(scene["scene_index"], {})
+                scene_index = scene["scene_index"]
+                cut = cut_by_idx.get(scene_index, {})
                 scene["clip_path"] = cut.get("clip_path")
                 scene["clip_mode"] = cut.get("clip_mode", "failed")
-                thumb = _thumb_path(scene["scene_index"])
-                scene["thumbnail"] = thumb
-                scene["thumbnail_ready"] = Path(thumb).exists()
+                poster = _poster_path(scene_index)
+                scene["thumbnail"] = str(poster)
+                scene["thumbnail_ready"] = poster.exists()
 
         emit_progress(97, "Finalizing scene manifest...")
 

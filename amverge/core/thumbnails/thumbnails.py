@@ -13,23 +13,29 @@ THUMB_WIDTH = 960
 THUMB_QUALITY = 95
 
 
-def make_thumbnail(clip_path: str, thumb_path: str) -> bool:
-    """Generate a JPEG thumbnail from the first keyframe of a video clip.
+def make_thumbnail(clip_path: str, thumb_path: str, first_keyframe: bool = True) -> bool:
+    """Generate a JPEG thumbnail from a video clip.
 
-    Opens the clip with PyAV, skips to the first keyframe, decodes one
-    frame, resizes to ``THUMB_WIDTH`` (960px) preserving aspect ratio, and
-    saves as a progressive JPEG.
+    Decodes one frame, resizes to ``THUMB_WIDTH`` (960px) preserving aspect
+    ratio, and saves as a progressive JPEG.
 
     Args:
         clip_path: Path to the source video clip (any FFmpeg-supported format).
         thumb_path: Output path for the thumbnail JPEG.
+        first_keyframe: When True (lossless *copy* clips, which can start
+            mid-GOP), skip to the first keyframe — fast, and avoids decoding a
+            long run of predicted frames. When False (*re-encoded* clips, whose
+            frame 0 is already an IDR at the exact scene start), decode the first
+            frame so the poster is the true opening frame of the scene.
 
     Returns:
-        True if thumbnail was generated successfully, False otherwise
-        (no video stream, decode error, etc.).
+        True if a thumbnail was written, False otherwise (no video stream,
+        decode error, etc.).
 
     Example:
-        >>> make_thumbnail("scene_0001.mp4", "scene_0001.jpg")
+        >>> make_thumbnail("scene_0001.mp4", "scene_0001.jpg")  # copy clip
+        True
+        >>> make_thumbnail("scene_0004.mp4", "scene_0004.jpg", first_keyframe=False)
         True
     """
     def _save(image) -> None:
@@ -41,21 +47,27 @@ def make_thumbnail(clip_path: str, thumb_path: str) -> bool:
         )
 
     try:
-        # tries to get thumb of first keyframe only for speed
+        # Primary pass: keyframe-only for copy clips, full decode for re-encodes.
         with av.open(clip_path) as container:
             if not container.streams.video:
                 return False
             stream = container.streams.video[0]
-            stream.codec_context.skip_frame = "NONKEY"
-            for frame in container.decode(stream):
-                _save(frame.to_image())
-                return True
+            if first_keyframe:
+                stream.codec_context.skip_frame = "NONKEY"
 
         with av.open(clip_path) as container:
             stream = container.streams.video[0]
             for frame in container.decode(stream):
                 _save(frame.to_image())
                 return True
+
+        # Fallback: if the keyframe-only pass decoded nothing, then decode the first frame.
+        if first_keyframe:
+            with av.open(clip_path) as container:
+                stream = container.streams.video[0]
+                for frame in container.decode(stream):
+                    _save(frame.to_image())
+                    return True
 
         return False
     except Exception:

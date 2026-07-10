@@ -1,84 +1,87 @@
 from __future__ import annotations
 
-from ...ui import banner, console, make_table
+from rich.markup import escape as rich_escape
+from rich.panel import Panel
+
+from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v0.3.0", [
+        "Interpolation: RIFE PyTorch CUDA/CPU inference (interpolate command)",
+        "Interpolation: 18 RIFE models (4.6 through 4.25-heavy, Elexor, PerVFI)",
+        "Interpolation: SystemMonitor live display (GPU util/temp/VRAM, CPU/RAM, ETA)",
+        "Interpolation: --no-monitor flag, --yes auto-confirm, FFmpeg bootstrap",
+        "Flowframes: Flowframes 1.42.0 integration (flowframes command)",
+        "Flowframes: SystemMonitor live display, --no-monitor flag, GPU info banner",
+        "Flowframes: 9 models in FLOWFRAMES_MODELS registry (RIFE NCNN/CUDA/VS, DAIN, FLAVR, XVFI)",
+        "Models: show upscale + interpolation + Flowframes tables by default",
+        "Models: --upscale / --interpolation / --flowframes flags (replaces --type)",
+        "Models: --delete and --download search all registries automatically",
+        "CLI: interpolate, flowframes, models added to usage reference page",
+        "Flowframes: support for free Flowframes 1.36.0 version planned (differs from Patreon 1.42.0)",
+        "Examples: 02_rife_interpolate.py added, 03_manage_models shows interpolation too",
+    ]),
+    ("v0.2.1", [
+        "Anime4K: real GLSL shaders via FFmpeg libplacebo (was lanczos approximation)",
+        "Anime4K: auto-detect libplacebo, lanczos+unsharp fallback when unavailable",
+        "Anime4K: shader chains per mode (light/medium/strong), 2 passes for 4x",
+        "Anime4K: strong mode adds Clamp_Highlights (official Mode A chain)",
+        "ArtCNN: fixed ONNX path bug (download dir now matches read dir)",
+        "ArtCNN: fixed HD out-of-memory (disable onnx arena, free per frame)",
+        "ArtCNN: new models R16F96, C4F16_DN, C4F16_DS, C4F32_DN",
+        "ArtCNN: chroma reconstruction models R8F64_Chroma, R8F64_Chroma_DN (CNN U/V)",
+        "Encode: auto x264 level (was hardcoded 5.1, broke 4x of HD)",
+        "Encode: preserve source color metadata (BT.709/range passthrough)",
+        "Audio: copy source stream untouched, re-encode to AAC only as fallback",
+        "Upscaling: split engine.py into anime4k.py / artcnn.py / ffmpeg_helpers.py",
+    ]),
     ("v0.2.0", [
-        "V2 backend migration: TransNetV2 ML scene detection (GPU/CPU)",
-        "Smart cut: lossless copy + smartcut + re-encode (HEVC snapped-copy on CPU)",
-        "Scene cache: .npy files keyed by file fingerprint, skips re-detection on re-open",
-        "Streaming IPC: INITIAL_CLIPS_READY, CLIP_READY, PHASE1_COMPLETE, REENCODE_PROGRESS",
-        "Nelux Windows native video reader support (optional)",
-        "New commands: probe, cache, keyframes, scenes",
-        "rpc-server sidecar: long-lived Discord RPC server driven via stdin JSON",
-        "Discord RPC: added update_selecting and update_navigating",
-        "pyproject.toml: added [ml] extra (torch, transnetv2-pytorch, tqdm)",
+        "AI upscaling: ML models via spandrel (RealCUGAN, Real-ESRGAN)",
+        "Anime4K: FFmpeg filter pipeline (lanczos + unsharp + smartblur)",
+        "ArtCNN: ONNX Runtime inference (luma-only, 1-channel)",
+        "Registry system: registry.json defines all models, CLI auto-discovers",
+        "New commands: upscale, models",
+        "System monitor: live GPU/CPU/RAM/ETA during upscale",
+        "Portable FFmpeg auto-download to %APPDATA%/com.amverge.cli/",
+        "9 upscale models: adore, shufflecugan, fallin_soft, fallin_strong, anime4k, C4F16, C4F32, R8F64, realesrgan-x2/x4/anime",
+        "Library API: upscale_model(), SystemMonitor",
+        "pyproject.toml: [upscale] extra (torch, opencv, spandrel, onnxruntime)",
     ]),
     ("v0.1.0", [
         "Initial release: keyframe and edge detection methods",
         "amverge detect, export, merge, info commands",
         "Interactive wizard (no-args mode)",
-        "IPC mode for Tauri sidecar replacement (--ipc flag)",
-        "Streaming thumbnails with THUMBNAIL_READY events",
-        "Discord RPC via pypresence (optional [discord] extra)",
-        "amverge backend hidden command: drop-in for python app.py",
+        "IPC mode for Tauri sidecar replacement",
+        "Streaming thumbnails",
+        "Discord RPC (optional)",
+        "amverge backend hidden command",
         "Python library: from amverge import detect_scenes",
     ]),
 ]
 
-_APP_ENTRIES = [
-    ("v1.2.6", ["Fixed AMVerge updater failing"]),
-    ("v1.2.5", ["Fixed videos not playing in Windows Media Player"]),
-    ("v1.2.4", [
-        "Fixed files with % or special characters in name not importing",
-        "Export now sets selected audio stream as default track",
-    ]),
-    ("v1.2.3", ["Added safeguards to episode clear so it doesn't wipe everything"]),
-    ("v1.2.2", [
-        "Fixed episodes disappearing on startup",
-        "Fixed Python build errors for some Windows users",
-    ]),
-    ("v1.2.1", ["Fixed hovered videos sometimes not showing full clip content"]),
-    ("v1.2.0", [
-        "Added audio stream switching for previewing",
-        "Added 'Update Available!' in-app notification",
-        "Fixed timeline click not working",
-        "Fixed audio toggle resetting video",
-        "Fixed Intel Macs not importing properly",
-    ]),
-    ("v1.0.0", [
-        "macOS support",
-        "Backend merges clips with similar thumbnails to fix awkward cuts",
-        "Export profiles with customizable icons",
-        "Quick download buttons per clip",
-        "Audio hover - plays audio when hovering clips",
-        "Discord Rich Presence support",
-        "General settings: change episode storage path, reset to defaults",
-        "Appearance: GIF background support, built-in cropper, accent to bg sync",
-        "Widescreen clip tiles and timestamp toggles",
-        "Fixed large video files not importing",
-        "Fixed 4K images turning white on import",
-    ]),
-]
+
+def _render_version(version, changes):
+    lines = [f"[bold #22c55e]{version}[/]"]
+    lines.append("[dim]----------------------------------------[/]")
+    for i, c in enumerate(changes, 1):
+        lines.append(f"  [muted]{i:2d}.[/] {rich_escape(c)}")
+    return Panel("\n".join(lines), border_style="#22c55e", padding=(1, 2), safe_box=True)
 
 
 def changelog() -> None:
-    """Show AMVerge CLI and app version history."""
+    """Show AMVerge CLI version history."""
     banner("changelog")
-
-    console.print("[muted]  CLI[/]\n")
+    console.print()
     for version, changes in _CLI_ENTRIES:
-        t = make_table(("", "bright_black", {}), title=version)
-        for c in changes:
-            t.add_row(c)
-        console.print(t)
+        console.print(_render_version(version, changes))
         console.print()
 
-    console.print("[muted]  AMVerge App[/]\n")
-    for version, changes in _APP_ENTRIES:
-        t = make_table(("", "bright_black", {}), title=version)
-        for c in changes:
-            t.add_row(c)
-        console.print(t)
-        console.print()
+
+def whatsnew() -> None:
+    """Show what's new in the latest version."""
+    version, changes = _CLI_ENTRIES[0]
+    banner(f"what's new in {version}")
+    console.print()
+    console.print(_render_version(version, changes))
+    console.print()
