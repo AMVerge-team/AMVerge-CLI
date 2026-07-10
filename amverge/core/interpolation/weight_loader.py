@@ -118,6 +118,31 @@ def download_weights(model_key, progress_cb=None, retries=3):
     return False
 
 
+def _extract_rife_state_dict(checkpoint):
+    """Unwrap common checkpoint containers and normalize keys to bare
+    ``block0.*`` / ``encode.*`` form (strip ``module.`` and ``flownet.``)."""
+    from collections import OrderedDict
+
+    sd = checkpoint
+    if isinstance(checkpoint, dict):
+        for k in checkpoint:
+            if isinstance(k, str) and "model_state_dict" in k and k.startswith("ema_"):
+                sd = checkpoint[k]
+                break
+    if not isinstance(sd, dict):
+        return OrderedDict()
+
+    out = OrderedDict()
+    for k, v in sd.items():
+        nk = k
+        if nk.startswith("module."):
+            nk = nk[len("module."):]
+        if nk.startswith("flownet."):
+            nk = nk[len("flownet."):]
+        out[nk] = v
+    return out
+
+
 def load_weights_if_available(model_key, device="cpu"):
     import torch
 
@@ -133,60 +158,30 @@ def load_weights_if_available(model_key, device="cpu"):
     path = get_weight_path(model_key)
     checkpoint = torch.load(path, map_location=device, weights_only=True)
 
-    from .rife_arch import RIFEModel
-    model = RIFEModel(model_key).to(device)
+    from .rife_arch import RIFEModel, infer_config
+
+    state_dict = _extract_rife_state_dict(checkpoint)
+    try:
+        cfg = infer_config(state_dict)
+    except ValueError as e:
+        raise RuntimeError(
+            f"Model '{model_key}' uses an unsupported architecture ({e}). "
+            f"This build supports RIFE IFNet checkpoints only."
+        )
+
+    model = RIFEModel(cfg).to(device)
     model.eval()
 
-    state_dict = _remap_state_dict_keys(checkpoint, model)
-    incompatible = model.load_state_dict(state_dict, strict=False)
-    total_params = sum(1 for _ in model.parameters())
-
-    matched = total_params - (len(incompatible.missing_keys) + len(incompatible.unexpected_keys))
-    if matched < total_params * 0.5:
+    prefixed = {
+        (k if k.startswith("flownet.") else f"flownet.{k}"): v
+        for k, v in state_dict.items()
+    }
+    incompatible = model.load_state_dict(prefixed, strict=False)
+    if incompatible.missing_keys or incompatible.unexpected_keys:
         raise RuntimeError(
-            f"Only {matched}/{total_params} parameters matched for {model_key}. Checkpoint may be corrupted."
+            f"Checkpoint for '{model_key}' does not match its inferred architecture "
+            f"(missing={len(incompatible.missing_keys)}, "
+            f"unexpected={len(incompatible.unexpected_keys)})."
         )
 
     return model
-
-
-def _remap_state_dict_keys(checkpoint, model):
-    from collections import OrderedDict
-    state_key = None
-    for k in checkpoint:
-        if "model_state_dict" in k and k.startswith("ema_"):
-            state_key = k
-            break
-    if state_key and state_key in checkpoint:
-        raw = checkpoint[state_key]
-        if isinstance(raw, OrderedDict):
-            return raw
-        if isinstance(raw, dict):
-            return raw
-
-    model_state = model.state_dict()
-    if isinstance(checkpoint, dict) and checkpoint:
-        first_ckpt_key = next(iter(checkpoint))
-        first_model_key = next(iter(model_state))
-
-        if not first_ckpt_key.startswith("flownet.") and first_model_key.startswith("flownet."):
-            remapped = OrderedDict()
-            for k, v in checkpoint.items():
-                remapped["flownet." + k] = v
-            return remapped
-
-    remapped = OrderedDict()
-    for k, v in checkpoint.items():
-        new_key = k
-        if k.startswith("module."):
-            new_key = k[7:]
-        elif k.startswith("flownet."):
-            new_key = k
-        elif "." not in k and len(checkpoint) < 50:
-            continue
-        remapped[new_key] = v
-
-    if remapped:
-        return remapped
-
-    return checkpoint if isinstance(checkpoint, dict) else {}
