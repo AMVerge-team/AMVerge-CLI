@@ -165,7 +165,7 @@ class TestEncode:
 
 class TestSoftmetric:
     def test_output_shape(self):
-        metric = Softmetric(in_channels=9)
+        metric = Softmetric(in_channels=3)
         img0 = torch.randn(2, 3, 64, 64)
         img1 = torch.randn(2, 3, 64, 64)
         fflow = torch.zeros(2, 2, 64, 64)

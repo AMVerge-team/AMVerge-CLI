@@ -1,6 +1,6 @@
 {
   "_source": {
-    "interpolation": "https://github.com/moongetsu/AniSmooth-Models/releases/download/interpolation"
+    "interpolation": "https://github.com/AniScripts/AniSmooth-Models/releases/download/interpolation"
   },
   "rife4.6": {
     "method": "rife",
