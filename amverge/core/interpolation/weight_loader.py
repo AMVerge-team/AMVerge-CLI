@@ -153,7 +153,7 @@ def _is_flow_weight_downloaded(flow_file):
 
 
 def _download_flow_weights(flow_file, progress_cb=None, retries=3):
-    url = f"https://github.com/haofeixu/gmflow/releases/download/v0.1/{flow_file}"
+    url = f"https://s3.eu-central-1.amazonaws.com/avg-projects/unimatch/pretrained/{flow_file}"
     dest = _get_flow_weights_path(flow_file)
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
         return True

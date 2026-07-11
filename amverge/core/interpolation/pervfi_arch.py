@@ -858,7 +858,7 @@ class Encode(nn.Module):
 class Softmetric(nn.Module):
     def __init__(self, in_channels=6):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels + 6 + 3, 32, kernel_size=7, stride=1, padding=3)
+        self.conv1 = nn.Conv2d(in_channels + 3 + 3 + 2 + 2 + 3 + 2, 32, kernel_size=7, stride=1, padding=3)
         self.relu = nn.ReLU(inplace=False)
         self.conv2 = nn.Conv2d(32, 32, kernel_size=7, stride=1, padding=3)
         self.conv3 = nn.Conv2d(32, 32, kernel_size=7, stride=1, padding=3)
@@ -1023,7 +1023,7 @@ class NetworkV0(nn.Module):
         self.softmetric = Softmetric(in_channels=32)
 
         self.context_encoder = nn.Sequential(
-            nn.Conv2d(32 * 3 + 6 + 4, 128, 3, 1, 1),
+            nn.Conv2d(32 * 4 + 4, 128, 3, 1, 1),
             nn.ReLU(inplace=True),
             nn.Conv2d(128, 64, 3, 1, 1),
             nn.ReLU(inplace=True),

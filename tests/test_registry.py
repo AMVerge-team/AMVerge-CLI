@@ -47,7 +47,7 @@ class TestPerVFIModels:
     def test_pervfi_has_flow_estimator(self):
         model = get_model("pervfi")
         assert model["flow_estimator"] == "gmflow"
-        assert model["flow_file"] == "gmflow_sintel-0c07dcb3.pth"
+        assert model["flow_file"] == "gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth"
 
 
 class TestRIFEModels:

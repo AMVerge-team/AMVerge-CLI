@@ -147,7 +147,7 @@
     "description": "Perception-oriented VFI with normalizing flow (GMFlow + PerVFI v00, ~35 MB gen + ~300 MB flow)",
     "file": "pervfi.pth",
     "flow_estimator": "gmflow",
-    "flow_file": "gmflow_sintel-0c07dcb3.pth",
+    "flow_file": "gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth",
     "generator": "v00",
     "heavy": true
   },
@@ -158,7 +158,7 @@
     "description": "Perception-oriented VFI with fast decoder (GMFlow + PerVFI vb, faster inference)",
     "file": "pervfi_vb.pth",
     "flow_estimator": "gmflow",
-    "flow_file": "gmflow_sintel-0c07dcb3.pth",
+    "flow_file": "gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth",
     "generator": "vb",
     "heavy": true
   }
