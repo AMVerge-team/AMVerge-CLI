@@ -179,7 +179,7 @@ def run_flowframes(
     env = _build_clean_env()
 
     proc = subprocess.Popen(
-        args, env=env, creationflags=CREATE_NO_WINDOW,
+        args, env=env, cwd=os.path.dirname(exe), creationflags=CREATE_NO_WINDOW,
     )
 
     if progress_cb:
@@ -293,6 +293,10 @@ def _parse_progress_line(line: str) -> Optional[float]:
         total = float(m.group(2))
         if total > 0:
             return done / total * 100
+
+    pct = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
+    if pct:
+        return float(pct.group(1))
 
     return None
 
