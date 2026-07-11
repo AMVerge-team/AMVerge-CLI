@@ -141,11 +141,25 @@
     "heavy": false
   },
   "pervfi": {
-    "method": "rife",
-    "name": "PerVFI",
-    "credit": "by yhzhai / PKU-IMRE",
-    "description": "Perception-oriented Video Frame Interpolation (35 MB)",
+    "method": "pervfi",
+    "name": "PerVFI (v00)",
+    "credit": "by Guangyang Wu et al. (CVPR 2024)",
+    "description": "Perception-oriented VFI with normalizing flow (GMFlow + PerVFI v00, ~35 MB gen + ~300 MB flow)",
     "file": "pervfi.pth",
-    "heavy": false
+    "flow_estimator": "gmflow",
+    "flow_file": "gmflow_sintel-0c07dcb3.pth",
+    "generator": "v00",
+    "heavy": true
+  },
+  "pervfi-vb": {
+    "method": "pervfi",
+    "name": "PerVFI (vb - fast)",
+    "credit": "by Guangyang Wu et al. (CVPR 2024)",
+    "description": "Perception-oriented VFI with fast decoder (GMFlow + PerVFI vb, faster inference)",
+    "file": "pervfi_vb.pth",
+    "flow_estimator": "gmflow",
+    "flow_file": "gmflow_sintel-0c07dcb3.pth",
+    "generator": "vb",
+    "heavy": true
   }
 }

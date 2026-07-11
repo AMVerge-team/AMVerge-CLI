@@ -147,6 +147,7 @@ def interpolate_video(
     if entry is None:
         raise ValueError(f"Unknown model: {model_key}")
 
+    method = entry.get("method", "rife")
     q = QUALITY_PRESETS.get(preset, QUALITY_PRESETS["high"])
 
     if not is_weight_downloaded(model_key):
@@ -205,40 +206,46 @@ def interpolate_video(
             if not ret:
                 break
 
-            t0 = _frame_to_tensor(cv2.cvtColor(curr_frame, cv2.COLOR_BGR2RGB), device)
-            t0_padded = _pad_to_tensor_body(t0)
+            if method == "pervfi":
+                t0 = _frame_to_tensor(cv2.cvtColor(curr_frame, cv2.COLOR_BGR2RGB), device)
+                _interpolate_pair_pervfi(ffmpeg_proc, model, device, p0, curr_frame,
+                                         factor, h, w)
+                p0 = t0
+            else:
+                t0 = _frame_to_tensor(cv2.cvtColor(curr_frame, cv2.COLOR_BGR2RGB), device)
+                t0_padded = _pad_to_tensor_body(t0)
 
-            model.cachePair(p0_padded, t0_padded)
-            saved_f0 = model.flownet.f0
-            saved_f1 = model.flownet.f1
+                model.cachePair(p0_padded, t0_padded)
+                saved_f0 = model.flownet.f0
+                saved_f1 = model.flownet.f1
 
-            for f in range(1, factor):
-                alpha = f / factor
-                model.flownet.f0 = saved_f0
-                model.flownet.f1 = saved_f1
+                for f in range(1, factor):
+                    alpha = f / factor
+                    model.flownet.f0 = saved_f0
+                    model.flownet.f1 = saved_f1
 
-                with torch.autocast(device_type=str(device), enabled=(device.type == "cuda")):
-                    mid = model(p0_padded, t0_padded, alpha)
+                    with torch.autocast(device_type=str(device), enabled=(device.type == "cuda")):
+                        mid = model(p0_padded, t0_padded, alpha)
 
-                mid_unpadded = _unpad_tensor_body(mid, h, w)
-                mid_frame = _tensor_to_frame(mid_unpadded)
+                    mid_unpadded = _unpad_tensor_body(mid, h, w)
+                    mid_frame = _tensor_to_frame(mid_unpadded)
+
+                    if ffmpeg_proc.poll() is None:
+                        try:
+                            ffmpeg_proc.stdin.write(cv2.cvtColor(mid_frame, cv2.COLOR_RGB2BGR).tobytes())
+                        except (BrokenPipeError, OSError):
+                            break
+
+                    del mid, mid_unpadded, mid_frame
 
                 if ffmpeg_proc.poll() is None:
                     try:
-                        ffmpeg_proc.stdin.write(cv2.cvtColor(mid_frame, cv2.COLOR_RGB2BGR).tobytes())
+                        ffmpeg_proc.stdin.write(curr_frame.tobytes())
                     except (BrokenPipeError, OSError):
                         break
 
-                del mid, mid_unpadded, mid_frame
-
-            if ffmpeg_proc.poll() is None:
-                try:
-                    ffmpeg_proc.stdin.write(curr_frame.tobytes())
-                except (BrokenPipeError, OSError):
-                    break
-
-            p0 = t0
-            p0_padded = t0_padded
+                p0 = t0
+                p0_padded = t0_padded
 
             frame_idx += 1
             if frame_idx % 10 == 0:
@@ -277,6 +284,44 @@ def interpolate_video(
 
     if progress_cb:
         progress_cb(100, "Complete")
+
+
+def _pad_to_mod_n(tensor, mod):
+    h, w = tensor.shape[2], tensor.shape[3]
+    pad_h = (mod - h % mod) % mod
+    pad_w = (mod - w % mod) % mod
+    if pad_h == 0 and pad_w == 0:
+        return tensor
+    return torch.nn.functional.pad(tensor, (0, pad_w, 0, pad_h), mode="constant", value=0.0)
+
+
+def _interpolate_pair_pervfi(ffmpeg_proc, model, device, prev_tensor, curr_frame,
+                              factor, h, w):
+    t0 = _frame_to_tensor(cv2.cvtColor(curr_frame, cv2.COLOR_BGR2RGB), device)
+    p0_padded = _pad_to_mod_n(prev_tensor, 8)
+    t0_padded = _pad_to_mod_n(t0, 8)
+
+    for f in range(1, factor):
+        alpha = f / factor
+        with torch.autocast(device_type=str(device), enabled=(device.type == "cuda")):
+            mid = model.inference_rand_noise(p0_padded, t0_padded, heat=0.3, time=alpha)
+
+        mid_unpadded = mid[:, :, :h, :w]
+        mid_frame = _tensor_to_frame(mid_unpadded)
+
+        if ffmpeg_proc.poll() is None:
+            try:
+                ffmpeg_proc.stdin.write(cv2.cvtColor(mid_frame, cv2.COLOR_RGB2BGR).tobytes())
+            except (BrokenPipeError, OSError):
+                break
+
+        del mid, mid_unpadded, mid_frame
+
+    if ffmpeg_proc.poll() is None:
+        try:
+            ffmpeg_proc.stdin.write(curr_frame.tobytes())
+        except (BrokenPipeError, OSError):
+            pass
 
 
 def _pad_to_tensor_body(tensor):
