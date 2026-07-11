@@ -258,7 +258,8 @@ def _show_interpolation_table(verbose):
         downloaded = _interp_is_downloaded(key)
         path = _interp_weight_path(key)
         size = _format_size(os.path.getsize(path)) if os.path.exists(path) else "-"
-        method_tag = "[#a78bfa]rife[/]"
+        method = entry.get("method", "rife")
+        method_tag = "[#a78bfa]rife[/]" if method == "rife" else f"[#a78bfa]{method}[/]"
         status = "[accent]downloaded[/]" if downloaded else "[muted]not downloaded[/]"
 
         if verbose:
