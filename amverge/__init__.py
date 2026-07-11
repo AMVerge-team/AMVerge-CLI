@@ -197,6 +197,7 @@ from .core.interpolation import (
     INTERPOLATION_AVAILABLE as _INTERP_AVAILABLE,
     get_model as get_interp_model,
     get_rife_models,
+    get_pervfi_models,
     get_all_model_keys as get_all_interp_model_keys,
     get_model_credit as get_interp_model_credit,
     download_weights as download_interp_weights,
