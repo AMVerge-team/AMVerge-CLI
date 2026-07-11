@@ -184,6 +184,21 @@ from .core.upscaling.artcnn import (
     get_artcnn_path,
 )
 
+# -- Dedup ----------------------------------------------------------------
+from .core.dedup import (
+    run_dedup,
+    dedup_ffmpeg,
+    dedup_ssim,
+    dedup_framediff,
+    dedup_advanced,
+    detect_cadence,
+    export_frame_list,
+    DEDUP_METHODS,
+    SSIM_AVAILABLE,
+    FRAMEDIFF_AVAILABLE,
+    ADVANCED_AVAILABLE,
+)
+
 # -- Interpolation --------------------------------------------------------
 from .core.interpolation import (
     flowframes_available,
@@ -280,6 +295,10 @@ __all__ = [
     "get_all_model_keys", "get_model_scales", "get_model_credit",
     "download_anime4k_shaders", "is_anime4k_downloaded", "libplacebo_available",
     "download_artcnn", "is_artcnn_downloaded", "get_artcnn_path",
+    # Dedup
+    "run_dedup", "dedup_ffmpeg", "dedup_ssim", "dedup_framediff",
+    "dedup_advanced", "detect_cadence", "export_frame_list", "DEDUP_METHODS",
+    "SSIM_AVAILABLE", "FRAMEDIFF_AVAILABLE", "ADVANCED_AVAILABLE",
     # Interpolation
     "flowframes_available", "run_flowframes", "cancel_flowframes",
     "set_flowframes_path", "get_flowframes_path", "FLOWFRAMES_VERSION",

@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-from collections import deque
-from typing import Callable, Optional, Dict, Tuple, List
+from typing import Callable, Dict, List, Optional, Tuple
 
-from ..infra.binaries import get_ffmpeg
-
-CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+from ..video.probe_utils import probe_video_fps
+from ._encode import build_stats, encode_selected, probe_frame_count
 
 ADVANCED_AVAILABLE = False
 try:
@@ -18,277 +13,212 @@ try:
 except ImportError:
     pass
 
+_ANALYZE_MAX_WIDTH = 640
+_GRID = 4
+_LK_PARAMS = dict(winSize=(15, 15), maxLevel=2,
+                  criteria=(3, 10, 0.03)) if ADVANCED_AVAILABLE else {}
+
+
+def detect_cadence(keep_indices: List[int]) -> Dict[str, float]:
+    """Dominant gap between kept frames (anime cadence: 2=on-twos, 3=on-threes)."""
+    if len(keep_indices) < 3:
+        return {"cadence": 0, "confidence": 0.0}
+    gaps: Dict[int, int] = {}
+    for a, b in zip(keep_indices, keep_indices[1:]):
+        g = b - a
+        gaps[g] = gaps.get(g, 0) + 1
+    total = sum(gaps.values())
+    period, count = max(gaps.items(), key=lambda kv: kv[1])
+    return {"cadence": int(period), "confidence": round(count / total, 3)}
+
 
 if ADVANCED_AVAILABLE:
+    def _region_max_meandiff(a: "np.ndarray", b: "np.ndarray") -> float:
+        h, w = a.shape
+        rh, rw = h // _GRID, w // _GRID
+        if rh == 0 or rw == 0:
+            return float(cv2.absdiff(a, b).mean())
+        worst = 0.0
+        for gy in range(_GRID):
+            for gx in range(_GRID):
+                y0, x0 = gy * rh, gx * rw
+                ra = a[y0:y0 + rh, x0:x0 + rw]
+                rb = b[y0:y0 + rh, x0:x0 + rw]
+                worst = max(worst, float(cv2.absdiff(ra, rb).mean()))
+        return worst
 
-    class _CadenceDetector:
-        def __init__(self, window_size=24):
-            self.window_size = window_size
-            self.pattern = deque(maxlen=window_size)
+    def _edge_change_pct(a: "np.ndarray", b: "np.ndarray") -> float:
+        ea = cv2.Canny(a, 80, 160)
+        eb = cv2.Canny(b, 80, 160)
+        return float(np.count_nonzero(cv2.absdiff(ea, eb))) / ea.size * 100.0
 
-        def add_frame(self, is_dup):
-            self.pattern.append(1 if is_dup else 0)
+    def _hist_corr(a: "np.ndarray", b: "np.ndarray") -> float:
+        ha = cv2.calcHist([a], [0], None, [64], [0, 256])
+        hb = cv2.calcHist([b], [0], None, [64], [0, 256])
+        cv2.normalize(ha, ha)
+        cv2.normalize(hb, hb)
+        return float(cv2.compareHist(ha, hb, cv2.HISTCMP_CORREL))
 
-        def detect(self):
-            if len(self.pattern) < self.window_size // 2:
-                return None
-            p = list(self.pattern)
-            for period in [2, 3, 4, 5, 6]:
-                if len(p) >= period * 3:
-                    matches = sum(1 for i in range(len(p) - period) if p[i] == p[i + period])
-                    total = len(p) - period
-                    if total > 0 and matches / total > 0.75:
-                        return period
-            return None
+    def _flow_motion(a: "np.ndarray", b: "np.ndarray") -> float:
+        pts = cv2.goodFeaturesToTrack(a, maxCorners=200, qualityLevel=0.01,
+                                      minDistance=8)
+        if pts is None or len(pts) < 5:
+            return 0.0
+        nxt, st, _ = cv2.calcOpticalFlowPyrLK(a, b, pts, None, **_LK_PARAMS)
+        if nxt is None or st is None:
+            return 0.0
+        good_new = nxt[st.flatten() == 1]
+        good_old = pts[st.flatten() == 1]
+        if len(good_new) < 5:
+            return 0.0
+        disp = np.linalg.norm(good_new.reshape(-1, 2) - good_old.reshape(-1, 2), axis=1)
+        return float(np.median(disp))
 
 
-    class _AdvancedDedup:
-        def __init__(
-            self,
-            threshold=0.95,
-            region_grid=(4, 4),
-            min_changed_regions=1,
-            use_optical_flow=True,
-            camera_motion_compensation=True,
-            remove_static_subject=True,
-        ):
-            self.threshold = threshold
-            self.region_grid = region_grid
-            self.min_changed_regions = min_changed_regions
-            self.use_optical_flow = use_optical_flow
-            self.camera_motion_compensation = camera_motion_compensation
-            self.remove_static_subject = remove_static_subject
-            self.cadence = _CadenceDetector()
+def analyze_advanced(
+    video_path: str,
+    sensitivity: float = 1.0,
+    progress_cb: Optional[Callable[[int, str], None]] = None,
+    progress_hi: int = 95,
+) -> Tuple[List[int], int, float, Dict[str, float]]:
+    """Multi-signal dead/duplicate-frame analysis.
 
-        def _region_analysis(self, gray1, gray2):
-            h, w = gray1.shape
-            rows, cols = self.region_grid
-            rh, rw = h // rows, w // cols
-            changed = []
-            total_diff = 0.0
-            for i in range(rows):
-                for j in range(cols):
-                    r1 = gray1[i*rh:(i+1)*rh, j*rw:(j+1)*rw]
-                    r2 = gray2[i*rh:(i+1)*rh, j*rw:(j+1)*rw]
-                    mean_diff = float(np.mean(cv2.absdiff(r1, r2)))
-                    if mean_diff > 3.0 or np.max(cv2.absdiff(r1, r2)) > 50:
-                        changed.append((i, j))
-                        total_diff += mean_diff
-            total_regions = rows * cols
-            return changed, total_diff / max(1, total_regions), total_diff
+    Combines a 4x4 region grid (localized motion the global average misses),
+    sparse Lucas-Kanade optical flow (cheaper than dense Farneback for a
+    same/different decision), Canny edge change (line-art shifts) and histogram
+    correlation (robust to small misalignment). A frame is KEPT when any signal
+    fires - false-keep is cheaper than removing a real frame. Thresholds adapt
+    to a per-clip noise floor; ``sensitivity`` scales them (higher = keeps more).
 
-        def _optical_flow(self, gray1, gray2):
-            flow = cv2.calcOpticalFlowFarneback(
-                gray1, gray2, None, 0.5, 3, 15, 3, 5, 1.2, 0
-            )
-            mag = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
-            mean_mag = float(np.mean(mag))
-            std_mag = float(np.std(mag))
+    Returns (keep_indices, frames_in, fps, cadence_info).
+    """
+    if not ADVANCED_AVAILABLE:
+        raise ImportError(
+            "Advanced dedup requires opencv. Run: pip install amverge[dedup]"
+        )
 
-            h, w = gray1.shape
-            m = 0.25
-            cx1, cx2 = int(w*m), int(w*(1-m))
-            cy1, cy2 = int(h*m), int(h*(1-m))
-            center_mag = float(np.mean(mag[cy1:cy2, cx1:cx2]))
-            edge_mag = float(np.mean(np.concatenate([
-                mag[:cy1, :].flatten(), mag[cy2:, :].flatten(),
-                mag[cy1:cy2, :cx1].flatten(), mag[cy1:cy2, cx2:].flatten(),
-            ])))
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Failed to open: {video_path}")
 
-            is_camera = False
-            is_bg_only = False
-            if mean_mag > 0.5:
-                uniformity = 1.0 - (std_mag / max(1e-6, mean_mag))
-                is_camera = uniformity > 0.6 and mean_mag > 1.0
-                if edge_mag > 0.8 and center_mag < edge_mag * 0.7:
-                    is_bg_only = True
-                if mean_mag > 0.8 and center_mag < 0.5:
-                    is_bg_only = True
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+    scale = min(1.0, _ANALYZE_MAX_WIDTH / max(1, w))
 
-            mean_dx = float(np.mean(flow[..., 0]))
-            mean_dy = float(np.mean(flow[..., 1]))
+    def _prep(frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if scale < 1.0:
+            gray = cv2.resize(gray, None, fx=scale, fy=scale,
+                              interpolation=cv2.INTER_AREA)
+        return gray
 
-            return {
-                "magnitude": mean_mag,
-                "is_camera": is_camera,
-                "is_bg_only": is_bg_only,
-                "dx": mean_dx,
-                "dy": mean_dy,
-                "center_mag": center_mag,
-            }
+    success, frame = cap.read()
+    if not success:
+        cap.release()
+        raise RuntimeError("No frames in video")
 
-        def _center_similarity(self, gray1, gray2, dx=0.0, dy=0.0):
-            h, w = gray1.shape
-            m = 0.25
-            x1, x2 = int(w*m), int(w*(1-m))
-            y1, y2 = int(h*m), int(h*(1-m))
-            if x2 <= x1 or y2 <= y1:
-                return False, 0.0
+    if progress_cb:
+        progress_cb(0, "Sampling baseline...")
 
-            if abs(dx) > 0.1 or abs(dy) > 0.1:
-                M = np.float32([[1, 0, -dx], [0, 1, -dy]])
-                gray2 = cv2.warpAffine(gray2, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+    prev_gray = _prep(frame)
+    sample_count = min(30, total_frames - 1)
+    region_samples: List[float] = []
+    edge_samples: List[float] = []
+    for _ in range(sample_count):
+        success, frame = cap.read()
+        if not success:
+            break
+        curr_gray = _prep(frame)
+        region_samples.append(_region_max_meandiff(prev_gray, curr_gray))
+        edge_samples.append(_edge_change_pct(prev_gray, curr_gray))
+        prev_gray = curr_gray
 
-            c1 = gray1[y1:y2, x1:x2]
-            c2 = gray2[y1:y2, x1:x2]
-            mean_diff = float(np.mean(cv2.absdiff(c1, c2)))
-            max_diff_val = float(np.max(cv2.absdiff(c1, c2)))
+    def _median(xs, default):
+        if not xs:
+            return default
+        s = sorted(xs)
+        return s[len(s) // 2]
 
-            hist1 = cv2.calcHist([c1], [0], None, [256], [0, 256])
-            hist2 = cv2.calcHist([c2], [0], None, [256], [0, 256])
-            cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
-            cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
-            corr = float(cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL))
-            corr = max(0.0, min(1.0, (corr + 1) / 2.0))
+    region_thr = max(3.0, _median(region_samples, 3.0) * 1.8) * sensitivity
+    edge_thr = max(0.5, _median(edge_samples, 0.5) * 1.8) * sensitivity
+    motion_thr = 0.6 * sensitivity
+    hist_thr = 0.9990
 
-            edges1 = cv2.Canny(c1, 50, 150)
-            edges2 = cv2.Canny(c2, 50, 150)
-            edge_changed = np.sum(cv2.absdiff(edges1, edges2) > 0) / max(1, np.sum(edges1 > 0))
+    cap.release()
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Failed to reopen: {video_path}")
 
-            is_static = mean_diff < 10.0 and max_diff_val < 70 and corr > 0.85 and edge_changed < 0.30
-            similarity = 1.0 - min(1.0, mean_diff / 20.0)
+    success, frame = cap.read()
+    keep_indices: List[int] = [0]
+    prev_gray = _prep(frame)
+    frame_idx = 0
+    last_pct = -1
 
-            return is_static, similarity
+    while True:
+        success, frame = cap.read()
+        if not success:
+            break
+        frame_idx += 1
 
-        def is_duplicate(self, prev_frame, curr_frame):
-            scale = min(1.0, 640 / max(prev_frame.shape[1], prev_frame.shape[0]))
-            p = cv2.resize(prev_frame, None, fx=scale, fy=scale) if scale < 1.0 else prev_frame
-            c = cv2.resize(curr_frame, None, fx=scale, fy=scale) if scale < 1.0 else curr_frame
+        curr_gray = _prep(frame)
+        region = _region_max_meandiff(prev_gray, curr_gray)
+        keep = region > region_thr
+        if not keep:
+            keep = _edge_change_pct(prev_gray, curr_gray) > edge_thr
+        if not keep:
+            keep = _flow_motion(prev_gray, curr_gray) > motion_thr
+        if not keep:
+            keep = _hist_corr(prev_gray, curr_gray) < hist_thr
 
-            gray1 = cv2.cvtColor(p, cv2.COLOR_BGR2GRAY) if len(p.shape) == 3 else p
-            gray2 = cv2.cvtColor(c, cv2.COLOR_BGR2GRAY) if len(c.shape) == 3 else c
+        if keep:
+            keep_indices.append(frame_idx)
+            prev_gray = curr_gray
 
-            changed_regions, region_score, _ = self._region_analysis(gray1, gray2)
-            flow_info = self._optical_flow(gray1, gray2) if self.use_optical_flow else {"magnitude": 0, "is_camera": False, "is_bg_only": False, "dx": 0, "dy": 0}
+        if progress_cb:
+            pct = min(progress_hi - 1, int((frame_idx / max(1, total_frames - 1)) * progress_hi))
+            if pct != last_pct:
+                progress_cb(pct, f"Dedup (advanced)... {len(keep_indices)}/{frame_idx + 1}")
+                last_pct = pct
 
-            if self.remove_static_subject and self.camera_motion_compensation:
-                is_static, _ = self._center_similarity(gray1, gray2, flow_info["dx"], flow_info["dy"])
-                is_global = flow_info["is_camera"] or flow_info["is_bg_only"]
-                has_motion = region_score > 0.02 or flow_info["magnitude"] > 0.3
-                if is_static and (is_global or has_motion):
-                    return True
-                if is_global:
-                    return False
+    cap.release()
+    frames_in = frame_idx + 1
 
-            if len(changed_regions) >= self.min_changed_regions:
-                return False
+    probe_n = probe_frame_count(video_path)
+    if probe_n > 0 and abs(probe_n - frames_in) > max(2, int(0.01 * probe_n)):
+        raise RuntimeError(
+            f"Frame count mismatch (decoded {frames_in}, container {probe_n}) - "
+            "source is likely VFR. Use the ffmpeg method or re-encode to CFR first."
+        )
 
-            if flow_info["magnitude"] > 1.5:
-                return False
-
-            return region_score < (1.0 - self.threshold)
+    return keep_indices, frames_in, probe_video_fps(video_path), detect_cadence(keep_indices)
 
 
 def dedup_advanced(
     video_path: str,
     output_path: str,
-    threshold: float = 0.95,
-    region_sensitivity: int = 1,
-    use_optical_flow: bool = True,
-    camera_motion_compensation: bool = True,
-    remove_static_subject: bool = True,
+    sensitivity: float = 1.0,
     progress_cb: Optional[Callable[[int, str], None]] = None,
-) -> Tuple[str, Dict]:
-    if not ADVANCED_AVAILABLE:
-        raise ImportError("Advanced dedup requires opencv. Run: pip install opencv-python")
+    codec: Optional[str] = None,
+    crf: int = 18,
+) -> Tuple[str, dict]:
+    """Multi-signal dead-frame removal (region grid + LK flow + edges + cadence).
 
-    ffmpeg = get_ffmpeg()
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Failed to open: {video_path}")
-
-    fps_val = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    if fps_val <= 0 or not np.isfinite(fps_val):
-        fps_val = 30.0
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
-
-    dedup_engine = _AdvancedDedup(
-        threshold=threshold,
-        region_grid=(4, 4),
-        min_changed_regions=max(1, min(4, region_sensitivity)),
-        use_optical_flow=use_optical_flow,
-        camera_motion_compensation=camera_motion_compensation,
-        remove_static_subject=remove_static_subject,
+    Returns (output_path, stats); stats includes ``cadence`` and ``confidence``.
+    """
+    keep_indices, frames_in, _, cadence = analyze_advanced(
+        video_path, sensitivity, progress_cb
     )
 
-    ffmpeg_cmd = [
-        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-        "-f", "rawvideo", "-vcodec", "rawvideo",
-        "-s", f"{w}x{h}", "-pix_fmt", "bgr24",
-        "-r", str(fps_val), "-i", "-",
-        "-c:v", "libx264", "-crf", "18", "-preset", "medium",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        output_path,
-    ]
-    ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    creationflags=CREATE_NO_WINDOW)
+    if progress_cb:
+        progress_cb(95, "Encoding output...")
 
-    import threading
-    def _drain():
-        try:
-            for _ in ffmpeg_proc.stderr:
-                pass
-        except Exception:
-            pass
-    threading.Thread(target=_drain, daemon=True).start()
-
-    ret, prev_frame = cap.read()
-    if not ret:
-        cap.release()
-        ffmpeg_proc.stdin.close()
-        ffmpeg_proc.wait()
-        raise RuntimeError("No frames in video")
-
-    ffmpeg_proc.stdin.write(prev_frame.tobytes())
-    unique_count = 1
-    dup_count = 0
-    cam_only_removed = 0
-    frame_idx = 0
-    last_pct = -1
-
-    flow_info_prev = None
-
-    while True:
-        ret, curr_frame = cap.read()
-        if not ret:
-            break
-        frame_idx += 1
-
-        if progress_cb:
-            pct = min(99, int((frame_idx / max(1, total_frames - 1)) * 100))
-            if pct != last_pct:
-                progress_cb(pct, f"Dedup (advanced)... {unique_count}/{frame_idx + 1}")
-                last_pct = pct
-
-        is_dup = dedup_engine.is_duplicate(prev_frame, curr_frame)
-        dedup_engine.cadence.add_frame(is_dup)
-
-        if not is_dup:
-            ffmpeg_proc.stdin.write(curr_frame.tobytes())
-            unique_count += 1
-            prev_frame = curr_frame.copy()
-        else:
-            dup_count += 1
-
-    cap.release()
-    ffmpeg_proc.stdin.close()
-    ffmpeg_proc.wait()
-
-    cadence_period = dedup_engine.cadence.detect()
-
-    stats = {
-        "frames_in": frame_idx + 1,
-        "frames_out": unique_count,
-        "frames_removed": dup_count,
-        "pct_removed": round((dup_count / max(1, frame_idx + 1)) * 100, 1),
-        "cadence": cadence_period,
-    }
+    encode_selected(video_path, output_path, keep_indices, crf=crf, codec=codec,
+                    progress_cb=progress_cb, progress_lo=95, progress_hi=99)
+    stats = build_stats(frames_in, len(keep_indices))
+    stats.update(cadence)
 
     if progress_cb:
-        extra = f" (cadence every {cadence_period} frames)" if cadence_period else ""
-        progress_cb(100, f"Complete ({unique_count}/{frame_idx + 1} frames kept, {stats['pct_removed']}% removed{extra})")
+        progress_cb(100, f"Complete ({len(keep_indices)}/{frames_in} frames kept)")
 
     return output_path, stats
