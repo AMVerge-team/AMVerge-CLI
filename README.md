@@ -22,6 +22,7 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 - **Edge detection** - Canny edges + cosine similarity for difficult encodes
 - **AI Upscaling** - ShuffleCUGAN (ML), Anime4K (shaders), ArtCNN (ONNX) super-resolution
 - **Frame Interpolation** - Python RIFE (PyTorch CUDA/CPU) + Flowframes 1.42.0 integration (free 1.36.0 planned)
+- **Depth Maps** - per-frame monocular depth estimation via Depth-Anything-V2 (GPU/CPU)
 - **Smart cut** - automatic lossless copy / smartcut / re-encode per scene
 - **15 codec profiles** - H.264, HEVC, AV1, ProRes with hardware (NVENC) support
 - **10 audio codecs** - AAC, FLAC, Opus, PCM, MP3, pass-through
@@ -41,10 +42,12 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 ## Install
 
 ```bash
-pip install amverge
+pip install amverge               # base: keyframe detection
+pip install amverge[depth]        # Depth-Anything-V2 depth maps
+pip install amverge[all]          # everything
 ```
 
-See [docs/installation.md](docs/installation.md) for FFmpeg setup, optional dependencies, and dev install.
+See [docs/installation.md](docs/installation.md) for FFmpeg setup, all optional extras, and dev install.
 
 ---
 
@@ -65,6 +68,8 @@ amverge models                           # manage upscale & interpolation model 
 amverge interpolate episode.mp4 -f 2     # AI frame interpolation (RIFE, PyTorch)
 amverge flowframes episode.mp4 -f 2      # frame interpolation via Flowframes 1.42.0 (free 1.36.0 planned)
 amverge flowframes-path PATH             # configure Flowframes.exe location
+amverge depth-map episode.mp4            # side-by-side depth visualization
+amverge depth-map episode.mp4 --pred-only --grayscale  # grayscale depth map only
 ```
 
 ```python
@@ -103,6 +108,8 @@ HEVC on CPU uses snapped-copy (nearest keyframe within 5s) to avoid slow re-enco
 
 **Interpolation:** RIFE PyTorch inference (CUDA/CPU) with mod-32 padded frames, encoded feature caching, and FFmpeg rawvideo pipe. Flowframes 1.42.0 external process integration with session log tailing and output discovery. Support for free Flowframes 1.36.0 is planned (delivery TBD - differs from 1.42.0 Patreon version).
 
+**Depth Maps:** Depth-Anything-V2 per-frame monocular depth estimation. Small (24.8M), Base (97.5M), or Large (335.3M) model. Color or grayscale output, side-by-side or depth-only. Models auto-downloaded from AniSmooth-Models GitHub Releases on first run. H.264 output via FFmpeg pipe with source audio mux.
+
 </details>
 
 ---
@@ -126,6 +133,7 @@ AMVerge-CLI/
 │   │   ├── export/              export, merge
 │   │   ├── upscaling/           upscale, models
 │   │   ├── interpolation/       interpolate, flowframes, flowframes-path
+│   │   ├── depth/                depth-map
 │   │   ├── info/                info, probe
 │   │   ├── sidecar/             backend, rpc_server (hidden)
 │   │   └── system/              doctor, gpu, version
@@ -143,12 +151,14 @@ AMVerge-CLI/
 │       ├── transnet/            TransNetV2 constants
 │       ├── upscaling/           ml, anime4k, artcnn, registry
 │       ├── interpolation/       RIFE PyTorch inference, Flowframes 1.42.0 integration
+│       ├── depth/                Depth-Anything-V2 monocular depth estimation
 │       ├── video/               probe_utils, scene_utils, video metadata
 │       └── wrappers/            public class wrappers (AmvergeVideo, SceneDetector, etc.)
 │
 ├── examples/                runnable Python scripts
 │   ├── custom-pipeline/     full end-to-end pipeline
 │   ├── cutting/             smart cut, ffmpeg segment
+│   ├── depth/                  depth map examples
 │   ├── detect/              keyframe, edge, TransNetV2 detection
 │   ├── diagnostics/         GPU, CUDA, dependency versions
 │   ├── discord-rpc/         Discord Rich Presence
@@ -188,6 +198,7 @@ Runnable Python scripts for every feature. Each with its own README:
 | [custom-pipeline/](examples/custom-pipeline/) | full end-to-end custom pipeline |
 | [upscale/](examples/upscale/) | ML / Anime4K / ArtCNN super-resolution |
 | [interpolation/](examples/interpolation/) | RIFE PyTorch + Flowframes 1.42.0 (free 1.36.0 planned) |
+| [depth/](examples/depth/) | Depth-Anything-V2 monocular depth estimation |
 
 ```bash
 pip install amverge[ml,edge,discord]
