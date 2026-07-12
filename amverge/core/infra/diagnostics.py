@@ -90,6 +90,7 @@ def get_gpu_info() -> dict:
         "opencv_available": False,
         "rpc_available": False,
         "nelux_available": False,
+        "depth_available": False,
     }
 
     try:
@@ -131,6 +132,12 @@ def get_gpu_info() -> dict:
     except (ImportError, Exception):
         pass
 
+    try:
+        from ..depth import DEPTH_AVAILABLE
+        info["depth_available"] = DEPTH_AVAILABLE
+    except ImportError:
+        pass
+
     return info
 
 
@@ -153,7 +160,7 @@ def get_versions() -> dict:
         except ImportError:
             versions[name] = None
 
-    optional = ["torch", "transnetv2_pytorch", "cv2", "pypresence"]
+    optional = ["torch", "transnetv2_pytorch", "cv2", "pypresence", "depth_anything_v2"]
     for name in optional:
         try:
             mod = __import__(name)
@@ -236,6 +243,7 @@ def check_environment() -> EnvironmentCheck:
         ("tqdm", "tqdm", "[ml]"),
         ("opencv", "cv2", "[edge]"),
         ("pypresence", "pypresence", "[discord]"),
+        ("depth-anything-v2", "depth_anything_v2", "[depth]"),
     ]:
         try:
             mod = __import__(imp)
