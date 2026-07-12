@@ -89,4 +89,13 @@ def gpu() -> None:
     except ImportError:
         t3.add_row("pypresence (RPC)",   "[muted]not installed[/]  pip install amverge[discord]")
 
+    try:
+        from ...core.depth import DEPTH_AVAILABLE
+        if DEPTH_AVAILABLE:
+            t3.add_row("depth-anything-v2", "[accent]installed[/]")
+        else:
+            t3.add_row("depth-anything-v2", "[muted]not installed[/]  pip install amverge[depth]")
+    except ImportError:
+        t3.add_row("depth-anything-v2", "[muted]not installed[/]  pip install amverge[depth]")
+
     console.print(t3)
