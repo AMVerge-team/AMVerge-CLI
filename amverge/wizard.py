@@ -471,6 +471,48 @@ def _wizard_info() -> None:
             console.print(t)
 
 
+def _wizard_depth_map() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    from .ui import banner, console, err, ok, fail, make_progress
+    from .core.depth import (
+        DEPTH_AVAILABLE, MODEL_CONFIGS, is_model_downloaded,
+        download_model, generate_depth_map,
+    )
+    banner("depth-map")
+    if not DEPTH_AVAILABLE:
+        fail("Depth-Anything-V2 not installed.\n  pip install amverge[depth]")
+        return
+    input_video = _ask("video path", "video.mp4")
+    if not input_video or not Path(input_video).exists():
+        fail(f"File not found: {input_video}")
+        return
+    encoder = _ask("encoder (vits/vitb/vitl)", "vits").strip().lower()
+    if encoder not in MODEL_CONFIGS:
+        fail(f"Unknown encoder: {encoder}. Using vits.")
+        encoder = "vits"
+    pred_only = _ask("depth only? (y/n)", "n").strip().lower().startswith("y")
+    grayscale = _ask("grayscale? (y/n)", "n").strip().lower().startswith("y")
+    output = f"{Path(input_video).stem}_depth.mp4"
+    if not is_model_downloaded(encoder):
+        with make_progress() as progress:
+            task_id = progress.add_task(f"Downloading Depth-Anything-V2-{encoder}...", total=100)
+            download_model(encoder, progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m))
+    with make_progress() as progress:
+        task_id = progress.add_task("Processing...", total=100)
+        try:
+            generate_depth_map(
+                input_path=input_video,
+                output_path=output,
+                encoder=encoder,
+                pred_only=pred_only,
+                grayscale=grayscale,
+                progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m),
+            )
+            ok(f"Saved: {output}")
+        except Exception as e:
+            fail(str(e))
+
+
 # ---------------------------------------------------------------------------
 # Info pages
 # ---------------------------------------------------------------------------
@@ -508,6 +550,7 @@ _WORKFLOW: list[tuple[str, str, object]] = [
     ("export",    "export selected scenes from a detect run",  _wizard_export),
     ("merge",     "merge multiple clips into one file",        _wizard_merge),
     ("info",      "show video stream metadata",                _wizard_info),
+    ("depth-map", "generate depth maps from video",            _wizard_depth_map),
 ]
 
 _INFO: list[tuple[str, str, object]] = [
