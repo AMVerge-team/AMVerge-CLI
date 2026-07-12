@@ -23,6 +23,7 @@ from .commands.interpolation.flowframes_path import flowframes_path as flowframe
 from .commands.interpolation.interpolate import interpolate
 from .commands.sidecar.backend import backend
 from .commands.sidecar.rpc_server import rpc_server
+from .commands.depth.depth_map import depth_map
 
 app = typer.Typer(
     name="amverge",
@@ -57,6 +58,9 @@ app.command()(models)
 app.command()(interpolate)
 app.command(name="flowframes")(flowframes)
 app.command(name="flowframes-path")(flowframes_path_cmd)
+
+# Depth
+app.command(name="depth-map")(depth_map)
 
 # Info
 app.command()(usage)

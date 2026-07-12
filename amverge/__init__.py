@@ -207,6 +207,24 @@ from .core.interpolation import (
     load_weights_if_available as load_interp_weights_if_available,
 )
 
+# -- Depth ----------------------------------------------------------------
+try:
+    from .core.depth import (
+        DEPTH_AVAILABLE,
+        generate_depth_map,
+        download_model,
+        is_model_downloaded,
+        MODEL_CONFIGS,
+        COLMAPS,
+    )
+except ImportError:
+    DEPTH_AVAILABLE = False
+    generate_depth_map = None
+    download_model = None
+    is_model_downloaded = None
+    MODEL_CONFIGS = {}
+    COLMAPS = {}
+
 __all__ = [
     "__version__",
     # Pipeline
@@ -289,4 +307,8 @@ __all__ = [
     "get_interp_model_credit", "download_interp_weights",
     "is_interp_weight_downloaded", "get_interp_weight_path",
     "verify_interp_weight_hash", "load_interp_weights_if_available",
+    # Depth
+    "DEPTH_AVAILABLE", "generate_depth_map",
+    "download_model", "is_model_downloaded",
+    "MODEL_CONFIGS", "COLMAPS",
 ]
