@@ -98,4 +98,22 @@ def gpu() -> None:
     except ImportError:
         t3.add_row("depth-anything-v2", "[muted]not installed[/]  pip install amverge[depth]")
 
+    try:
+        from ...core.upscaling import UPSCALE_AVAILABLE
+        if UPSCALE_AVAILABLE:
+            t3.add_row("upscale", "[accent]installed[/]")
+        else:
+            t3.add_row("upscale", "[muted]not installed[/]  pip install amverge[upscale]")
+    except ImportError:
+        t3.add_row("upscale", "[muted]not installed[/]  pip install amverge[upscale]")
+
+    try:
+        from ...core.interpolation import INTERPOLATION_AVAILABLE
+        if INTERPOLATION_AVAILABLE:
+            t3.add_row("interpolation", "[accent]installed[/]")
+        else:
+            t3.add_row("interpolation", "[muted]not installed[/]  pip install amverge[interpolation]")
+    except ImportError:
+        t3.add_row("interpolation", "[muted]not installed[/]  pip install amverge[interpolation]")
+
     console.print(t3)
