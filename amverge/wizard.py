@@ -471,6 +471,42 @@ def _wizard_info() -> None:
             console.print(t)
 
 
+def _wizard_dedup() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    from .ui import banner, console, err, ok, fail, make_progress
+    from .core.dedup import (
+        run_dedup_simple, auto_detect_method, PRESETS, DEDUP_METHODS,
+    )
+    banner("dedup")
+    input_video = _ask("video path", "video.mp4")
+    if not input_video or not Path(input_video).exists():
+        fail(f"File not found: {input_video}")
+        return
+    method = auto_detect_method()
+    method_name = DEDUP_METHODS[method]["name"]
+    console.print(f"  Method: [accent]{method_name}[/accent] (auto-detected)")
+    presets = list(PRESETS.keys())
+    preset = _ask_choice("preset", presets, "normal")
+    output = f"{Path(input_video).stem}_deduped.mp4"
+    with make_progress() as progress:
+        task_id = progress.add_task("Dedup...", total=100)
+        try:
+            _, stats = run_dedup_simple(
+                video_path=input_video,
+                output_path=output,
+                preset=preset,
+                progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m),
+            )
+            ok(f"Saved: {output}")
+            console.print(
+                f"  Frames: [accent]{stats['frames_in']}[/accent] -> "
+                f"[accent]{stats['frames_out']}[/accent] "
+                f"([accent]{stats['pct_removed']}%[/accent] removed)"
+            )
+        except Exception as e:
+            fail(str(e))
+
+
 # ---------------------------------------------------------------------------
 # Info pages
 # ---------------------------------------------------------------------------
@@ -507,6 +543,7 @@ _WORKFLOW: list[tuple[str, str, object]] = [
     ("detect",    "split video into scenes at cut boundaries", _wizard_detect),
     ("export",    "export selected scenes from a detect run",  _wizard_export),
     ("merge",     "merge multiple clips into one file",        _wizard_merge),
+    ("dedup",     "remove duplicate frames from video",        _wizard_dedup),
     ("info",      "show video stream metadata",                _wizard_info),
 ]
 

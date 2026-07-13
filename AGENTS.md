@@ -57,6 +57,7 @@ twine upload dist/*
 | Package | hatchling, PyPI name `amverge` |
 | Frame interpolation | Flowframes 1.42.0 (external .exe, Windows-only, NVIDIA GPU recommended; free 1.36.0 planned; `[flowframes]` extra) |
 | Discord RPC | pypresence (optional, `[discord]` extra) |
+| Dedup | ffmpeg + OpenCV (optional, `[dedup]` extra) |
 
 ## Directory Map
 
@@ -92,6 +93,8 @@ AMVerge-CLI/
 │   │   │   ├── interpolate.py       amverge interpolate  (Python RIFE inference)
 │       │   │   ├── flowframes.py    amverge flowframes  (Flowframes 1.42.0 external process; free 1.36.0 planned)
 │   │   │   └── flowframes_path.py   amverge flowframes-path  (set/show Flowframes.exe path)
+│   │   ├── dedup/
+│   │   │   └── dedup.py         amverge dedup  (remove duplicate/dead frames, 4 methods, 4 presets)
 │   │   ├── info/
 │   │   │   ├── info.py          amverge info  (stream metadata via PyAV)
 │   │   │   └── probe.py         amverge probe  (V2 diagnostics: codec/HEVC/keyframes/scene cache)
@@ -116,6 +119,13 @@ AMVerge-CLI/
 │       │   └── ai_scene_detection.py   decode_video_frames_nelux(), decode_and_detect_scenes(), run_model_one_pass()
 │       ├── discord/
 │       │   └── discord_rpc.py   DiscordRPC class - pypresence wrapper, CLIENT_ID from AMVerge
+│       ├── dedup/
+│       │   ├── dispatch.py       run_dedup(), run_dedup_simple(), PRESETS, auto-detect
+│       │   ├── dedup_ffmpeg.py   mpdecimate native filter (no deps)
+│       │   ├── dedup_ssim.py     windowed SSIM analysis (OpenCV)
+│       │   ├── dedup_framediff.py pixel-diff with adaptive noise floor (OpenCV)
+│       │   ├── dedup_advanced.py multi-signal: region grid + LK flow + edges + cadence (OpenCV)
+│       │   └── _encode.py        shared encode, select-filter script, ffmpeg progress
 │       ├── image/
 │       │   └── image.py         crop_image() + CropData - supports animated GIF
 │       ├── infra/
