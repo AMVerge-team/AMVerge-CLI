@@ -12,25 +12,25 @@ PRESETS: Dict[str, Dict[str, dict]] = {
     "aggressive": {
         "ffmpeg":   {"threshold": 0.25, "hi": 400, "lo": 200},
         "ssim":     {"threshold": 0.995, "ssim_window": 5},
-        "framediff":{"threshold": 5.0, "min_change_pct": 1.0},
+        "framediff":{"threshold": 5.0, "min_change_pct": 1.0, "framediff_window": 5},
         "advanced": {"threshold": 0.6, "cadence_gate": True},
     },
     "anime": {
         "ffmpeg":   {"threshold": 0.28, "hi": 550, "lo": 250},
         "ssim":     {"threshold": 0.992, "ssim_window": 4},
-        "framediff":{"threshold": 7.0, "min_change_pct": 1.5},
+        "framediff":{"threshold": 7.0, "min_change_pct": 1.5, "framediff_window": 4},
         "advanced": {"threshold": 0.8, "cadence_gate": True},
     },
     "normal": {
         "ffmpeg":   {"threshold": 0.33, "hi": 768, "lo": 320},
         "ssim":     {"threshold": 0.987, "ssim_window": 3},
-        "framediff":{"threshold": 10.0, "min_change_pct": 2.0},
+        "framediff":{"threshold": 10.0, "min_change_pct": 2.0, "framediff_window": 3},
         "advanced": {"threshold": 1.0, "cadence_gate": True},
     },
     "gentle": {
         "ffmpeg":   {"threshold": 0.45, "hi": 1200, "lo": 500},
         "ssim":     {"threshold": 0.975, "ssim_window": 2},
-        "framediff":{"threshold": 18.0, "min_change_pct": 4.0},
+        "framediff":{"threshold": 18.0, "min_change_pct": 4.0, "framediff_window": 2},
         "advanced": {"threshold": 1.8, "cadence_gate": False},
     },
 }
@@ -72,6 +72,7 @@ def run_dedup_simple(
     hi = overrides.get("hi", 768)
     lo = overrides.get("lo", 320)
     ssim_window = overrides.get("ssim_window", 3)
+    framediff_window = overrides.get("framediff_window", 3)
     cadence_gate = overrides.get("cadence_gate", True)
     min_change_pct = overrides.get("min_change_pct", 2.0)
 
@@ -143,7 +144,7 @@ def run_dedup(
     elif method == "framediff":
         from .dedup_framediff import analyze_framediff
         keep, frames_in, fps = analyze_framediff(
-            video_path, threshold, min_change_pct, progress_cb)
+            video_path, threshold, min_change_pct, window_size=framediff_window, progress_cb=progress_cb)
         cadence = {}
     elif method == "advanced":
         from .dedup_advanced import analyze_advanced

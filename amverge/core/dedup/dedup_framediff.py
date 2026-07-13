@@ -20,17 +20,21 @@ def analyze_framediff(
     video_path: str,
     threshold: float = 10.0,
     min_change_pct: float = 2.0,
+    window_size: int = 3,
     progress_cb: Optional[Callable[[int, str], None]] = None,
     progress_hi: int = 95,
 ) -> Tuple[List[int], int, float]:
     """Return (keep_indices, frames_in, fps). A frame is kept when the fraction
     of pixels differing from the last kept frame (by more than ``threshold``)
-    exceeds ``max(min_change_pct, median_noise_floor * 1.5)``. Aborts on VFR
-    sources whose decoded count diverges from the container count."""
+    exceeds ``max(min_change_pct, median_noise_floor * 1.5)`` AND the same
+    holds against all of the last ``window_size`` kept frames (anti-drift).
+    Aborts on VFR sources whose decoded count diverges from the container count."""
     if not FRAMEDIFF_AVAILABLE:
         raise ImportError(
             "FrameDiff dedup requires opencv. Run: pip install amverge[dedup]"
         )
+
+    window = max(1, min(window_size, 100))
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -55,8 +59,8 @@ def analyze_framediff(
     if progress_cb:
         progress_cb(0, "Sampling noise floor...")
 
-    prev_gray = _prep(frame)
-    area_pixels = prev_gray.size
+    anchor_gray = _prep(frame)
+    area_pixels = anchor_gray.size
     sample_count = min(30, total_frames - 1)
     noise_fracs: List[float] = []
     for _ in range(sample_count):
@@ -64,10 +68,9 @@ def analyze_framediff(
         if not success:
             break
         curr_gray = _prep(frame)
-        diff = cv2.absdiff(prev_gray, curr_gray)
+        diff = cv2.absdiff(anchor_gray, curr_gray)
         changed = int(np.count_nonzero(diff > threshold))
         noise_fracs.append(100.0 * changed / area_pixels)
-        prev_gray = curr_gray
 
     if noise_fracs:
         ordered = sorted(noise_fracs)
@@ -83,7 +86,7 @@ def analyze_framediff(
 
     success, frame = cap.read()
     keep_indices: List[int] = [0]
-    prev_gray = _prep(frame)
+    recent_gray: List[np.ndarray] = [_prep(frame)]
     frame_idx = 0
     last_pct = -1
 
@@ -94,13 +97,21 @@ def analyze_framediff(
         frame_idx += 1
 
         curr_gray = _prep(frame)
-        diff = cv2.absdiff(prev_gray, curr_gray)
-        changed = int(np.count_nonzero(diff > threshold))
-        changed_pct = 100.0 * changed / area_pixels
+        diff_all = True
+        for prev in recent_gray[-window:]:
+            diff = cv2.absdiff(prev, curr_gray)
+            changed = int(np.count_nonzero(diff > threshold))
+            changed_pct = 100.0 * changed / area_pixels
+            if changed_pct <= area_threshold_pct:
+                diff_all = False
+                break
 
-        if changed_pct > area_threshold_pct:
+        if diff_all:
             keep_indices.append(frame_idx)
-            prev_gray = curr_gray
+            recent_gray.append(curr_gray)
+
+        if len(recent_gray) > window:
+            recent_gray = recent_gray[-window:]
 
         if progress_cb:
             pct = min(progress_hi - 1, int((frame_idx / max(1, total_frames - 1)) * progress_hi))
@@ -126,6 +137,7 @@ def dedup_framediff(
     output_path: str,
     threshold: float = 10.0,
     min_change_pct: float = 2.0,
+    window_size: int = 3,
     progress_cb: Optional[Callable[[int, str], None]] = None,
     codec: Optional[str] = None,
     crf: int = 18,
@@ -139,7 +151,7 @@ def dedup_framediff(
         (output_path, stats) with frames_in/out/removed/pct_removed.
     """
     keep_indices, frames_in, _ = analyze_framediff(
-        video_path, threshold, min_change_pct, progress_cb
+        video_path, threshold, min_change_pct, window_size, progress_cb
     )
 
     if progress_cb:
