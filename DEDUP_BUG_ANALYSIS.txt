@@ -1,0 +1,166 @@
+================================================================================
+DEDUP — IN-DEPTH BUG ANALYSIS (deadframes branch, commit 5044b8a)
+================================================================================
+
+BUG 1 [CRITICAL] — SSIM `dedup_ssim` wrapper calls analyze_ssim with undefined `window_size`
+------------------------------------------------------------------------------------------
+File: dedup_ssim.py, line 140
+
+    def dedup_ssim(video_path, output_path, threshold=0.987,
+                   progress_cb=None, codec=None, crf=18):
+        keep_indices, frames_in, _ = analyze_ssim(video_path, threshold, window_size, progress_cb)
+                                                                         ^^^^^^^^^^^
+                                                                         NameError!
+
+`window_size` is not a parameter of `dedup_ssim`. It would raise NameError if
+anyone calls `dedup_ssim()` directly (it's exported from __init__.py). The
+dispatch module calls `analyze_ssim()` directly, bypassing this wrapper, so the
+CLI works fine. But the library API is broken.
+
+Fix: add `window_size: int = 3` to dedup_ssim's signature.
+
+
+BUG 2 [HIGH] — SSIM `recent_gray` accumulates dropped duplicates, diluting comparison set
+------------------------------------------------------------------------------------------
+File: dedup_ssim.py, lines 96-103
+
+Every frame (kept OR dropped) gets added to recent_gray. The comparison at
+line 91 checks against `recent_gray[-window:]` — the last N frames regardless
+of whether they were kept.
+
+Problem: a string of 50 duplicate frames fills recent_gray with 50 near-identical
+entries. When a genuine new frame arrives, it's compared against 3 dropped
+duplicates that are all identical to each other. The comparison shows high
+similarity, and the genuine frame gets DROPPED.
+
+Fix: only append to recent_gray when frame is kept (line 98). Drop the append
+on line 100. The comparison set should be the last N KEPT frames.
+
+    if not similar_to_all:
+        keep_indices.append(frame_idx)
+        recent_gray.append(curr_gray)   # <-- keep this
+    # else: recent_gray.append(...)    # <-- REMOVE this
+
+
+BUG 3 [HIGH] — Advanced cadence-gate over-drops scene changes and gap multiples
+--------------------------------------------------------------------------------
+File: dedup_advanced.py, lines 194-201
+
+    if cadence_gate and cadence_info["cadence"] >= 2 and cadence_info["confidence"] >= 0.7:
+        cadence_period = cadence_info["cadence"]
+        filtered = [keep_indices[0]]
+        for i in range(1, len(keep_indices)):
+            gap = keep_indices[i] - filtered[-1]
+            if gap == cadence_period or gap > cadence_period * 3:
+                filtered.append(keep_indices[i])
+        keep_indices = filtered
+
+The gate removes ANY frame whose gap != cadence_period, keeping only exact
+multiples and very large gaps (>3x). This is too aggressive in two cases:
+
+a) Scene changes: shot A's last frame at index 47, shot B's first frame at
+   index 48. Gap = 1. If cadence = 2, gap 1 ≠ 2 → DROPPED. But this is a
+   real scene cut, not a false-keep.
+
+b) Gap multiples: e.g., cadence = 2. Frame at gap 4 gets dropped because
+   4 ≠ 2 (and 4 is not > 6). But 4 could be legitimate — the animator stayed
+   on a pose for 4 frames, or there was a flash frame.
+
+Fix: only gate frames where gap < cadence_period (insertion signals).
+    If cadence = 2: drop frames with gap = 1.
+    If cadence = 3: drop frames with gap = 1 or 2.
+    Never drop frames with gap >= cadence_period.
+
+    for i in range(1, len(keep_indices)):
+        gap = keep_indices[i] - filtered[-1]
+        if gap >= cadence_period or gap > cadence_period * 3:
+            filtered.append(keep_indices[i])
+        # else: gap < cadence_period → likely false-keep, drop it
+
+
+BUG 4 [LOW] — `detect_cadence` called twice in analyze_advanced
+-----------------------------------------------------------------
+File: dedup_advanced.py, lines 192 and 210
+
+    cadence_info = detect_cadence(keep_indices)           # line 192, pre-gate
+    ...cadence_gate modifies keep_indices...
+    return ..., detect_cadence(keep_indices)              # line 210, post-gate
+
+First call computes cadence for gating decision. Second call recomputes for
+stats reporting. Not functionally wrong — the second call gets the post-filter
+cadence which is more accurate for the user. Just redundant computation.
+
+Fix: return the already-computed post-gate cadence_info instead of recomputing.
+    Add after line 201:
+        cadence_info = detect_cadence(keep_indices)
+    Change line 210:
+        return keep_indices, frames_in, ..., cadence_info
+
+
+BUG 5 [LOW] — mpdecimate stats inaccurate: `frames_in` probes source AFTER encode
+----------------------------------------------------------------------------------
+File: dedup_ffmpeg.py, lines 71-73
+
+    run_ffmpeg_progress(...)
+    frames_in = probe_frame_count(video_path)     # probes SOURCE (input)
+    frames_out = probe_frame_count(output_path)    # probes OUTPUT (deduped)
+    stats = build_stats(frames_in, frames_out)
+
+This probes the source frame count AFTER the encode — fine for the input file
+(unchanged), but the timing is odd. If the source were somehow modified during
+encoding (impossible since we only read it), this would be inaccurate.
+
+Not a real bug, just a code smell. Move `frames_in = probe_frame_count(video_path)` before
+`run_ffmpeg_progress()` for clarity.
+
+
+BUG 6 [LOW] — `hi` control reversed in dedup_ffmpeg docstring
+-----------------------------------------------------------------
+File: dedup_ffmpeg.py, line 37
+
+        hi: Per-block SAD threshold for "changed" (0-32768). Default 768.
+            Lower = more sensitive to small changes (fewer false-keeps).
+
+"Lower = more sensitive" is WRONG. Lower hi means the SAD threshold for
+"changed" is lower, meaning blocks whose SAD is above this lower bar are
+considered changed. So LOWER hi = MORE blocks counted as changed = MORE frames
+kept = LESS dedup (more false-keeps, the opposite of what the docstring says).
+
+The correct behavior: HIGHER hi = fewer blocks pass the "changed" threshold =
+fewer frames kept = more aggressive dedup.
+
+Fix: change "Lower = more sensitive" to "Higher = fewer frames kept (more
+    aggressive dedup). Lower = more frames kept (less aggressive)."
+
+
+BUG 7 [LOW] — `dedup_advanced` wrapper passes progress_cb as positional arg in dispatch
+-----------------------------------------------------------------------------------------
+File: dedup_advanced.py, line 227
+
+    dedup_advanced passes: progress_cb=progress_cb (keyword, correct)
+
+But dispatch.py line 67 passes to analyze_advanced:
+    analyze_advanced(video_path, threshold, cadence_gate=cadence_gate, progress_cb=progress_cb)
+
+This is fine — keyword args. No bug, just noting the two paths are consistent.
+
+
+BUG 8 [COSMETIC] — `window_size` parameter exists in analyze_ssim but not in function signature docstring
+---------------------------------------------------------------------------------------------------------
+Not critical. The analyze_ssim docstring mentions "last ``window_size`` kept
+frames" but the parameter isn't documented in Args. Not a runtime issue.
+
+================================================================================
+SUMMARY
+================================================================================
+
+| # | Severity | File | Line | Description |
+|---|----------|------|------|-------------|
+| 1 | CRITICAL | dedup_ssim.py | 140 | `window_size` undefined in dedup_ssim wrapper — NameError on direct call |
+| 2 | HIGH     | dedup_ssim.py | 96-103 | recent_gray includes dropped frames, diluting comparison set |
+| 3 | HIGH     | dedup_advanced.py | 194-201 | Cadence gate drops scene changes and gap multiples |
+| 4 | LOW      | dedup_advanced.py | 192/210 | detect_cadence called twice (redundant) |
+| 5 | LOW      | dedup_ffmpeg.py | 71 | frames_in probed after encode (code smell) |
+| 6 | LOW      | dedup_ffmpeg.py | 37 | Docstring: "Lower = more sensitive" is inverted |
+| 7 | NONE     | - | - | No bug (verified) |
+| 8 | COSMETIC | dedup_ssim.py | 39 | window_size not documented in analyze_ssim Args |

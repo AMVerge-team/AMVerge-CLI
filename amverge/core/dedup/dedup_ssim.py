@@ -96,8 +96,6 @@ def analyze_ssim(
         if not similar_to_all:
             keep_indices.append(frame_idx)
             recent_gray.append(curr_gray)
-        else:
-            recent_gray.append(curr_gray)
 
         if len(recent_gray) > window:
             recent_gray = recent_gray[-window:]
@@ -125,6 +123,7 @@ def dedup_ssim(
     video_path: str,
     output_path: str,
     threshold: float = 0.987,
+    window_size: int = 3,
     progress_cb: Optional[Callable[[int, str], None]] = None,
     codec: Optional[str] = None,
     crf: int = 18,

@@ -196,9 +196,10 @@ def analyze_advanced(
         filtered = [keep_indices[0]]
         for i in range(1, len(keep_indices)):
             gap = keep_indices[i] - filtered[-1]
-            if gap == cadence_period or gap > cadence_period * 3:
+            if gap >= cadence_period:
                 filtered.append(keep_indices[i])
         keep_indices = filtered
+        cadence_info = detect_cadence(keep_indices)
 
     probe_n = probe_frame_count(video_path)
     if probe_n > 0 and abs(probe_n - frames_in) > max(2, int(0.01 * probe_n)):
@@ -207,7 +208,7 @@ def analyze_advanced(
             "source is likely VFR. Use the ffmpeg method or re-encode to CFR first."
         )
 
-    return keep_indices, frames_in, probe_video_fps(video_path), detect_cadence(keep_indices)
+    return keep_indices, frames_in, probe_video_fps(video_path), cadence_info
 
 
 def dedup_advanced(

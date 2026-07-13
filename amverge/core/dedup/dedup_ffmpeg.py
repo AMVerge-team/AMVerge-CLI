@@ -34,7 +34,8 @@ def dedup_ffmpeg(
             exceed the change threshold for a frame to be kept. Lower drops
             more; higher keeps more. Default 0.33.
         hi: Per-block SAD threshold for "changed" (0-32768). Default 768.
-            Lower = more sensitive to small changes (fewer false-keeps).
+            Higher = fewer frames kept (more aggressive dedup).
+            Lower = more frames kept (less aggressive).
         lo: Per-block SAD threshold for "unchanged". Default 320.
         progress_cb: Optional (pct, msg) callback.
         codec: Codec profile key (e.g. ``h265_main10``) or None for x264.
