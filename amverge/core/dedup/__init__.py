@@ -7,7 +7,7 @@ from .dedup_advanced import (
     detect_cadence,
     ADVANCED_AVAILABLE,
 )
-from .dispatch import run_dedup
+from .dispatch import run_dedup, run_dedup_simple, auto_detect_method, resolve_preset, PRESETS, PRESET_LABELS
 from ._encode import encode_selected, probe_frame_count, build_stats, export_frame_list
 
 DEDUP_METHODS = {
@@ -43,6 +43,11 @@ __all__ = [
     "analyze_advanced",
     "detect_cadence",
     "run_dedup",
+    "run_dedup_simple",
+    "auto_detect_method",
+    "resolve_preset",
+    "PRESETS",
+    "PRESET_LABELS",
     "encode_selected",
     "probe_frame_count",
     "build_stats",

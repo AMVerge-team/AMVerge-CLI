@@ -1,10 +1,86 @@
 from __future__ import annotations
 
-from typing import Callable, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 from ._encode import build_stats, encode_selected, export_frame_list
+from .dedup_ssim import SSIM_AVAILABLE
+from .dedup_advanced import ADVANCED_AVAILABLE
 
 DEFAULT_THRESHOLD = {"ffmpeg": 0.33, "ssim": 0.987, "framediff": 10.0, "advanced": 1.0}
+
+PRESETS: Dict[str, Dict[str, dict]] = {
+    "aggressive": {
+        "ffmpeg":   {"threshold": 0.25, "hi": 400, "lo": 200},
+        "ssim":     {"threshold": 0.995, "ssim_window": 5},
+        "framediff":{"threshold": 5.0, "min_change_pct": 1.0},
+        "advanced": {"threshold": 0.6, "cadence_gate": True},
+    },
+    "normal": {
+        "ffmpeg":   {"threshold": 0.33, "hi": 768, "lo": 320},
+        "ssim":     {"threshold": 0.987, "ssim_window": 3},
+        "framediff":{"threshold": 10.0, "min_change_pct": 2.0},
+        "advanced": {"threshold": 1.0, "cadence_gate": True},
+    },
+    "gentle": {
+        "ffmpeg":   {"threshold": 0.45, "hi": 1200, "lo": 500},
+        "ssim":     {"threshold": 0.975, "ssim_window": 2},
+        "framediff":{"threshold": 18.0, "min_change_pct": 4.0},
+        "advanced": {"threshold": 1.8, "cadence_gate": False},
+    },
+}
+
+PRESET_LABELS = {
+    "aggressive": "Aggressive — removes more frames, slightly riskier (best for clean animation)",
+    "normal":     "Normal — balanced, safe defaults",
+    "gentle":      "Gentle — removes fewer frames, safest (best for grainy or live-action)",
+}
+
+
+def auto_detect_method() -> str:
+    if ADVANCED_AVAILABLE:
+        return "advanced"
+    if SSIM_AVAILABLE:
+        return "ssim"
+    return "ffmpeg"
+
+
+def resolve_preset(preset: str, method: str) -> dict:
+    p = PRESETS.get(preset, PRESETS["normal"])
+    return p.get(method, p.get("ffmpeg", {}))
+
+
+def run_dedup_simple(
+    video_path: str,
+    output_path: str,
+    preset: str = "normal",
+    codec: Optional[str] = None,
+    crf: int = 18,
+    dry_run: bool = False,
+    export_frames: Optional[str] = None,
+    progress_cb: Optional[Callable[[int, str], None]] = None,
+) -> Tuple[Optional[str], dict]:
+    method = auto_detect_method()
+    overrides = resolve_preset(preset, method)
+    threshold = overrides.get("threshold", DEFAULT_THRESHOLD.get(method, 0.0))
+    hi = overrides.get("hi", 768)
+    lo = overrides.get("lo", 320)
+    ssim_window = overrides.get("ssim_window", 3)
+    cadence_gate = overrides.get("cadence_gate", True)
+    min_change_pct = overrides.get("min_change_pct", 2.0)
+
+    return run_dedup(
+        video_path, output_path,
+        method=method,
+        threshold=threshold,
+        min_change_pct=min_change_pct,
+        codec=codec, crf=crf,
+        dry_run=dry_run,
+        export_frames=export_frames,
+        progress_cb=progress_cb,
+        hi=hi, lo=lo,
+        ssim_window=ssim_window,
+        cadence_gate=cadence_gate,
+    )
 
 
 def run_dedup(

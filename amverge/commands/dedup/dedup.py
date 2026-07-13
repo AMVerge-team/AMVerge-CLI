@@ -6,31 +6,39 @@ from typing import Optional
 import typer
 
 from ...ui import banner, console, make_progress, ok, fail
-from ...core.dedup import DEDUP_METHODS, run_dedup
-from ...core.dedup.dispatch import DEFAULT_THRESHOLD
+from ...core.dedup import (
+    DEDUP_METHODS,
+    run_dedup_simple,
+    auto_detect_method,
+    PRESET_LABELS,
+)
 
 
 def dedup(
     input: Optional[Path] = typer.Argument(None, help="Input video file"),
     output: Path = typer.Option(None, "--output", "-o", help="Output video file"),
-    method: str = typer.Option("ffmpeg", "--method", "-m", help="Dedup method: ffmpeg, ssim, framediff, advanced"),
-    threshold: Optional[float] = typer.Option(None, "--threshold", "-t", help="Detection threshold (method-specific; sensible default per method). For 'advanced' this is sensitivity."),
-    min_change_pct: float = typer.Option(2.0, "--min-change-pct", help="Min changed pixel %% for framediff method"),
-    codec: Optional[str] = typer.Option(None, "--codec", "-c", help="Output codec profile (e.g. h264_high, h265_main10, prores_422). Default x264."),
-    crf: int = typer.Option(18, "--crf", help="Encode quality, lower = better (ignored for prores)"),
-    mpdecimate_hi: int = typer.Option(768, "--mp-hi", help="mpdecimate per-block SAD 'changed' threshold (ffmpeg only). Lower = more sensitive."),
-    mpdecimate_lo: int = typer.Option(320, "--mp-lo", help="mpdecimate per-block SAD 'unchanged' threshold (ffmpeg only)"),
-    ssim_window: int = typer.Option(3, "--ssim-window", help="SSIM: number of recent kept frames to compare against. 1 = anchor only, higher = anti-drift."),
-    no_cadence_gate: bool = typer.Option(False, "--no-cadence-gate", help="Disable cadence-gating in advanced method (keep all signal positives)"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Analyze only, report removals, write no output (ssim/framediff/advanced)"),
-    export_frames: Optional[Path] = typer.Option(None, "--export-frames", help="Write kept/removed frame ranges to a CSV (ssim/framediff/advanced)"),
+    aggressive: bool = typer.Option(False, "--aggressive", help="Remove more frames (best for clean animation)"),
+    gentle: bool = typer.Option(False, "--gentle", help="Remove fewer frames, safest (best for grainy/live-action)"),
+    codec: Optional[str] = typer.Option(None, "--codec", "-c", help="Output codec (e.g. h264_high, h265_main10). Default x264."),
+    crf: int = typer.Option(18, "--crf", help="Quality (lower = better)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview what would be removed, write no output"),
+    export_frames: Optional[Path] = typer.Option(None, "--export-frames", help="Write kept/removed frame ranges to CSV"),
     list_methods: bool = typer.Option(False, "--list-methods", help="List available dedup methods"),
 ) -> None:
-    """Remove duplicate / dead frames from a video.
+    """Remove duplicate frames from video.
 
-    Methods: ffmpeg (mpdecimate, no deps), ssim (OpenCV, quality-aware),
-    framediff (OpenCV, pixel motion), advanced (OpenCV, region grid + optical
-    flow + edges + cadence). Output preserves audio, color and bit depth.
+    Auto-detects the best method and applies sensible presets.
+    No configuration needed — just point at a video.
+
+    Presets:
+      (default)  Balanced
+      --aggressive  Removes more, slightly riskier (clean animation)
+      --gentle      Removes fewer, safest (grainy or live-action)
+
+    Examples:
+      amverge dedup video.mp4
+      amverge dedup video.mp4 --aggressive
+      amverge dedup video.mp4 --gentle --dry-run
     """
     if list_methods:
         banner("dedup methods")
@@ -51,34 +59,29 @@ def dedup(
         fail(f"File not found: {input}")
         raise typer.Exit(1)
 
-    if method not in DEDUP_METHODS:
-        fail(f"Unknown method '{method}'. Valid: {', '.join(DEDUP_METHODS.keys())}")
-        raise typer.Exit(1)
-
-    if (dry_run or export_frames) and method == "ffmpeg":
-        fail("--dry-run and --export-frames need ssim, framediff or advanced (ffmpeg can't enumerate frames).")
-        raise typer.Exit(1)
-
     if output is None:
-        output = input.parent / f"{input.stem}_deduped{input.suffix}"
+        suffix = "_dry" if dry_run else "_deduped"
+        output = input.parent / f"{input.stem}{suffix}{input.suffix}"
 
-    if threshold is None:
-        threshold = DEFAULT_THRESHOLD.get(method, 0.0)
+    if aggressive and gentle:
+        fail("Pick --aggressive or --gentle, not both.")
+        raise typer.Exit(1)
 
-    entry = DEDUP_METHODS[method]
+    if aggressive:
+        preset = "aggressive"
+    elif gentle:
+        preset = "gentle"
+    else:
+        preset = "normal"
+
+    method = auto_detect_method()
+    method_name = DEDUP_METHODS[method]["name"]
 
     banner("dedup")
-    console.print(f"  Method: [accent]{entry['name']}[/accent]")
-    console.print(f"  {'Sensitivity' if method == 'advanced' else 'Threshold'}: [accent]{threshold}[/accent]")
-    if method == "framediff":
-        console.print(f"  Min change: [accent]{min_change_pct}%[/accent]")
-    if method == "ffmpeg":
-        console.print(f"  mpdecimate: [accent]hi={mpdecimate_hi}[/accent] [accent]lo={mpdecimate_lo}[/accent]")
-    if method == "ssim":
-        console.print(f"  SSIM window: [accent]{ssim_window}[/accent]")
-    if method == "advanced" and not no_cadence_gate:
-        console.print("  Cadence gate: [accent]on[/accent]")
-    console.print(f"  Codec: [accent]{codec or 'x264 (default)'}[/accent]")
+    console.print(f"  Method: [accent]{method_name}[/accent] (auto-detected)")
+    console.print(f"  Preset: [accent]{preset}[/accent] — {PRESET_LABELS[preset]}")
+    if codec:
+        console.print(f"  Codec: [accent]{codec}[/accent]")
     console.print(f"  Input:  [dim]{input}[/dim]")
     if dry_run:
         console.print("  Mode:   [warn]dry run (no output)[/warn]")
@@ -86,6 +89,10 @@ def dedup(
         console.print(f"  Output: [dim]{output}[/dim]")
     if export_frames:
         console.print(f"  Frames CSV: [dim]{export_frames}[/dim]")
+
+    if (dry_run or export_frames) and method == "ffmpeg":
+        fail("Dry-run and frame export require OpenCV.\n  pip install amverge[dedup]")
+        raise typer.Exit(1)
 
     stats = None
     with make_progress() as progress:
@@ -95,21 +102,15 @@ def dedup(
             progress.update(task_id, completed=pct, description=msg)
 
         try:
-            _, stats = run_dedup(
+            _, stats = run_dedup_simple(
                 str(input.resolve()),
                 str(output.resolve()),
-                method=method,
-                threshold=threshold,
-                min_change_pct=min_change_pct,
+                preset=preset,
                 codec=codec,
                 crf=crf,
                 dry_run=dry_run,
                 export_frames=str(export_frames.resolve()) if export_frames else None,
                 progress_cb=_progress_cb,
-                hi=mpdecimate_hi,
-                lo=mpdecimate_lo,
-                ssim_window=ssim_window,
-                cadence_gate=not no_cadence_gate,
             )
         except Exception as e:
             fail(str(e))
@@ -124,7 +125,7 @@ def dedup(
         )
         if "cadence" in stats and stats["cadence"]:
             console.print(
-                f"  Cadence: every [accent]{stats['cadence']}[/accent] frames "
+                f"  Animation cadence: every [accent]{stats['cadence']}[/accent] frames "
                 f"(confidence [accent]{stats['confidence']}[/accent])"
             )
     if export_frames:

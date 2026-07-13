@@ -197,6 +197,10 @@ from .core.dedup import (
     SSIM_AVAILABLE,
     FRAMEDIFF_AVAILABLE,
     ADVANCED_AVAILABLE,
+    run_dedup_simple,
+    auto_detect_method,
+    PRESETS,
+    PRESET_LABELS,
 )
 
 # -- Interpolation --------------------------------------------------------
@@ -298,6 +302,7 @@ __all__ = [
     # Dedup
     "run_dedup", "dedup_ffmpeg", "dedup_ssim", "dedup_framediff",
     "dedup_advanced", "detect_cadence", "export_frame_list", "DEDUP_METHODS",
+    "run_dedup_simple", "auto_detect_method", "PRESETS", "PRESET_LABELS",
     "SSIM_AVAILABLE", "FRAMEDIFF_AVAILABLE", "ADVANCED_AVAILABLE",
     # Interpolation
     "flowframes_available", "run_flowframes", "cancel_flowframes",
