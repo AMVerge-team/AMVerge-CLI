@@ -18,6 +18,7 @@ def dedup(
     input: Optional[Path] = typer.Argument(None, help="Input video file"),
     output: Path = typer.Option(None, "--output", "-o", help="Output video file"),
     aggressive: bool = typer.Option(False, "--aggressive", help="Remove more frames (best for clean animation)"),
+    anime: bool = typer.Option(False, "--anime", help="Optimized for animation (on-twos/threes cadence, flat colors)"),
     gentle: bool = typer.Option(False, "--gentle", help="Remove fewer frames, safest (best for grainy/live-action)"),
     codec: Optional[str] = typer.Option(None, "--codec", "-c", help="Output codec (e.g. h264_high, h265_main10). Default x264."),
     crf: int = typer.Option(18, "--crf", help="Quality (lower = better)"),
@@ -31,12 +32,14 @@ def dedup(
     No configuration needed — just point at a video.
 
     Presets:
-      (default)  Balanced
+      (default)   Balanced
+      --anime       Optimized for animation (on-twos/threes cadence)
       --aggressive  Removes more, slightly riskier (clean animation)
       --gentle      Removes fewer, safest (grainy or live-action)
 
     Examples:
       amverge dedup video.mp4
+      amverge dedup video.mp4 --anime
       amverge dedup video.mp4 --aggressive
       amverge dedup video.mp4 --gentle --dry-run
     """
@@ -63,12 +66,14 @@ def dedup(
         suffix = "_dry" if dry_run else "_deduped"
         output = input.parent / f"{input.stem}{suffix}{input.suffix}"
 
-    if aggressive and gentle:
-        fail("Pick --aggressive or --gentle, not both.")
+    if sum([aggressive, anime, gentle]) > 1:
+        fail("Pick one preset: --aggressive, --anime, or --gentle.")
         raise typer.Exit(1)
 
     if aggressive:
         preset = "aggressive"
+    elif anime:
+        preset = "anime"
     elif gentle:
         preset = "gentle"
     else:

@@ -15,6 +15,12 @@ PRESETS: Dict[str, Dict[str, dict]] = {
         "framediff":{"threshold": 5.0, "min_change_pct": 1.0},
         "advanced": {"threshold": 0.6, "cadence_gate": True},
     },
+    "anime": {
+        "ffmpeg":   {"threshold": 0.28, "hi": 550, "lo": 250},
+        "ssim":     {"threshold": 0.992, "ssim_window": 4},
+        "framediff":{"threshold": 7.0, "min_change_pct": 1.5},
+        "advanced": {"threshold": 0.8, "cadence_gate": True},
+    },
     "normal": {
         "ffmpeg":   {"threshold": 0.33, "hi": 768, "lo": 320},
         "ssim":     {"threshold": 0.987, "ssim_window": 3},
@@ -30,9 +36,10 @@ PRESETS: Dict[str, Dict[str, dict]] = {
 }
 
 PRESET_LABELS = {
-    "aggressive": "Aggressive — removes more frames, slightly riskier (best for clean animation)",
-    "normal":     "Normal — balanced, safe defaults",
-    "gentle":      "Gentle — removes fewer frames, safest (best for grainy or live-action)",
+    "aggressive": "Aggressive — removes more frames, slightly riskier (clean animation)",
+    "anime":      "Anime — optimized for animation (on-twos/threes cadence, flat colors)",
+    "normal":     "Normal — balanced, safe defaults for general use",
+    "gentle":     "Gentle — removes fewer frames, safest (grainy or live-action)",
 }
 
 
