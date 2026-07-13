@@ -5,7 +5,9 @@ from typing import Optional
 
 import typer
 
-from ...ui import banner, console, make_progress, ok, fail
+from ...ui import banner, console, err, ok, fail
+from ...core.infra.diagnostics import get_gpu_info
+from ...core.upscaling.monitor import SystemMonitor, format_eta
 from ...core.dedup import (
     DEDUP_METHODS,
     run_dedup_simple,
@@ -25,6 +27,7 @@ def dedup(
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview what would be removed, write no output"),
     export_frames: Optional[Path] = typer.Option(None, "--export-frames", help="Write kept/removed frame ranges to CSV"),
     list_methods: bool = typer.Option(False, "--list-methods", help="List available dedup methods"),
+    no_monitor: bool = typer.Option(False, "--no-monitor", help="Disable system monitor during processing"),
 ) -> None:
     """Remove duplicate frames from video.
 
@@ -99,27 +102,97 @@ def dedup(
         fail("Dry-run and frame export require OpenCV.\n  pip install amverge[dedup]")
         raise typer.Exit(1)
 
-    stats = None
-    with make_progress() as progress:
-        task_id = progress.add_task("Dedup...", total=100)
+    gpu_info = get_gpu_info()
+    if gpu_info.get("cuda_available"):
+        vram = gpu_info.get("vram_gb", 0)
+        console.print(f"  GPU: [accent]{gpu_info.get('gpu_name', 'GPU')}[/accent]  "
+                      f"VRAM: [accent]{vram:.1f} GB[/accent]")
 
-        def _progress_cb(pct, msg):
-            progress.update(task_id, completed=pct, description=msg)
+    monitor = SystemMonitor(enabled=not no_monitor)
+    monitor.stats["gpu_name"] = gpu_info.get("gpu_name", "GPU")
+    monitor.start()
 
-        try:
-            _, stats = run_dedup_simple(
-                str(input.resolve()),
-                str(output.resolve()),
-                preset=preset,
-                codec=codec,
-                crf=crf,
-                dry_run=dry_run,
-                export_frames=str(export_frames.resolve()) if export_frames else None,
-                progress_cb=_progress_cb,
+    def _update_display():
+        from rich.live import Live
+        from rich.panel import Panel
+        from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+        from rich.console import Group
+
+        if not hasattr(_update_display, "live"):
+            progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
             )
-        except Exception as e:
-            fail(str(e))
-            raise typer.Exit(1)
+            _update_display.task = progress.add_task("Dedup...", total=100)
+            _update_display.progress = progress
+            _update_display.live = Live(progress, console=err, refresh_per_second=4, transient=True)
+            _update_display.live.start()
+
+        s = monitor.stats
+        _update_display.progress.update(_update_display.task, completed=s["pct"], description=s["msg"])
+
+        if monitor.enabled and hasattr(_update_display, "live"):
+            lines = []
+            gpu_parts = []
+            if s.get("gpu_util") is not None:
+                gpu_parts.append(f"GPU {s['gpu_util']:.0f}%")
+            if s.get("gpu_temp") is not None:
+                gpu_parts.append(f"{s['gpu_temp']:.0f}°C")
+            if s.get("vram_used_mb") is not None and s.get("vram_total_mb"):
+                gpu_parts.append(f"VRAM {s['vram_used_mb']:.0f}/{s['vram_total_mb']:.0f} MB")
+            if gpu_parts:
+                lines.append(f"  {s.get('gpu_name', 'GPU')}: {' | '.join(gpu_parts)}")
+
+            cpu_parts = []
+            if s.get("cpu_percent") is not None:
+                cpu_parts.append(f"CPU {s['cpu_percent']:.0f}%")
+            if s.get("ram_used_gb") is not None and s.get("ram_total_gb"):
+                cpu_parts.append(f"RAM {s['ram_used_gb']:.1f}/{s['ram_total_gb']:.1f} GB")
+            if cpu_parts:
+                lines.append(f"  {' | '.join(cpu_parts)}")
+
+            status_parts = []
+            if s.get("eta_s") is not None and s["eta_s"] != float("inf"):
+                status_parts.append(f"ETA {format_eta(s['eta_s'])}")
+            if s.get("elapsed_s"):
+                status_parts.append(f"elapsed {format_eta(s['elapsed_s'])}")
+            if status_parts:
+                lines.append(f"  {' | '.join(status_parts)}")
+
+            content = [_update_display.progress]
+            if lines:
+                content.append(Panel("\n".join(lines), border_style="#22c55e", padding=(0, 1)))
+            _update_display.live.update(Group(*content))
+
+    def _progress_cb(pct, msg):
+        monitor.progress_callback(pct, msg)
+        _update_display()
+
+    stats = None
+    try:
+        _, stats = run_dedup_simple(
+            str(input.resolve()),
+            str(output.resolve()),
+            preset=preset,
+            codec=codec,
+            crf=crf,
+            dry_run=dry_run,
+            export_frames=str(export_frames.resolve()) if export_frames else None,
+            progress_cb=_progress_cb,
+        )
+    except Exception as e:
+        monitor.stop()
+        if hasattr(_update_display, "live"):
+            _update_display.live.stop()
+        fail(str(e))
+        raise typer.Exit(1)
+    finally:
+        if hasattr(_update_display, "live"):
+            _update_display.live.stop()
+        monitor.stop()
 
     if stats:
         console.print(
@@ -136,6 +209,6 @@ def dedup(
     if export_frames:
         ok(f"Frame list: {export_frames}")
     if dry_run:
-        ok("Dry run complete (no output written)")
+        ok(f"Dry run complete (no output written)  ({format_eta(monitor.stats.get('elapsed_s', 0))})")
     else:
-        ok(f"Saved: {output}")
+        ok(f"Saved: {output}  ({format_eta(monitor.stats.get('elapsed_s', 0))})")
