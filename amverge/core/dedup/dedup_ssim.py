@@ -39,16 +39,21 @@ if SSIM_AVAILABLE:
 def analyze_ssim(
     video_path: str,
     threshold: float = 0.987,
+    window_size: int = 3,
     progress_cb: Optional[Callable[[int, str], None]] = None,
     progress_hi: int = 95,
 ) -> Tuple[List[int], int, float]:
     """Return (keep_indices, frames_in, fps). Keeps a frame when its windowed
-    SSIM against the last kept frame is below threshold. Aborts on VFR sources
-    whose decoded count diverges from the container count (indices misalign)."""
+    SSIM against all of the last ``window_size`` kept frames is below threshold.
+    This prevents cumulative drift where small differences stack across distant
+    frames. Aborts on VFR sources whose decoded count diverges from the
+    container count (indices misalign)."""
     if not SSIM_AVAILABLE:
         raise ImportError(
             "SSIM dedup requires opencv. Run: pip install amverge[dedup]"
         )
+
+    window = max(1, min(window_size, 100))
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -62,7 +67,7 @@ def analyze_ssim(
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if scale < 1.0:
             gray = cv2.resize(gray, None, fx=scale, fy=scale,
-                              interpolation=cv2.INTER_AREA)
+                               interpolation=cv2.INTER_AREA)
         return gray
 
     success, frame = cap.read()
@@ -71,7 +76,7 @@ def analyze_ssim(
         raise RuntimeError("No frames in video")
 
     keep_indices: List[int] = [0]
-    prev_gray = _prep(frame)
+    recent_gray: List[np.ndarray] = [_prep(frame)]
     frame_idx = 0
     last_pct = -1
 
@@ -82,9 +87,20 @@ def analyze_ssim(
         frame_idx += 1
 
         curr_gray = _prep(frame)
-        if _windowed_ssim(prev_gray, curr_gray) < threshold:
+        similar_to_all = True
+        for prev in recent_gray[-window:]:
+            if _windowed_ssim(prev, curr_gray) < threshold:
+                similar_to_all = False
+                break
+
+        if not similar_to_all:
             keep_indices.append(frame_idx)
-            prev_gray = curr_gray
+            recent_gray.append(curr_gray)
+        else:
+            recent_gray.append(curr_gray)
+
+        if len(recent_gray) > window:
+            recent_gray = recent_gray[-window:]
 
         if progress_cb:
             pct = min(progress_hi - 1, int((frame_idx / max(1, total_frames - 1)) * progress_hi))
@@ -121,7 +137,7 @@ def dedup_ssim(
     Returns:
         (output_path, stats) with frames_in/out/removed/pct_removed.
     """
-    keep_indices, frames_in, _ = analyze_ssim(video_path, threshold, progress_cb)
+    keep_indices, frames_in, _ = analyze_ssim(video_path, threshold, window_size, progress_cb)
 
     if progress_cb:
         progress_cb(95, "Encoding output...")

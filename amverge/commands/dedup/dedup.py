@@ -18,6 +18,10 @@ def dedup(
     min_change_pct: float = typer.Option(2.0, "--min-change-pct", help="Min changed pixel %% for framediff method"),
     codec: Optional[str] = typer.Option(None, "--codec", "-c", help="Output codec profile (e.g. h264_high, h265_main10, prores_422). Default x264."),
     crf: int = typer.Option(18, "--crf", help="Encode quality, lower = better (ignored for prores)"),
+    mpdecimate_hi: int = typer.Option(768, "--mp-hi", help="mpdecimate per-block SAD 'changed' threshold (ffmpeg only). Lower = more sensitive."),
+    mpdecimate_lo: int = typer.Option(320, "--mp-lo", help="mpdecimate per-block SAD 'unchanged' threshold (ffmpeg only)"),
+    ssim_window: int = typer.Option(3, "--ssim-window", help="SSIM: number of recent kept frames to compare against. 1 = anchor only, higher = anti-drift."),
+    no_cadence_gate: bool = typer.Option(False, "--no-cadence-gate", help="Disable cadence-gating in advanced method (keep all signal positives)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Analyze only, report removals, write no output (ssim/framediff/advanced)"),
     export_frames: Optional[Path] = typer.Option(None, "--export-frames", help="Write kept/removed frame ranges to a CSV (ssim/framediff/advanced)"),
     list_methods: bool = typer.Option(False, "--list-methods", help="List available dedup methods"),
@@ -68,6 +72,12 @@ def dedup(
     console.print(f"  {'Sensitivity' if method == 'advanced' else 'Threshold'}: [accent]{threshold}[/accent]")
     if method == "framediff":
         console.print(f"  Min change: [accent]{min_change_pct}%[/accent]")
+    if method == "ffmpeg":
+        console.print(f"  mpdecimate: [accent]hi={mpdecimate_hi}[/accent] [accent]lo={mpdecimate_lo}[/accent]")
+    if method == "ssim":
+        console.print(f"  SSIM window: [accent]{ssim_window}[/accent]")
+    if method == "advanced" and not no_cadence_gate:
+        console.print("  Cadence gate: [accent]on[/accent]")
     console.print(f"  Codec: [accent]{codec or 'x264 (default)'}[/accent]")
     console.print(f"  Input:  [dim]{input}[/dim]")
     if dry_run:
@@ -96,6 +106,10 @@ def dedup(
                 dry_run=dry_run,
                 export_frames=str(export_frames.resolve()) if export_frames else None,
                 progress_cb=_progress_cb,
+                hi=mpdecimate_hi,
+                lo=mpdecimate_lo,
+                ssim_window=ssim_window,
+                cadence_gate=not no_cadence_gate,
             )
         except Exception as e:
             fail(str(e))

@@ -19,6 +19,8 @@ def dedup_ffmpeg(
     video_path: str,
     output_path: str,
     threshold: float = 0.33,
+    hi: int = 768,
+    lo: int = 320,
     progress_cb: Optional[Callable[[int, str], None]] = None,
     codec: Optional[str] = None,
     crf: int = 18,
@@ -31,6 +33,9 @@ def dedup_ffmpeg(
         threshold: mpdecimate frac (0-1) - fraction of 8x8 blocks that must
             exceed the change threshold for a frame to be kept. Lower drops
             more; higher keeps more. Default 0.33.
+        hi: Per-block SAD threshold for "changed" (0-32768). Default 768.
+            Lower = more sensitive to small changes (fewer false-keeps).
+        lo: Per-block SAD threshold for "unchanged". Default 320.
         progress_cb: Optional (pct, msg) callback.
         codec: Codec profile key (e.g. ``h265_main10``) or None for x264.
         crf: Quality (lower = better). Default 18.
@@ -51,7 +56,7 @@ def dedup_ffmpeg(
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
         "-progress", "pipe:1", "-nostats",
         "-i", video_path,
-        "-vf", f"{pre}mpdecimate=hi=768:lo=320:frac={frac}",
+        "-vf", f"{pre}mpdecimate=hi={hi}:lo={lo}:frac={frac}",
         "-fps_mode", "vfr",
         *video_args,
         "-c:a", "copy",

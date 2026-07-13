@@ -18,6 +18,10 @@ def run_dedup(
     dry_run: bool = False,
     export_frames: Optional[str] = None,
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    hi: int = 768,
+    lo: int = 320,
+    ssim_window: int = 3,
+    cadence_gate: bool = True,
 ) -> Tuple[Optional[str], dict]:
     """Unified dedup entry point.
 
@@ -25,6 +29,12 @@ def run_dedup(
     only, no encode) and ``export_frames`` (write kept/removed ranges to CSV).
     The ffmpeg (mpdecimate) method decides frames inside the native filter and
     cannot enumerate them, so it rejects those options.
+
+    Args:
+        hi, lo: mpdecimate per-block SAD thresholds (ffmpeg method only).
+        ssim_window: number of recent kept frames to compare against (ssim only).
+        cadence_gate: remove false-keeps when cadence confidently detected
+            (advanced method only).
 
     Returns (output_path, stats); output_path is None on a dry run.
     """
@@ -39,12 +49,13 @@ def run_dedup(
                 "--export-frames."
             )
         from .dedup_ffmpeg import dedup_ffmpeg
-        return dedup_ffmpeg(video_path, output_path, threshold, progress_cb,
-                            codec=codec, crf=crf)
+        return dedup_ffmpeg(video_path, output_path, threshold, hi, lo,
+                            progress_cb, codec=codec, crf=crf)
 
     if method == "ssim":
         from .dedup_ssim import analyze_ssim
-        keep, frames_in, fps = analyze_ssim(video_path, threshold, progress_cb)
+        keep, frames_in, fps = analyze_ssim(
+            video_path, threshold, window_size=ssim_window, progress_cb=progress_cb)
         cadence = {}
     elif method == "framediff":
         from .dedup_framediff import analyze_framediff
@@ -54,7 +65,7 @@ def run_dedup(
     elif method == "advanced":
         from .dedup_advanced import analyze_advanced
         keep, frames_in, fps, cadence = analyze_advanced(
-            video_path, threshold, progress_cb)
+            video_path, threshold, cadence_gate=cadence_gate, progress_cb=progress_cb)
     else:
         raise ValueError(f"Unknown dedup method '{method}'")
 

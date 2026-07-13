@@ -1,0 +1,474 @@
+================================================================================
+DEDUP — AMVerge CLI  Frame-Deduplication Architecture (Developer Reference)
+================================================================================
+
+Purpose: remove duplicate/near-duplicate/dead frames from video while
+preserving audio, color metadata, and source bit depth.
+
+Four analysis methods, one shared encoding pipeline. Three are "analyze then
+encode" (decode frames, decide which to keep, re-encode selected) and one is
+"single-pass" (FFmpeg's native mpdecimate filter decides frames internally
+during encode).
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+    CLI (commands/dedup/dedup.py)
+     |
+     v
+    dispatch.run_dedup()          <-- unified entry, routes by method string
+     |
+     +---- method == "ffmpeg" ---> dedup_ffmpeg()   [single-pass, no analysis]
+     |                              mpdecimate=hi=768:lo=320:frac=X
+     |                              encodes directly, VFR, audio copy
+     |
+     +---- method == "ssim" -----> analyze_ssim()   [analysis phase]
+     |                              windowed SSIM, grayscale, downscaled to 640px
+     |                              keeps frame when SSIM < threshold (default 0.987)
+     |
+     +---- method == "framediff" -> analyze_framediff() [analysis phase]
+     |                              pixel-diff % vs last kept, adaptive threshold
+     |                              samples noise floor from first 30 frames
+     |
+     +---- method == "advanced" --> analyze_advanced() [analysis phase]
+     |                              four signals: region grid + LK flow + edges + hist
+     |                              any one signal fires -> keep frame
+     |
+     v                          (analysis methods return keep_indices list)
+     encode_selected()           <-- re-encode via ffmpeg select filter
+                                      filter_complex_script (avoids cmdline limit)
+                                      VFR, audio copy, color preservation
+
+
+================================================================================
+FILE MAP
+================================================================================
+
+    amverge/core/dedup/
+    |
+    +-- __init__.py            public exports, DEDUP_METHODS dict (registry)
+    +-- dispatch.py            run_dedup() - router, threshold defaults
+    +-- dedup_ffmpeg.py        method 1: mpdecimate native filter
+    +-- dedup_ssim.py          method 2: windowed SSIM analysis
+    +-- dedup_framediff.py     method 3: pixel-diff + noise-floor analysis
+    +-- dedup_advanced.py      method 4: multi-signal analysis + cadence detect
+    +-- _encode.py             shared: encode_selected(), probe helpers,
+    |                           build_video_args(), run_ffmpeg_progress(),
+    |                           export_frame_list()
+
+    amverge/commands/dedup/
+    +-- dedup.py               Typer CLI: amverge dedup [options]
+
+    Registered in cli.py line 63, exported from amverge/__init__.py.
+
+
+================================================================================
+METHOD 1: ffmpeg (mpdecimate)  [dedup_ffmpeg.py]
+================================================================================
+
+What it does:
+    Single FFmpeg invocation. Passes video through the mpdecimate filter, which
+    drops frames that are "too similar" to the previous frame.
+
+How mpdecimate works:
+    mpdecimate divides each frame into 8x8 blocks (like a macroblock grid).
+    For every block, it computes the sum of absolute differences (SAD) against
+    the corresponding block in the previous frame. If the SAD exceeds `hi`
+    (768), that block is considered "changed." Frame is kept if the fraction of
+    changed blocks exceeds `frac`.
+
+Parameters (hardcoded):
+    hi=768       - SAD threshold per 8x8 block for "changed" (0-32768)
+    lo=320       - SAD threshold per 8x8 block for "unchanged" (unused?)
+    frac=X       - fraction of blocks that must be "changed" to keep the frame
+                   X = user-provided threshold, default 0.33
+                   Lower frac = keeps more frames (less aggressive)
+                   Higher frac = keeps fewer frames (more aggressive)
+
+Pipeline:
+    ffmpeg -i in.mp4
+        -vf mpdecimate=hi=768:lo=320:frac=0.33
+        -fps_mode vfr            <-- output is VFR: dropped frames create gaps
+        -c:v libx264 -crf 18     <-- or user-chosen codec profile
+        -c:a copy                <-- audio stream-copied (keeps source audio)
+        -movflags +faststart
+        out.mp4
+
+Progress monitoring:
+    -progress pipe:1 writes "out_time_us=..." lines to stdout.
+    run_ffmpeg_progress() parses these, maps time to percentage using source
+    duration from ffprobe. A watchdog timer kills ffmpeg if it stalls >7200s.
+
+Strengths:
+    - No dependencies beyond ffmpeg (already required by AMVerge).
+    - Single-pass: no intermediate analysis, no huge frame lists.
+    - Handles VFR sources naturally (ffmpeg works in time domain).
+    - Orders of magnitude faster than Python-based analysis for long videos.
+
+Weaknesses:
+    - Cannot enumerate which frames were dropped (no --dry-run, no --export-frames).
+    - hi/lo are hardcoded at 768/320, not tunable via CLI.
+    - VFR output may cause issues in editors that expect CFR timelines.
+    - Block-level SAD is crude — lighting flicker or camera shake can trigger
+      false negatives even though the "content" is the same scene.
+
+When to use:
+    Quick dedup of talking-head / screen-recording footage where duplicates
+    are obvious and you just want them gone. Also the fallback for VFR sources
+    (the OpenCV methods reject VFR).
+
+
+================================================================================
+METHOD 2: ssim (Windowed Structural Similarity)  [dedup_ssim.py]
+================================================================================
+
+What it does:
+    Decodes every frame, computes windowed SSIM against the last kept frame.
+    A frame is kept if SSIM < threshold (meaning they are sufficiently
+    different). Works on grayscale downscaled to max 640px width.
+
+Analysis pipeline (analyze_ssim):
+    1. Open video with cv2.VideoCapture.
+    2. Keep frame 0 unconditionally.
+    3. For each subsequent frame:
+       a. Convert BGR->GRAY, downscale to max 640px width (INTER_AREA).
+       b. Compute windowed SSIM(prev_kept, current).
+       c. If SSIM < threshold: keep frame, set as new prev_kept.
+       d. Otherwise: frame is dropped.
+    4. Verify decoded frame count matches container (ffprobe). If >1% mismatch,
+       raise RuntimeError (source is likely VFR, indices would misalign).
+
+SSIM implementation (_windowed_ssim):
+    Uses Wang-Bovik formula with Gaussian kernel (11x11, sigma=1.5).
+    Works pixel-by-pixel on the luminance (grayscale) channel.
+    C1 = (0.01*255)^2, C2 = (0.03*255)^2 (standard SSIM constants).
+
+    SSIM map = ((2*mu1*mu2 + C1) * (2*sigma12 + C2)) /
+               ((mu1^2 + mu2^2 + C1) * (sigma1^2 + sigma2^2 + C2))
+
+    Returns mean over the entire map -> scalar 0..1 (1.0 = identical).
+
+Encoding phase (encode_selected):
+    keep_indices is converted to an ffmpeg select expression:
+        example for indices [0,5,6,7,10]: "eq(n\,0)+between(n\,5\,7)+eq(n\,10)"
+    Writes this to a temp file, passes via -filter_complex_script.
+    This avoids the Windows 32767-char command-line limit for large frame lists.
+
+    Encoder: libx264 (default) or user-chosen profile. VFR output (-fps_mode vfr).
+    Audio: -c:a copy.
+    Color: get_color_args() injects source primaries/transfer/matrix/range.
+
+Strengths:
+    - Perceptually meaningful (SSIM correlates with human vision).
+    - Quality-aware: compression artifacts don't fool it as easily as pixel-diff.
+    - Can enumerate frames for dry-run and CSV export.
+
+Weaknesses:
+    - Slow: GaussianBlur on every pixel pair for every frame.
+    - Requires OpenCV (pip install amverge[dedup]).
+    - Must decode entire video into memory (frame by frame, not all at once).
+
+When to use:
+    When you need frame-level control (--dry-run, --export-frames), or when
+    mpdecimate's block-level SAD is too crude for your content.
+
+
+================================================================================
+METHOD 3: framediff (Pixel-Difference Motion)  [dedup_framediff.py]
+================================================================================
+
+What it does:
+    Counts pixels that differ from the last kept frame by more than `threshold`
+    (default 10.0, in 0-255 grayscale units). Keeps frame if the percentage of
+    changed pixels exceeds a dynamic noise-floor-based minimum.
+
+Key innovation — adaptive threshold:
+    Before the main pass, the analyzer samples the first 30 frames to establish
+    a noise floor. For each pair, it computes:
+        changed_pct = (pixels_with_diff > threshold) / total_pixels * 100
+    The median changed_pct across the sample becomes the noise_floor.
+    The actual cutoff = max(min_change_pct, noise_floor * 1.5).
+
+    This means on noisy/grainy sources, the threshold automatically raises so
+    that sensor noise doesn't get counted as motion. On clean sources, the
+    user-specified min_change_pct (default 2%) kicks in.
+
+Analysis pipeline (analyze_framediff):
+    Phase 1 — noise floor:
+        Read 30 frames, compute changed_pct for each consecutive pair.
+        Build median.
+
+    Phase 2 — main pass:
+        Re-open video. Keep frame 0. For each subsequent frame:
+        a. Convert BGR->GRAY, downscale to max 640px.
+        b. cv2.absdiff(prev_kept, current).
+        c. np.count_nonzero(diff > threshold).
+        d. If changed_pct > area_threshold_pct: keep.
+
+Strengths:
+    - Adaptive to content: auto-adjusts for noisy/grainy sources.
+    - Simple, fast: just absdiff + count_nonzero per frame.
+    - Good for anime/cartoon where large areas of flat color produce clear diffs.
+
+Weaknesses:
+    - Not perceptually aware: lighting flicker = pixel change = "motion".
+    - Threshold (10.0 grayscale units) may need tuning per content.
+    - Still requires OpenCV.
+
+When to use:
+    Clean video sources where motion detection is straightforward.
+    Fills the gap between mpdecimate (too crude) and SSIM (too slow).
+
+
+================================================================================
+METHOD 4: advanced (Multi-Signal Analysis)  [dedup_advanced.py]
+================================================================================
+
+What it does:
+    Combines four independent signals. A frame is KEPT if ANY signal fires.
+    Philosophy: "false-keep is cheaper than removing a real frame."
+
+The four signals:
+    1. Region grid max-mean-diff (4x4 grid) — catches localized motion that
+       global mean-diff would miss. Divides frame into 16 regions, computes
+       cv2.absdiff().mean() per region, takes the maximum across all regions.
+       This catches, e.g., a character's hand moving in one corner while the
+       rest of the frame is static.
+
+    2. Canny edge change percentage — catches line-art shifts and scene cuts.
+       Runs Canny(80,160) on both frames, counts pixels where edge maps differ,
+       as % of total pixels. Anime cuts where the line art changes entirely
+       produce huge edge-change percentages.
+
+    3. Sparse Lucas-Kanade optical flow — cheap alternative to dense Farneback.
+       Extracts ~200 goodFeaturesToTrack() corners from the previous frame,
+       tracks them with calcOpticalFlowPyrLK(). Median displacement of
+       successfully tracked points is the motion score. <5 tracked points = 0.
+       LK params: winSize=(15,15), maxLevel=2, criteria=(3,10,0.03).
+
+    4. Histogram correlation — robust to small misalignment (camera shake).
+       64-bin histogram, normalized, cv2.HISTCMP_CORREL.
+       Threshold: 0.999 (extremely tight — only fires on significant shifts).
+
+Signal evaluation order:
+    1. region > region_thr   -> keep
+    2. edge > edge_thr       -> keep
+    3. flow > motion_thr     -> keep
+    4. hist < hist_thr       -> keep
+    else: drop frame
+
+Threshold adaptation:
+    Like framediff, the analyzer samples the first 30 frames to establish
+    baselines for region mean-diff and edge change. Thresholds are set to
+    max(baseline * 1.8, floor) * sensitivity. Sensitivity (default 1.0) scales
+    all thresholds uniformly: higher = keeps more frames.
+
+Cadence detection (detect_cadence):
+    After analysis, the gaps between kept frame indices are tallied.
+    The most common gap is the "cadence" (e.g., 2 = on-twos, 3 = on-threes).
+    Confidence = (count of dominant gap) / (total gaps).
+    This is informational only — it does not gate the keep/drop decision.
+
+Strengths:
+    - Most accurate method. Four signals catch different types of change.
+    - Dead-frame aware: camera shake / lighting drift won't keep a real
+      duplicate because it won't trigger edge/region/hist signals.
+    - Cadence reporting useful for animation workflows.
+
+Weaknesses:
+    - Slowest method: LK optical flow + Canny edges + histogram per frame.
+    - Requires OpenCV.
+    - LK params, grid size, and histogram bins are hardcoded constants.
+    - Sensitivity parameter is abstract — "1.0" vs "1.5" has no intuitive
+      mapping to "aggressiveness."
+
+When to use:
+    When accuracy matters most. Animation with mixed cadence patterns,
+    grainy live-action footage, or content where you absolutely cannot afford
+    to lose a real frame.
+
+
+================================================================================
+SHARED ENCODE PIPELINE  [_encode.py]
+================================================================================
+
+encode_selected(video_path, output_path, keep_indices, ...):
+    Takes a list of frame indices to keep, re-encodes via ffmpeg.
+
+    Step 1: Build select expression.
+        Frame indices [0, 5, 6, 7, 12, 13] become:
+        "eq(n\,0)+between(n\,5\,7)+between(n\,12\,13)"
+
+    Step 2: Write to temp file (filter_complex_script).
+        On Windows, ffmpeg command-line args have a 32767-char limit.
+        For videos with thousands of kept frames, a select expression with
+        every index as eq(n\,XXXX) easily exceeds this. Writing the filter
+        graph to a temp file and passing it via -filter_complex_script
+        completely sidesteps the limit.
+
+    Step 3: Build ffmpeg command.
+        ffmpeg -i in.mp4
+          -filter_complex_script /tmp/select.txt   <-- select filter here
+          -map [v] -map 0:a?                       <-- video + optional audio
+          -c:v libx264 -crf 18 -preset fast         <-- or user codec profile
+          -c:a copy                                 <-- stream-copy audio
+          -fps_mode vfr                             <-- VFR output
+          -movflags +faststart
+          out.mp4
+
+    Why VFR:
+        If you drop frames from a CFR video and encode as CFR, the timeline
+        compresses (shorter duration) and audio goes out of sync.
+        VFR preserves the original timestamps of kept frames: duration stays
+        the same, audio stays in sync.
+
+    Interlaced handling:
+        yadif=0 is prepended to the filter chain for interlaced sources.
+        Mode 0 = output one frame per field (1:1), so frame indices stay aligned
+        with the non-deinterlaced timeline.
+
+    Color preservation:
+        get_color_args() probes the source and passes:
+        -color_primaries, -color_trc, -colorspace, -color_range
+        to the output encoder via -x264-params or native ffmpeg flags.
+
+build_video_args(codec, crf, is_10bit):
+    Maps user-friendly codec keys (h264_high, h265_main10, etc.) to ffmpeg
+    encoder arguments. Handles pixel format selection based on bit depth.
+    ProRes codecs skip -crf/-preset (not applicable). Uses CODEC_PROFILES
+    from codec_utils.py as the single source of truth.
+
+run_ffmpeg_progress(cmd, duration, progress_cb, lo, hi, label):
+    Spawns ffmpeg with -progress pipe:1 on stdout. Parses out_time_us=
+    lines to compute progress percentage. Maps linearly from 0..duration
+    into lo..hi range. Watchdog timer kills stalled ffmpeg after 7200s.
+
+
+================================================================================
+CLI INTERFACE  [commands/dedup/dedup.py]
+================================================================================
+
+    amverge dedup [-m METHOD] [-t THRESHOLD] [-c CODEC] [--dry-run]
+                  [--export-frames CSV] [--list-methods] INPUT [--output OUTPUT]
+
+    --method / -m:     ffmpeg | ssim | framediff | advanced  (default: ffmpeg)
+    --threshold / -t:  method-specific (ffmpeg default 0.33, ssim 0.987, etc.)
+    --codec / -c:      h264_high, h265_main10, prores_422, etc.
+    --crf:             quality (default 18, lower = better)
+    --dry-run:         analyze only, report stats (ssim/framediff/advanced only)
+    --export-frames:   write kept/removed ranges to CSV
+    --list-methods:    print method registry and exit
+
+
+================================================================================
+DESIGN ISSUES / KNOWN PROBLEMS
+================================================================================
+
+1. mpdecimate hi=768:lo=320 hardcoded
+   File: dedup_ffmpeg.py line 54
+   Only `frac` (mapped from --threshold) is tunable. hi and lo control the
+   per-block SAD thresholds for "changed" and "unchanged." These never change.
+   For extremely grainy footage, 768 may be too low (noise registers as change).
+   For very flat animation, 768 may be too high (real cuts miss the threshold).
+
+   Fix: expose --hi and --lo as CLI flags, or compute them adaptively from
+   sampled frame pairs.
+
+2. VFR output everywhere
+   Every method outputs VFR (-fps_mode vfr). While this preserves audio sync
+   and duration, VFR is problematic for:
+   - Video editors that expect CFR (Premiere, Resolve)
+   - Streaming platforms that sometimes reject VFR
+   - Frame-accurate operations downstream
+   The Nilas script uses setpts=N/FRAME_RATE/TB for CFR output. We don't
+   offer this because it compresses the timeline (shorter duration), which
+   requires re-timing audio (not just -c:a copy).
+
+   Fix: add --cfr flag that uses setpts + audio re-encode with speed adjustment.
+
+3. OpenCV methods reject VFR sources
+   analyze_ssim/framediff/advanced all decode via cv2.VideoCapture and compare
+   the decoded frame count against ffprobe's container count. If they differ by
+   >1%, it raises RuntimeError telling the user to use ffmpeg method instead.
+   This is correct behavior (frame indices would misalign) but forces users
+   onto mpdecimate which may not be what they want.
+
+4. No wizard integration
+   dedup is not in wizard.py's _WORKFLOW or _ALL_COMMANDS. Only accessible
+   via direct CLI. Every other feature (detect, export, merge, info, upscale,
+   interpolate, depth-map) is in the wizard.
+
+5. Sensitivity parameter (advanced method) is abstract
+   sensitivity=1.0 means "use computed baseline." sensitivity=2.0 means
+   "thresholds doubled." No intuitive mapping to "how aggressive should I be?"
+   A better UX would be presets like "light", "medium", "aggressive" that map
+   to sensitivity values internally.
+
+6. Cadence detection is passive
+   detect_cadence() reports the dominant gap between kept frames but does not
+   feed back into the keep/drop decision. Could be used to suppress short
+   on-twos bursts within an on-threes sequence (false positives).
+
+7. No GPU acceleration path
+   The deadframes branch history shows --gpu flag and CUDA Farneback optical
+   flow were implemented then stripped (commit 2a878f9 "strip GPU acceleration,
+   keep CPU-only for advanced method"). GPU was removed due to reliability
+   issues. All analysis runs on CPU.
+
+8. No SystemMonitor on CLI
+   Unlike the depth-map and interpolate commands, the dedup CLI does not use
+   SystemMonitor for live GPU/CPU/RAM stats. It uses a plain make_progress()
+   bar instead.
+
+9. ssym method: SSIM may be confused by the name
+   The ssim method computes windowed SSIM continuously against the last kept
+   frame (not pairwise consecutive frames). This means if frames A, B are
+   similar and B, C are similar, B gets dropped and C is compared to A.
+   This is correct for duplicate removal but differs from "SSIM between every
+   pair" that users might expect.
+
+================================================================================
+REGISTRY / MODULE STRUCTURE
+================================================================================
+
+    DEDUP_METHODS (in __init__.py):
+        Registry dict mapping method keys to metadata:
+            {"ffmpeg":   {"name": "mpdecimate (FFmpeg)",     "requires": None},
+             "ssim":     {"name": "SSIM (OpenCV)",           "requires": "opencv"},
+             "framediff":{"name": "FrameDiff (OpenCV)",      "requires": "opencv"},
+             "advanced": {"name": "Advanced (OpenCV)",       "requires": "opencv"}}
+
+    DEFAULT_THRESHOLD (in dispatch.py):
+        {"ffmpeg": 0.33, "ssim": 0.987, "framediff": 10.0, "advanced": 1.0}
+
+    Available flags (per method):
+        AVAILABLE = False
+        try: import cv2; AVAILABLE = True
+        except ImportError: pass
+
+    Each analysis function checks AVAILABLE and raises ImportError if missing:
+        "SSIM dedup requires opencv. Run: pip install amverge[dedup]"
+
+    Install:
+        pip install amverge[dedup]   # adds opencv-python-headless>=4.9
+
+
+================================================================================
+TYPICAL WORKFLOWS
+================================================================================
+
+A) Quick dedup, don't care about frame-by-frame control:
+    amverge dedup video.mp4
+
+B) Preview what would be removed before committing:
+    amverge dedup video.mp4 -m ssim --dry-run
+
+C) Export frame list for manual review:
+    amverge dedup video.mp4 -m framediff --export-frames frames.csv
+
+D) Animation with mixed cadence, high accuracy needed:
+    amverge dedup video.mp4 -m advanced -t 1.2
+
+E) Use a specific codec for output:
+    amverge dedup video.mp4 -c h265_main10 --crf 22

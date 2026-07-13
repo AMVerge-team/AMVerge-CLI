@@ -78,6 +78,7 @@ if ADVANCED_AVAILABLE:
 def analyze_advanced(
     video_path: str,
     sensitivity: float = 1.0,
+    cadence_gate: bool = True,
     progress_cb: Optional[Callable[[int, str], None]] = None,
     progress_hi: int = 95,
 ) -> Tuple[List[int], int, float, Dict[str, float]]:
@@ -89,6 +90,10 @@ def analyze_advanced(
     correlation (robust to small misalignment). A frame is KEPT when any signal
     fires - false-keep is cheaper than removing a real frame. Thresholds adapt
     to a per-clip noise floor; ``sensitivity`` scales them (higher = keeps more).
+
+    When ``cadence_gate`` is True and a dominant cadence (on-twos/on-threes) is
+    detected with confidence >= 0.7, frames breaking the pattern are removed
+    from the keep list (false-keeps overruled by rhythm).
 
     Returns (keep_indices, frames_in, fps, cadence_info).
     """
@@ -139,8 +144,8 @@ def analyze_advanced(
         s = sorted(xs)
         return s[len(s) // 2]
 
-    region_thr = max(3.0, _median(region_samples, 3.0) * 1.8) * sensitivity
-    edge_thr = max(0.5, _median(edge_samples, 0.5) * 1.8) * sensitivity
+    region_thr = max(3.0, _median(region_samples, 3.0) * 1.2) * sensitivity
+    edge_thr = max(0.5, _median(edge_samples, 0.5) * 1.2) * sensitivity
     motion_thr = 0.6 * sensitivity
     hist_thr = 0.9990
 
@@ -184,6 +189,17 @@ def analyze_advanced(
     cap.release()
     frames_in = frame_idx + 1
 
+    cadence_info = detect_cadence(keep_indices)
+
+    if cadence_gate and cadence_info["cadence"] >= 2 and cadence_info["confidence"] >= 0.7:
+        cadence_period = cadence_info["cadence"]
+        filtered = [keep_indices[0]]
+        for i in range(1, len(keep_indices)):
+            gap = keep_indices[i] - filtered[-1]
+            if gap == cadence_period or gap > cadence_period * 3:
+                filtered.append(keep_indices[i])
+        keep_indices = filtered
+
     probe_n = probe_frame_count(video_path)
     if probe_n > 0 and abs(probe_n - frames_in) > max(2, int(0.01 * probe_n)):
         raise RuntimeError(
@@ -198,6 +214,7 @@ def dedup_advanced(
     video_path: str,
     output_path: str,
     sensitivity: float = 1.0,
+    cadence_gate: bool = True,
     progress_cb: Optional[Callable[[int, str], None]] = None,
     codec: Optional[str] = None,
     crf: int = 18,
@@ -207,7 +224,7 @@ def dedup_advanced(
     Returns (output_path, stats); stats includes ``cadence`` and ``confidence``.
     """
     keep_indices, frames_in, _, cadence = analyze_advanced(
-        video_path, sensitivity, progress_cb
+        video_path, sensitivity, cadence_gate=cadence_gate, progress_cb=progress_cb
     )
 
     if progress_cb:
