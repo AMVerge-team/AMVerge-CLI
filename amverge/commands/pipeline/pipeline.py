@@ -400,6 +400,7 @@ def pipeline(
 
     temp_dir = input.parent
     current_input = str(input.resolve())
+    original_input = current_input
 
     total_steps = len(ops)
     for idx, op in enumerate(ops):
@@ -432,6 +433,13 @@ def pipeline(
 
         ok(f"{op}: {out_path}")
         current_input = out_path
+
+        if idx < total_steps - 1:
+            next_op = ops[idx + 1]
+            console.print()
+            if not confirm(f"Use this output for [accent]{next_op}[/]? (No = revert to original)", default=True):
+                current_input = original_input
+                console.print(f"  [muted]Reverted to original input for {next_op}.[/]")
 
     console.print(f"\n  [accent]{'─' * 40}[/]")
     ok(f"Pipeline complete: {current_input}")
