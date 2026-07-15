@@ -569,6 +569,64 @@ def _wizard_interpolate() -> None:
                 fail(str(e))
 
 
+def _wizard_deadframes() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    from .ui import banner, ok, fail, make_progress
+    from .core.deadframes import (
+        DEADFRAMES_REGISTRY, DEADFRAMES_AVAILABLE,
+        run_deadframes, is_weight_downloaded, download_weights,
+    )
+    banner("deadframes")
+    if not DEADFRAMES_AVAILABLE:
+        fail("OpenCV not installed.\n  pip install amverge[deadframes]")
+        return
+    input_video = _ask("video path", "video.mp4")
+    if not input_video or not Path(input_video).exists():
+        fail(f"File not found: {input_video}")
+        return
+    keys = list(DEADFRAMES_REGISTRY.keys())
+    method_key = _ask_choice("method key", keys, keys[0])
+    entry = DEADFRAMES_REGISTRY[method_key]
+    if "file" in entry and not is_weight_downloaded(method_key):
+        with make_progress() as progress:
+            task_id = progress.add_task(
+                f"Downloading {entry.get('name', method_key)}...", total=100
+            )
+            download_weights(
+                method_key,
+                progress_cb=lambda p, m: progress.update(
+                    task_id, completed=p, description=m
+                ),
+            )
+    keep_talking = _ask_yn("keep talking (subtle mouth motion)", False)
+    keep_camera = _ask_yn("keep camera pan/zoom/shake", False)
+    safe = _ask_yn("safe mode (--keep-talking --keep-camera)", False)
+    use_auto = safe or keep_talking or keep_camera or _ask_yn("auto-calibrate thresholds", False)
+    cadence = _ask_int("cadence (min consecutive dead to drop)", 3, 1, 30)
+    no_audio = _ask_yn("drop audio", False)
+    output = f"{Path(input_video).stem}_deadframes.mp4"
+    use_keep_talking = keep_talking or safe
+    use_keep_camera = keep_camera or safe
+    with make_progress() as progress:
+        task_id = progress.add_task("Removing dead frames...", total=100)
+        try:
+            result = run_deadframes(
+                input_path=input_video,
+                output_path=output,
+                keep_talking=use_keep_talking,
+                keep_camera=use_keep_camera,
+                auto=use_auto,
+                cadence=cadence,
+                no_audio=no_audio,
+                progress_cb=lambda p, m: progress.update(
+                    task_id, completed=p, description=m
+                ),
+            )
+            ok(f"Saved: {output} ({result['duration_after']:.1f}s)")
+        except Exception as e:
+            fail(str(e))
+
+
 def _wizard_depth_map() -> None:
     os.system("cls" if os.name == "nt" else "clear")
     from .ui import banner, console, err, ok, fail, make_progress
@@ -650,6 +708,7 @@ _WORKFLOW: list[tuple[str, str, object]] = [
     ("info",        "show video stream metadata",                _wizard_info),
     ("upscale",     "AI upscale video (ml, shader, onnx)",       _wizard_upscale),
     ("interpolate", "frame interpolation (RIFE or Flowframes)",  _wizard_interpolate),
+    ("deadframes", "remove static frames (deadframe remover)",     _wizard_deadframes),
     ("depth-map",   "generate depth maps from video",            _wizard_depth_map),
 ]
 
