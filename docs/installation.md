@@ -79,6 +79,19 @@ amverge interpolate episode.mp4 -f 2 -m rife4.25
 amverge interpolate episode.mp4 -f 4 -m rife4.25-heavy
 ```
 
+### Deadframe Removal
+
+```bash
+pip install amverge[deadframes]
+```
+
+Adds OpenCV for dead (static subject) frame detection and removal.
+
+```bash
+amverge deadframes episode.mp4
+amverge deadframes episode.mp4 --auto --safe
+```
+
 ### Flowframes (External)
 
 ```bash

@@ -23,6 +23,7 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 - **AI Upscaling** - ShuffleCUGAN (ML), Anime4K (shaders), ArtCNN (ONNX) super-resolution
 - **Frame Interpolation** - Python RIFE (PyTorch CUDA/CPU) + Flowframes 1.42.0 integration (free 1.36.0 planned)
 - **Depth Maps** - per-frame monocular depth estimation via Depth-Anything-V2 (GPU/CPU)
+- **Deadframe Removal** - optical flow + ORB homography + motion-area analysis (OpenCV)
 - **Smart cut** - automatic lossless copy / smartcut / re-encode per scene
 - **15 codec profiles** - H.264, HEVC, AV1, ProRes with hardware (NVENC) support
 - **10 audio codecs** - AAC, FLAC, Opus, PCM, MP3, pass-through
@@ -68,6 +69,8 @@ amverge flowframes episode.mp4 -f 2      # frame interpolation via Flowframes 1.
 amverge flowframes-path PATH             # configure Flowframes.exe location
 amverge depth-map episode.mp4            # side-by-side depth visualization
 amverge depth-map episode.mp4 --pred-only --grayscale  # grayscale depth map only
+amverge deadframes episode.mp4            # remove static dead frames (CFR compaction)
+amverge deadframes episode.mp4 --auto --safe  # auto-calibrate, only drop truly static
 ```
 
 ```python
@@ -108,6 +111,8 @@ HEVC on CPU uses snapped-copy (nearest keyframe within 5s) to avoid slow re-enco
 
 **Depth Maps:** Depth-Anything-V2 per-frame monocular depth estimation. Small (24.8M), Base (97.5M), or Large (335.3M) model. Color or grayscale output, side-by-side or depth-only. Models auto-downloaded from AniSmooth-Models GitHub Releases. H.264 output via FFmpeg pipe with source audio mux.
 
+**Deadframe Removal:** Detects and removes frames where the main subject does not move (static/dead frames). Uses Farneback dense optical flow, ORB feature matching with RANSAC homography to distinguish subject motion from camera motion, and motion-area analysis to reject transient foreground passers. Output is CFR-compacted: kept frames packed back-to-back, duration shortens. Safe to feed into frame interpolation. Auto-calibration mode, keep-talking/keep-camera/safe flags, and cadence smoothing for native animation holds.
+
 </details>
 
 ---
@@ -132,6 +137,7 @@ AMVerge-CLI/
 │   │   ├── upscaling/           upscale, models
 │   │   ├── interpolation/       interpolate, flowframes, flowframes-path
 │   │   ├── depth/                depth-map
+│   │   ├── deadframes/           deadframes
 │   │   ├── info/                info, probe
 │   │   ├── sidecar/             backend, rpc_server (hidden)
 │   │   └── system/              doctor, gpu, version
@@ -150,6 +156,7 @@ AMVerge-CLI/
 │       ├── upscaling/           ml, anime4k, artcnn, registry
 │       ├── interpolation/       RIFE PyTorch inference, Flowframes 1.42.0 integration
 │       ├── depth/                Depth-Anything-V2 monocular depth estimation
+│       ├── deadframes/           deadframe removal via optical flow + ORB homography
 │       ├── video/               probe_utils, scene_utils, video metadata
 │       └── wrappers/            public class wrappers (AmvergeVideo, SceneDetector, etc.)
 │
