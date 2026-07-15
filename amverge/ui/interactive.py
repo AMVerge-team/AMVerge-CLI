@@ -84,13 +84,20 @@ def checkboxes(
 
 def confirm(message: str = "Confirm?", default: bool = True, console: Optional[Console] = None) -> bool:
     _check()
-    answer = questionary.confirm(
+    options = ["Yes", "No"]
+    default_choice = "Yes" if default else "No"
+
+    answer = questionary.select(
         message,
-        default=default,
+        choices=options,
+        default=default_choice,
         style=_AMVERGE_STYLE,
         qmark=">",
     ).ask()
-    return answer if answer is not None else False
+
+    if answer is None:
+        return False
+    return answer == "Yes"
 
 
 def text_input(message: str = "Input:", default: str = "", console: Optional[Console] = None) -> str:
