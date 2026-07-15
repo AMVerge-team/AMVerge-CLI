@@ -10,66 +10,51 @@ from pathlib import Path
 import typer
 
 from ...ui import banner, console, err, make_progress, ok, fail, warn
+from ...ui.interactive import select, checkboxes, confirm, text_input
 from ...core.pipeline.presets import list_presets, load_preset, save_preset, delete_preset
 
 
 def _prompt_deadframes(defaults: dict | None = None):
-    from ...ui import err as econsole
-    from rich.prompt import Prompt, Confirm
-
     d = defaults or {}
     banner("deadframes settings")
-    econsole.print("  [muted]Configure deadframe removal options.[/]\n")
+    err.print("  [muted]Configure deadframe removal options.[/]\n")
 
     auto = d.get("auto", True)
+    safe = d.get("safe", False)
     keep_talking = d.get("keep_talking", False)
     keep_camera = d.get("keep_camera", False)
-    safe = d.get("safe", False)
     cadence = d.get("cadence", 3)
-    detect_scale = d.get("detect_scale", 1.0)
-    small_movements = d.get("small_movements")
-    prores = d.get("prores", False)
     no_audio = d.get("no_audio", False)
+    prores = d.get("prores", False)
     parallax = d.get("parallax", False)
 
-    auto_val = Confirm.ask(
-        "  [accent]>[/]  [label]Auto-calibrate thresholds?[/]",
-        console=econsole, default=auto,
-    )
-    safe_val = Confirm.ask(
-        "  [accent]>[/]  [label]Safe mode (keep-talking + keep-camera)?[/]",
-        console=econsole, default=safe,
-    )
+    auto_val = confirm("Auto-calibrate thresholds?", default=auto)
+    err.print()
+
+    safe_val = confirm("Safe mode (keep-talking + keep-camera)?", default=safe)
+    err.print()
+
     if not safe_val:
-        keep_talking_val = Confirm.ask(
-            "  [accent]>[/]  [label]Keep talking (subtle mouth motion)?[/]",
-            console=econsole, default=keep_talking,
-        )
-        keep_camera_val = Confirm.ask(
-            "  [accent]>[/]  [label]Keep camera pan/zoom/shake?[/]",
-            console=econsole, default=keep_camera,
-        )
+        keep_talking_val = confirm("Keep talking (subtle mouth motion)?", default=keep_talking)
+        err.print()
+        keep_camera_val = confirm("Keep camera pan/zoom/shake?", default=keep_camera)
+        err.print()
     else:
         keep_talking_val = True
         keep_camera_val = True
 
-    cadence_val = int(Prompt.ask(
-        "  [accent]>[/]  [label]Cadence (min consecutive dead to drop)[/]",
-        console=econsole, default=str(cadence),
-    ) or cadence)
+    cadence_val = text_input("Cadence (min consecutive dead to drop)", str(cadence))
+    try:
+        cadence_val = int(cadence_val) if cadence_val else cadence
+    except ValueError:
+        cadence_val = cadence
 
-    no_audio_val = Confirm.ask(
-        "  [accent]>[/]  [label]Drop audio?[/]",
-        console=econsole, default=no_audio,
-    )
-    prores_val = Confirm.ask(
-        "  [accent]>[/]  [label]ProRes output?[/]",
-        console=econsole, default=prores,
-    )
-    parallax_val = Confirm.ask(
-        "  [accent]>[/]  [label]Parallax mode (invert camera motion rule)?[/]",
-        console=econsole, default=parallax,
-    )
+    no_audio_val = confirm("Drop audio?", default=no_audio)
+    err.print()
+    prores_val = confirm("ProRes output?", default=prores)
+    err.print()
+    parallax_val = confirm("Parallax mode (invert camera motion rule)?", default=parallax)
+    err.print()
 
     return {
         "auto": auto_val,
@@ -77,8 +62,8 @@ def _prompt_deadframes(defaults: dict | None = None):
         "keep_camera": keep_camera_val,
         "safe": safe_val,
         "cadence": cadence_val,
-        "detect_scale": detect_scale,
-        "small_movements": small_movements,
+        "detect_scale": d.get("detect_scale", 1.0),
+        "small_movements": d.get("small_movements"),
         "prores": prores_val,
         "no_audio": no_audio_val,
         "parallax": parallax_val,
@@ -86,44 +71,45 @@ def _prompt_deadframes(defaults: dict | None = None):
 
 
 def _prompt_upscale(defaults: dict | None = None):
-    from ...ui import err as econsole
-    from rich.prompt import Prompt, Confirm
+    from ...core.upscaling.registry import UPSCALE_REGISTRY, get_all_model_keys, get_model_scales
 
     d = defaults or {}
     banner("upscale settings")
-    econsole.print("  [muted]Configure AI upscaling options.[/]\n")
-
-    from ...core.upscaling.registry import UPSCALE_REGISTRY, get_all_model_keys
+    err.print("  [muted]Configure AI upscaling options.[/]\n")
 
     keys = get_all_model_keys()
-    model = d.get("model", keys[0] if keys else "adore")
+    default_key = d.get("model", keys[0] if keys else "adore")
+    default_idx = keys.index(default_key) if default_key in keys else 0
+
+    model_val = select(
+        [f"{k}  [dim]{UPSCALE_REGISTRY[k].get('name', k)} [muted]({UPSCALE_REGISTRY[k].get('method', '?')})[/]" for k in keys],
+        "Select model:",
+        default_idx,
+        console=err,
+    )
+    if model_val < 0:
+        fail("Cancelled")
+        raise typer.Exit(1)
+    model_val = keys[model_val]
+
     scale = d.get("scale", 2)
-    preset = d.get("preset", "high")
-
-    econsole.print("  [muted]Available models:[/]")
-    for k, e in UPSCALE_REGISTRY.items():
-        econsole.print(f"    [accent]{k}[/] - {e.get('name', k)} [{e.get('method', '?')}]")
-    econsole.print()
-
-    model_val = Prompt.ask(
-        "  [accent]>[/]  [label]Model key[/]",
-        console=econsole, default=model,
-    ) or model
-    if model_val not in UPSCALE_REGISTRY:
-        fail(f"Unknown model: {model_val}")
-        model_val = keys[0] if keys else model
-
-    from ...core.upscaling.registry import get_model_scales
     valid_scales = get_model_scales(model_val)
-    scale_val = int(Prompt.ask(
-        f"  [accent]>[/]  [label]Scale factor[/] [muted]({'/'.join(str(s) for s in valid_scales)})[/]",
-        console=econsole, default=str(scale),
-    ) or scale)
+    scale_options = [f"{s}x" for s in valid_scales]
+    scale_default = valid_scales.index(scale) if scale in valid_scales else 0
+    scale_idx = select(scale_options, "Select scale factor:", scale_default, console=err)
+    if scale_idx < 0:
+        fail("Cancelled")
+        raise typer.Exit(1)
+    scale_val = valid_scales[scale_idx]
 
-    preset_val = Prompt.ask(
-        "  [accent]>[/]  [label]Quality preset[/] [muted](archival/high/balanced/fast/draft)[/]",
-        console=econsole, default=preset,
-    ) or preset
+    preset = d.get("preset", "high")
+    preset_options = ["archival", "high", "balanced", "fast", "draft"]
+    preset_default = preset_options.index(preset) if preset in preset_options else 1
+    preset_idx = select(preset_options, "Select quality preset:", preset_default, console=err)
+    if preset_idx < 0:
+        fail("Cancelled")
+        raise typer.Exit(1)
+    preset_val = preset_options[preset_idx]
 
     return {
         "model": model_val,
@@ -133,42 +119,48 @@ def _prompt_upscale(defaults: dict | None = None):
 
 
 def _prompt_interpolate(defaults: dict | None = None):
-    from ...ui import err as econsole
-    from rich.prompt import Prompt, Confirm
+    from ...core.interpolation import INTERPOLATION_REGISTRY
 
     d = defaults or {}
     banner("interpolation settings")
-    econsole.print("  [muted]Configure frame interpolation options.[/]\n")
-
-    from ...core.interpolation import INTERPOLATION_REGISTRY
+    err.print("  [muted]Configure frame interpolation options.[/]\n")
 
     keys = list(INTERPOLATION_REGISTRY.keys())
-    model = d.get("model", "rife4.25")
+    default_key = d.get("model", "rife4.25")
+    default_idx = keys.index(default_key) if default_key in keys else 0
+
+    model_val = select(
+        [f"{k}  [dim]{INTERPOLATION_REGISTRY[k].get('name', k)}[/]" for k in keys],
+        "Select model:",
+        default_idx,
+        console=err,
+    )
+    if model_val < 0:
+        fail("Cancelled")
+        raise typer.Exit(1)
+    model_val = keys[model_val]
+
     factor = d.get("factor", 2)
+    factor_options = [f"{i}x" for i in [2, 3, 4, 5, 6, 8, 10, 12, 16, 24, 32, 48, 64]]
+    factor_default = 0
+    for i, f in enumerate(factor_options):
+        if int(f.rstrip("x")) == factor:
+            factor_default = i
+            break
+    factor_idx = select(factor_options, "Select frame multiplier:", factor_default, console=err)
+    if factor_idx < 0:
+        fail("Cancelled")
+        raise typer.Exit(1)
+    factor_val = int(factor_options[factor_idx].rstrip("x"))
+
     preset = d.get("preset", "high")
-
-    econsole.print("  [muted]Available models:[/]")
-    for k, e in INTERPOLATION_REGISTRY.items():
-        econsole.print(f"    [accent]{k}[/] - {e.get('name', k)}")
-    econsole.print()
-
-    model_val = Prompt.ask(
-        "  [accent]>[/]  [label]Model key[/]",
-        console=econsole, default=model,
-    ) or model
-    if model_val not in INTERPOLATION_REGISTRY:
-        fail(f"Unknown model: {model_val}")
-        model_val = "rife4.25"
-
-    factor_val = int(Prompt.ask(
-        "  [accent]>[/]  [label]Frame multiplier[/] [muted](2-64)[/]",
-        console=econsole, default=str(factor),
-    ) or factor)
-
-    preset_val = Prompt.ask(
-        "  [accent]>[/]  [label]Quality preset[/] [muted](archival/high/balanced/fast/draft)[/]",
-        console=econsole, default=preset,
-    ) or preset
+    preset_options = ["archival", "high", "balanced", "fast", "draft"]
+    preset_default = preset_options.index(preset) if preset in preset_options else 1
+    preset_idx = select(preset_options, "Select quality preset:", preset_default, console=err)
+    if preset_idx < 0:
+        fail("Cancelled")
+        raise typer.Exit(1)
+    preset_val = preset_options[preset_idx]
 
     return {
         "model": model_val,
@@ -287,7 +279,7 @@ def pipeline(
 ) -> None:
     """Chain multiple operations (deadframes, upscale, interpolate) into a pipeline.
 
-    Run interactively to configure each step. Save presets with --save <name>.
+    Run interactively with arrow-key navigation. Save presets with --save <name>.
     Load saved presets with --load <name>.
     """
     if list_presets_flag:
@@ -321,11 +313,7 @@ def pipeline(
         console.print(f"  Operations: [accent]{', '.join(config.get('operations', []))}[/]")
 
     if input is None:
-        from rich.prompt import Prompt
-        raw = Prompt.ask(
-            "  [accent]>[/]  [label]Input video path[/]",
-            console=err,
-        )
+        raw = text_input("Input video path", "")
         if not raw:
             fail("Input video is required.")
             raise typer.Exit(1)
@@ -334,46 +322,33 @@ def pipeline(
         fail(f"File not found: {input}")
         raise typer.Exit(1)
 
-    from rich.prompt import Prompt, Confirm
-    from rich.panel import Panel
-
     if not load:
         banner("pipeline")
-        err.print("  [muted]Select operations to run in sequence.[/]\n")
+        err.print("  [muted]Select operations to run in sequence. Use space to toggle, enter to confirm.[/]\n")
 
-        ops = config.get("operations", [])
-        use_deadframes = Confirm.ask(
-            "  [accent]>[/]  [label]Remove deadframes?[/]",
-            console=err, default=("deadframes" in ops),
-        )
-        use_upscale = Confirm.ask(
-            "  [accent]>[/]  [label]AI upscale?[/]",
-            console=err, default=("upscale" in ops),
-        )
-        use_interpolate = Confirm.ask(
-            "  [accent]>[/]  [label]Frame interpolation?[/]",
-            console=err, default=("interpolate" in ops),
-        )
+        op_names = ["deadframes  [dim](remove static frames)[/]", "upscale  [dim](AI super-resolution)[/]", "interpolate  [dim](frame interpolation)[/]"]
+        op_keys = ["deadframes", "upscale", "interpolate"]
+        ops_defaults = [i for i, k in enumerate(op_keys) if k in config.get("operations", [])]
 
-        if not use_deadframes and not use_upscale and not use_interpolate:
-            fail("At least one operation must be selected.")
+        selected = checkboxes(op_names, "Select operations:", defaults=ops_defaults, console=err)
+        if not selected:
+            fail("At least one operation required.")
             raise typer.Exit(1)
 
-        config["operations"] = []
-        if use_deadframes:
-            config["operations"].append("deadframes")
+        config["operations"] = [op_keys[i] for i in selected]
+        err.print()
+
+        if "deadframes" in config["operations"]:
             config["deadframes"] = _prompt_deadframes(config.get("deadframes"))
-        if use_upscale:
-            config["operations"].append("upscale")
+        if "upscale" in config["operations"]:
             config["upscale"] = _prompt_upscale(config.get("upscale"))
-        if use_interpolate:
-            config["operations"].append("interpolate")
+        if "interpolate" in config["operations"]:
             config["interpolate"] = _prompt_interpolate(config.get("interpolate"))
 
     from ...core.infra.ffmpeg_bootstrap import is_portable_ffmpeg_installed, ensure_ffmpeg
     if not is_portable_ffmpeg_installed():
         console.print("  [warn]FFmpeg not found.[/warn]")
-        if yes or Confirm.ask("  Download portable FFmpeg?", console=err, default=True):
+        if confirm("Download portable FFmpeg?", default=True):
             with make_progress() as progress:
                 tid = progress.add_task("Downloading FFmpeg...", total=100)
                 ensure_ffmpeg(progress_cb=lambda p, m: progress.update(tid, completed=p, description=m))
@@ -410,11 +385,8 @@ def pipeline(
 
     save_name = save
     if not save_name and not load:
-        if Confirm.ask("  [accent]>[/]  [label]Save these settings as a preset?[/]", console=err, default=False):
-            save_name = Prompt.ask(
-                "  [accent]>[/]  [label]Preset name[/]",
-                console=err, default="my_pipeline",
-            )
+        if confirm("Save these settings as a preset?", default=False):
+            save_name = text_input("Preset name", "my_pipeline")
             if save_name:
                 save_preset(save_name, config)
                 ok(f"Saved preset: {save_name}")
@@ -423,7 +395,7 @@ def pipeline(
         save_preset(save, config)
         ok(f"Saved preset: {save}")
 
-    if not Confirm.ask("  [accent]>[/]  [label]Run pipeline?[/]", console=err, default=True):
+    if not confirm("Run pipeline?", default=True):
         return
 
     temp_dir = input.parent
