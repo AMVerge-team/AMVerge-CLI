@@ -24,6 +24,7 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 - **Frame Interpolation** - Python RIFE (PyTorch CUDA/CPU) + Flowframes 1.42.0 integration (free 1.36.0 planned)
 - **Depth Maps** - per-frame monocular depth estimation via Depth-Anything-V2 (GPU/CPU)
 - **Deadframe Removal** - optical flow + ORB homography + motion-area analysis (OpenCV)
+- **Pipeline** - chain deadframes + upscale + interpolate, save/load presets, interactive or TUI
 - **Smart cut** - automatic lossless copy / smartcut / re-encode per scene
 - **15 codec profiles** - H.264, HEVC, AV1, ProRes with hardware (NVENC) support
 - **10 audio codecs** - AAC, FLAC, Opus, PCM, MP3, pass-through
@@ -71,6 +72,9 @@ amverge depth-map episode.mp4            # side-by-side depth visualization
 amverge depth-map episode.mp4 --pred-only --grayscale  # grayscale depth map only
 amverge deadframes episode.mp4            # remove static dead frames (CFR compaction)
 amverge deadframes episode.mp4 --auto --safe  # auto-calibrate, only drop truly static
+amverge pipeline                      # chain deadframes + upscale + interpolate
+amverge pipeline --load my-preset     # load saved pipeline preset
+amverge pipeline --list               # list saved presets
 ```
 
 ```python
@@ -113,6 +117,8 @@ HEVC on CPU uses snapped-copy (nearest keyframe within 5s) to avoid slow re-enco
 
 **Deadframe Removal:** Detects and removes frames where the main subject does not move (static/dead frames). Uses Farneback dense optical flow, ORB feature matching with RANSAC homography to distinguish subject motion from camera motion, and motion-area analysis to reject transient foreground passers. Output is CFR-compacted: kept frames packed back-to-back, duration shortens. Safe to feed into frame interpolation. Auto-calibration mode, keep-talking/keep-camera/safe flags, and cadence smoothing for native animation holds.
 
+**Pipeline:** Chains deadframe removal, AI upscaling, and frame interpolation into a single run. Interactive arrow-key prompts or full-screen Textual TUI. Save configurations as named presets for reuse. Detects installed extras and only shows available operations. After each step, choose whether to chain the output into the next operation or revert to the original input.
+
 </details>
 
 ---
@@ -138,6 +144,7 @@ AMVerge-CLI/
 │   │   ├── interpolation/       interpolate, flowframes, flowframes-path
 │   │   ├── depth/                depth-map
 │   │   ├── deadframes/           deadframes
+│   │   ├── pipeline/              pipeline
 │   │   ├── info/                info, probe
 │   │   ├── sidecar/             backend, rpc_server (hidden)
 │   │   └── system/              doctor, gpu, version
@@ -157,6 +164,7 @@ AMVerge-CLI/
 │       ├── interpolation/       RIFE PyTorch inference, Flowframes 1.42.0 integration
 │       ├── depth/                Depth-Anything-V2 monocular depth estimation
 │       ├── deadframes/           deadframe removal via optical flow + ORB homography
+│       ├── pipeline/              operation-chaining presets (JSON save/load)
 │       ├── video/               probe_utils, scene_utils, video metadata
 │       └── wrappers/            public class wrappers (AmvergeVideo, SceneDetector, etc.)
 │

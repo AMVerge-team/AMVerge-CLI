@@ -92,6 +92,21 @@ amverge deadframes episode.mp4
 amverge deadframes episode.mp4 --auto --safe
 ```
 
+### Pipeline (Operation Chaining)
+
+No extra deps beyond what each operation needs. Install at least 2 of deadframes, upscale, interpolation:
+
+```bash
+pip install amverge[deadframes,upscale,interpolation]
+```
+
+Chains operations in sequence with interactive arrow-key config:
+
+```bash
+amverge pipeline                          # interactive mode
+amverge pipeline --load my-preset          # saved preset
+```
+
 ### Flowframes (External)
 
 ```bash

@@ -430,6 +430,36 @@ Audio is trimmed to match kept video segments; use `--no-audio` to drop.
 
 ---
 
+### `amverge pipeline`
+
+Chain deadframe removal, AI upscaling, and frame interpolation into a single run.
+Interactive prompts with arrow-key navigation. Save presets with --save <name>.
+
+```bash
+amverge pipeline                          # interactive mode
+amverge pipeline input.mp4                # with input specified
+amverge pipeline --load my-preset          # load saved preset
+amverge pipeline --save my-preset          # save current settings
+amverge pipeline --list                    # list saved presets
+amverge pipeline --delete my-preset        # delete a preset
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `INPUT` (arg) | prompted | Input video file |
+| `--load / -l` | - | Load a saved pipeline preset by name |
+| `--save / -s` | - | Save current settings as a named preset |
+| `--list` | false | List saved pipeline presets |
+| `--delete` | - | Delete a saved pipeline preset |
+| `--yes / -y` | false | Auto-confirm download prompts |
+
+Runs operations in sequence (deadframes `->` upscale `->` interpolate). After each step,
+choose whether to chain the output or revert to the original input. Requires at least
+2 of the deadframes, upscale, interpolation extras installed. Presets stored as JSON
+in `%APPDATA%/com.amverge.cli/pipelines/`.
+
+---
+
 ## Info Commands
 
 ```bash

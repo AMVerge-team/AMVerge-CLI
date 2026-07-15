@@ -94,6 +94,8 @@ AMVerge-CLI/
 │   │   │   └── flowframes_path.py   amverge flowframes-path  (set/show Flowframes.exe path)
 │   │   ├── deadframes/
 │   │   │   └── deadframes.py    amverge deadframes  (deadframe removal via optical flow + ORB homography)
+│   │   ├── pipeline/
+│   │   │   └── pipeline.py      amverge pipeline  (chain deadframes + upscale + interpolate, preset save/load)
 │   │   ├── info/
 │   │   │   ├── info.py          amverge info  (stream metadata via PyAV)
 │   │   │   └── probe.py         amverge probe  (V2 diagnostics: codec/HEVC/keyframes/scene cache)
@@ -158,6 +160,8 @@ AMVerge-CLI/
 │       │   ├── weight_loader.py        download_weights(), verify_weight_hash()
 │       │   ├── engine.py               DeadFrameDetector, run_deadframes() - optical flow + ORB homography + motion-area analysis
 │       │   └── __init__.py             exports: run_deadframes, DEADFRAMES_REGISTRY, DEADFRAMES_AVAILABLE, ...
+│       ├── pipeline/
+│       │   └── presets.py       list/load/save/delete pipeline presets as JSON
 │       ├── video/
 │       │   ├── probe_utils.py   probe_video_fps/duration/dimensions/total_frames via ffprobe
 │       │   ├── scene_utils.py   scenes_to_objects(), scenes_frames_to_seconds()
