@@ -98,12 +98,33 @@ def export(
     ff, fp = get_ffmpeg(), get_ffprobe()
 
     if inputs_json is not None:
-        # for the app only, it'll explicity list pre-cut clip files to export whole.
-        paths = json.loads(inputs_json.read_text(encoding="utf-8"))
-        if not paths:
+        # App mode. Each entry is either a string (a pre-cut clip file, exported
+        # whole — video mode) or an object with an optional [start_sec, end_sec]
+        # range to cut from a source episode (webp mode, no clip file on disk).
+        raw = json.loads(inputs_json.read_text(encoding="utf-8"))
+        if not raw:
             fail("No input clips provided.")
             raise typer.Exit(1)
-        jobs = [ExportJob(scene_index=i, input=str(p)) for i, p in enumerate(paths)]
+        jobs = []
+        for i, item in enumerate(raw):
+            if isinstance(item, str):
+                jobs.append(ExportJob(scene_index=i, input=item))
+                continue
+            inp = item.get("input")
+            if not inp:
+                continue
+            start, end = item.get("start_sec"), item.get("end_sec")
+            seek_ms = int(round(start * 1000)) if isinstance(start, (int, float)) else None
+            dur_ms = (
+                int(round((end - start) * 1000))
+                if isinstance(start, (int, float)) and isinstance(end, (int, float))
+                else None
+            )
+            jobs.append(ExportJob(scene_index=int(item.get("scene_index", i)),
+                                  input=str(inp), seek_ms=seek_ms, dur_ms=dur_ms))
+        if not jobs:
+            fail("No valid input clips provided.")
+            raise typer.Exit(1)
     else:
         if video is None or scenes is None:
             fail("Provide VIDEO and --scenes, or --inputs-json.")

@@ -109,6 +109,17 @@ def _probe_stream(ffprobe: str, path: str, kind: str) -> Optional[str]:
         return None
 
 
+def _all_same_video_codec(ffprobe: str, inputs: list[str]) -> bool:
+    """True if every input shares one (known) video codec — required for a clean
+    direct concat stream-copy."""
+    seen: set = set()
+    for inp in inputs:
+        seen.add(probe_video_codec(ffprobe, inp))
+        if len(seen) > 1:
+            return False
+    return len(seen) == 1 and None not in seen
+
+
 def probe_audio_stream_count(ffprobe: str, path: str) -> int:
     try:
         r = subprocess.run(
@@ -262,6 +273,35 @@ def _reencode_with_fallback(
         raise
 
 
+def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, use_cuda: bool) -> list[ExportJob]:
+    """For remux (copy) exports, cut each source range with smart_cut — stream-copy
+    the keyframe-aligned GOPs and re-encode only the leading/trailing edges — so
+    boundaries are frame-accurate and mostly lossless. Whole-file jobs pass through.
+    Returns jobs rewritten to point at the cut temp clips (no range)."""
+    from ..cutting.smart_cut import cut_scene
+    from ..keyframes.keyframe_align import get_keyframe_timestamps_pyav
+    from ..codec.codec_utils import check_if_hevc
+
+    kf_cache: dict = {}
+    hevc_cache: dict = {}
+    out: list[ExportJob] = []
+    for job in jobs:
+        if job.seek_ms is None:
+            out.append(job)
+            continue
+        src = job.input
+        if src not in kf_cache:
+            kf_cache[src] = get_keyframe_timestamps_pyav(src)
+            hevc_cache[src] = check_if_hevc(src)
+        start = job.seek_ms / 1000.0
+        end = start + (job.dur_ms or 0) / 1000.0
+        clip_path, _mode = cut_scene(
+            Path(src), start, end, job.scene_index, tmp_dir, kf_cache[src], use_cuda, hevc_cache[src]
+        )
+        out.append(ExportJob(scene_index=job.scene_index, input=clip_path))
+    return out
+
+
 # -- orchestration ---------------------------------------------------------
 
 def export_scenes(
@@ -293,20 +333,35 @@ def export_scenes(
 
     gpu_encoders = detect_gpu_encoders(ffmpeg)
     use_gpu = resolve_use_gpu(settings, gpu_encoders)
+
+    # Remux (copy) of source ranges (webp mode) → smartcut each range to an
+    # accurate temp clip first, then export those as whole files. Encode
+    # workflows already cut frame-accurately via re-encode, so skip them.
+    smartcut_tmp = None
+    if settings.codec == "copy" and any(j.seek_ms is not None for j in jobs):
+        smartcut_tmp = tempfile.TemporaryDirectory()
+        use_cuda = settings.hardware != "cpu" and "h264_nvenc" in gpu_encoders
+        progress(5, "Cutting source ranges...")
+        jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), use_cuda)
+
     source_video_codec = probe_video_codec(ffprobe, jobs[0].input) if jobs else None
     audio_count = (
         probe_audio_stream_count(ffprobe, jobs[0].input)
         if settings.audio_track and jobs else None
     )
 
-    if settings.merge:
-        out = _merge(jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-                     source_video_codec, progress, event, abort, active, audio_count)
-        progress(100, "Export complete")
-        return [out]
+    try:
+        if settings.merge:
+            out = _merge(jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
+                         source_video_codec, progress, event, abort, active, audio_count)
+            progress(100, "Export complete")
+            return [out]
 
-    return _individual(jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-                       source_video_codec, progress, event, abort, active, audio_count)
+        return _individual(jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
+                           source_video_codec, progress, event, abort, active, audio_count)
+    finally:
+        if smartcut_tmp is not None:
+            smartcut_tmp.cleanup()
 
 
 def _out_name(out_dir: str, file_stem: str, scene_index: int, container: str) -> str:
@@ -361,45 +416,54 @@ def _merge(
     merged_stem = file_stem.replace("_####", "").replace("####", "").strip("_") or "merged"
     out_path = str(Path(out_dir) / f"{merged_stem}.{ext}")
 
-    whole_file_copy = settings.codec == "copy" and all(j.seek_ms is None for j in jobs)
+    has_ranges = any(j.seek_ms is not None for j in jobs)
+    force_reencode = settings.codec != "copy"  # encode workflow always re-encodes
 
-    if whole_file_copy:
-        # Fast path: direct concat stream-copy of the pre-cut clip files.
-        progress(30, "Merging (stream copy)...")
-        try:
-            _concat_copy([j.input for j in jobs], out_path, ext, source_video_codec,
-                         settings.audio, ffmpeg, abort, active,
-                         settings.audio_track, audio_count)
-            event(f"CLIP_READY|0|{out_path}|copy")
-            return out_path
-        except ExportAborted:
-            raise
-        except ExportError:
-            progress(35, "Stream-copy merge failed; re-encoding...")
+    if settings.codec == "copy" and not has_ranges:
+        inputs = [j.input for j in jobs]
+        if _all_same_video_codec(ffprobe, inputs):
+            progress(30, "Merging (stream copy)...")
+            try:
+                _concat_copy(inputs, out_path, ext, source_video_codec,
+                             settings.audio, ffmpeg, abort, active,
+                             settings.audio_track, audio_count)
+                event(f"CLIP_READY|0|{out_path}|copy")
+                return out_path
+            except ExportAborted:
+                raise
+            except ExportError:
+                progress(35, "Stream-copy merge failed; re-encoding...")
+                force_reencode = True
+        else:
+            force_reencode = True
 
-    # Segmented path: materialize each job to a temp segment (copy or re-encode),
-    # then concat-copy. Handles mixed codecs, source ranges, and encode workflows.
-    seg_settings = settings
-    if settings.codec == "copy":
-        seg_settings = ExportSettings(codec="h264_high", audio=settings.audio,
-                                      container=ext, hardware=settings.hardware, merge=False,
-                                      audio_track=settings.audio_track)
+    seg_copy = settings.codec == "copy" and not force_reencode
+    seg_codec = "copy" if seg_copy else (settings.codec if settings.codec != "copy" else "h264_high")
+    seg_settings = ExportSettings(codec=seg_codec, audio=settings.audio, container=ext,
+                                  hardware=settings.hardware, merge=False,
+                                  audio_track=settings.audio_track)
+    verb = "Remuxing" if seg_copy else "Encoding"
     with tempfile.TemporaryDirectory() as tmp:
         segments: list[str] = []
         total = len(jobs)
+
         for i, job in enumerate(jobs):
             if abort.is_set():
                 raise ExportAborted()
+            
             seg = str(Path(tmp) / f"seg_{i:04d}.{ext}")
             total_ms = job.dur_ms or probe_duration_ms(ffprobe, job.input)
             _export_one(job, seg, seg_settings, ffmpeg,
                         resolve_use_gpu(seg_settings, detect_gpu_encoders(ffmpeg)),
                         source_video_codec, total_ms, None, abort, active, audio_count)
             segments.append(seg)
-            progress(30 + int((i + 1) / total * 55), f"Encoded {i + 1}/{total} segments")
+            progress(30 + int((i + 1) / total * 55), f"{verb} {i + 1}/{total} segments")
+
         progress(90, "Concatenating segments...")
-        _concat_copy(segments, out_path, ext, None, "copy", ffmpeg, abort, active)
-    event(f"CLIP_READY|0|{out_path}|reencode")
+        _concat_copy(segments, out_path, ext, source_video_codec if seg_copy else None,
+                     "copy", ffmpeg, abort, active)
+        
+    event(f"CLIP_READY|0|{out_path}|{'copy' if seg_copy else 'reencode'}")
     return out_path
 
 
