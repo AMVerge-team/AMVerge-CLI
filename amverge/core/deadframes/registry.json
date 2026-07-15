@@ -1,0 +1,11 @@
+{
+  "_source": {
+    "deadframes": ""
+  },
+  "heuristic": {
+    "method": "heuristic",
+    "name": "Heuristic (OpenCV)",
+    "credit": "Built on OpenCV Farneback optical flow + ORB feature matching",
+    "description": "Detects dead frames using dense optical flow, ORB+RANSAC homography, and motion-area analysis. No model download needed."
+  }
+}
