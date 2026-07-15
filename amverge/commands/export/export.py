@@ -2,37 +2,77 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
-import tempfile
+import signal
+import threading
 from pathlib import Path
 from typing import Optional
 
 import typer
 
-from ...core.infra.binaries import get_ffmpeg
-from ...core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
+from ...core.infra.binaries import get_ffmpeg, get_ffprobe
+from ...core.infra.ipc import emit_progress, emit_event, log
 from ...core.codec.codec_utils import (
-    VALID_CODECS, VALID_AUDIO, VALID_CONTAINERS, VALID_HARDWARE,
-    CODEC_ALIASES, CODEC_PROFILES, PRORES_CODECS, AUDIO_FFMPEG,
-    resolve_gpu,
+    VALID_CODECS, VALID_AUDIO, VALID_CONTAINERS, VALID_HARDWARE, CODEC_ALIASES,
 )
-from ...ui import banner, console, err, make_progress, make_table, ok, fail, dim
+from ...core.export import export_scenes, ExportJob, ExportSettings
+from ...core.export import params as xparams
+from ...core.export.engine import probe_audio_codec
+from ...ui import banner, console, make_progress, ok, fail
 
-CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+def _parse_select(select: Optional[str], max_idx: int) -> set[int]:
+    if not select:
+        return set(range(max_idx + 1))
+    picked: set[int] = set()
+    for part in select.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            picked.update(range(int(a), int(b) + 1))
+        else:
+            picked.add(int(part))
+    return picked
+
+
+def _build_jobs(scenes: list[dict], video: Path) -> list[ExportJob]:
+    """Resolve each scene's export input: the pre-cut clip file when present,
+    else a [start, end] range cut from the source episode (webp mode)."""
+    jobs: list[ExportJob] = []
+    for s in scenes:
+        idx = s["scene_index"]
+        clip_path = s.get("clip_path")
+        if clip_path and s.get("clip_mode") != "failed" and os.path.exists(clip_path):
+            jobs.append(ExportJob(scene_index=idx, input=clip_path))
+            continue
+        start = s.get("start_sec")
+        end = s.get("end_sec")
+        seek_ms = int(round(start * 1000)) if isinstance(start, (int, float)) else None
+        dur_ms = (
+            int(round((end - start) * 1000))
+            if isinstance(start, (int, float)) and isinstance(end, (int, float))
+            else None
+        )
+        jobs.append(ExportJob(scene_index=idx, input=str(video), seek_ms=seek_ms, dur_ms=dur_ms))
+    return jobs
 
 
 def export(
-    video: Path = typer.Argument(..., help="Source video file", exists=True),
-    scenes: Path = typer.Option(..., "--scenes", "-s", help="scenes.json from detect", exists=True),
+    video: Optional[Path] = typer.Argument(None, help="Source video file (with --scenes)"),
+    scenes: Optional[Path] = typer.Option(None, "--scenes", "-s", help="scenes/manifest JSON from detect"),
+    inputs_json: Optional[Path] = typer.Option(None, "--inputs-json", hidden=True, help="JSON array of input clip paths (app mode)"),
     output: Path = typer.Option(Path("export"), "--output", "-o", help="Output directory"),
+    name: Optional[str] = typer.Option(None, "--name", help="Output file stem (default: video name)"),
     select: Optional[str] = typer.Option(None, "--select", help='Indices: "0,2,5-8" (default: all)'),
     merge: bool = typer.Option(False, "--merge", help="Merge selected clips into one file"),
-    codec: str = typer.Option("copy", "--codec", help="copy · h264 · hevc"),
+    codec: str = typer.Option("copy", "--codec", help="copy · h264_* · h265_* · av1_main · prores_*"),
     audio: str = typer.Option("copy", "--audio", help="copy · aac · aac_320 · pcm16 · pcm24 · flac · alac · opus · mp3 · none"),
     container: str = typer.Option("mp4", "--container", help="mp4 · mkv · mov"),
     hardware: str = typer.Option("auto", "--hardware", help="auto · gpu · cpu"),
-    no_rpc: bool = typer.Option(False, "--no-rpc", help="Disable Discord RPC"),
+    workers: int = typer.Option(1, "--workers", help="Parallel clip exports"),
+    audio_track: int = typer.Option(-1, "--audio-track", help="0-based audio index to hoist to first (preview language); -1 = keep order"),
+    ipc: bool = typer.Option(False, "--ipc", hidden=True, help="Emit IPC events for the Tauri app (no Rich UI)"),
 ) -> None:
     """Export selected scenes from a detect run."""
     if codec not in VALID_CODECS:
@@ -49,129 +89,93 @@ def export(
         raise typer.Exit(1)
 
     codec = CODEC_ALIASES.get(codec, codec)
-    use_gpu = resolve_gpu(hardware, codec)
-    if codec in PRORES_CODECS and container != "mov":
-        fail(f"Codec '{codec}' requires --container mov")
-        raise typer.Exit(1)
-
-    banner("export")
-
-    rpc = DiscordRPC() if RPC_AVAILABLE and not no_rpc else None
-    if rpc:
-        rpc.connect()
-        rpc.update_exporting(video.name)
-
-    payload = json.loads(scenes.read_text())
-    all_scenes: list[dict] = payload.get("scenes", payload) if isinstance(payload, dict) else payload
-
-    if not all_scenes:
-        fail("No scenes in JSON.")
-        raise typer.Exit(1)
-
-    for s in all_scenes:
-        if "scene_index" not in s and "index" in s:
-            s["scene_index"] = s["index"]
-
-    max_idx = max(s["scene_index"] for s in all_scenes)
-    selected = (
-        [s for s in all_scenes if s["scene_index"] in _parse_select(select, max_idx)]
-        if select else all_scenes
-    )
-
-    if not selected:
-        fail("No scenes matched selection.")
+    if codec != "copy" and not xparams.codec_container_compatible(codec, container):
+        rec = xparams.recommended_container(codec)
+        fail(f"Codec '{codec}' is not compatible with container '{container}'. Use '{rec}'.")
         raise typer.Exit(1)
 
     output.mkdir(parents=True, exist_ok=True)
-    ff = get_ffmpeg()
+    ff, fp = get_ffmpeg(), get_ffprobe()
 
-    try:
-        if merge:
-            _export_merged(selected, output, ff, codec, audio, container, use_gpu)
-        else:
-            _export_individual(selected, output, ff, codec, audio, container, use_gpu)
-        if rpc:
-            rpc.update_complete()
-    except Exception:
-        if rpc:
-            rpc.update_error("Export failed")
-        raise
-    finally:
-        if rpc:
-            rpc.clear_presence()
-            rpc.disconnect()
-
-
-def _copy(src: str, dst: str, ff: str, audio: str) -> None:
-    cmd = [ff, "-y", "-i", src]
-    if audio == "copy":
-        cmd += ["-c", "copy"]
+    if inputs_json is not None:
+        # for the app only, it'll explicity list pre-cut clip files to export whole.
+        paths = json.loads(inputs_json.read_text(encoding="utf-8"))
+        if not paths:
+            fail("No input clips provided.")
+            raise typer.Exit(1)
+        jobs = [ExportJob(scene_index=i, input=str(p)) for i, p in enumerate(paths)]
     else:
-        cmd += ["-c:v", "copy"]
-        cmd += AUDIO_FFMPEG[audio]
-    cmd.append(dst)
-    subprocess.run(cmd, capture_output=True, creationflags=CREATE_NO_WINDOW, check=True)
+        if video is None or scenes is None:
+            fail("Provide VIDEO and --scenes, or --inputs-json.")
+            raise typer.Exit(1)
+        if not video.exists() or not scenes.exists():
+            fail("VIDEO and --scenes must both exist.")
+            raise typer.Exit(1)
+        payload = json.loads(scenes.read_text(encoding="utf-8"))
+        all_scenes = payload.get("scenes", payload) if isinstance(payload, dict) else payload
+        if not all_scenes:
+            fail("No scenes in JSON.")
+            raise typer.Exit(1)
+        for s in all_scenes:
+            if "scene_index" not in s and "index" in s:
+                s["scene_index"] = s["index"]
+        max_idx = max(s["scene_index"] for s in all_scenes)
+        wanted = _parse_select(select, max_idx)
+        selected = [s for s in all_scenes if s["scene_index"] in wanted]
+        if not selected:
+            fail("No scenes matched selection.")
+            raise typer.Exit(1)
+        jobs = _build_jobs(selected, video)
 
+    # if 'copy' would fail the muxer (e.g. Opus to mp4), switch to a container-safe encoder up front.
+    if audio == "copy":
+        acodec = probe_audio_codec(fp, jobs[0].input)
+        if acodec and not xparams.audio_copy_safe(acodec, container):
+            audio = xparams.fallback_audio_mode(container)
+            log(f"audio '{acodec}' not stream-copyable into {container}; using '{audio}'")
 
-def _encode(src: str, dst: str, ff: str, codec: str, audio: str, use_gpu: bool) -> None:
-    profile = CODEC_PROFILES[codec]
-    encoder = profile["gpu"] if use_gpu and profile["gpu"] else profile["cpu"]
-    cmd = [ff, "-y", "-i", src, "-c:v", str(encoder)]
-    args = str(profile["args"]).strip()
-    if args:
-        cmd += args.split()
-    cmd += AUDIO_FFMPEG[audio]
-    cmd.append(dst)
-    subprocess.run(cmd, capture_output=True, creationflags=CREATE_NO_WINDOW, check=True)
+    file_stem = name or (video.stem if video else "export")
+    settings = ExportSettings(
+        codec=codec, audio=audio, container=container,
+        hardware=hardware, merge=merge, workers=max(1, workers),
+        audio_track=(audio_track if audio_track >= 0 else None),
+    )
 
+    abort = threading.Event()
 
-def _export_individual(scenes: list[dict], output: Path, ff: str, codec: str, audio: str, container: str, use_gpu: bool) -> None:
-    with make_progress(show_count=True) as progress:
-        task = progress.add_task(f"Exporting {len(scenes)} clips", total=len(scenes))
-        for s in scenes:
-            idx = s["scene_index"]
-            dst = str(output / f"scene_{idx:04d}.{container}")
-            if codec == "copy":
-                _copy(s["path"], dst, ff, audio)
-            else:
-                _encode(s["path"], dst, ff, codec, audio, use_gpu)
-            progress.advance(task)
-            progress.update(task, description=f"Exported scene_{idx:04d}")
+    def _on_signal(_signum, _frame):
+        abort.set()
 
-    ok(f"{len(scenes)} clips -> {output}")
-
-
-def _export_merged(scenes: list[dict], output: Path, ff: str, codec: str, audio: str, container: str, use_gpu: bool) -> None:
-    with make_progress() as progress:
-        task = progress.add_task(f"Merging {len(scenes)} clips", total=1)
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            concat_file = f.name
-            for s in scenes:
-                f.write(f"file '{s['path'].replace(chr(92), '/')}'\n")
-
-        dst = str(output / f"merged.{container}")
+    for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            cmd = [ff, "-y", "-f", "concat", "-safe", "0", "-i", concat_file]
-            if codec == "copy":
-                if audio == "copy":
-                    cmd += ["-c", "copy"]
-                else:
-                    cmd += ["-c:v", "copy"]
-                    cmd += AUDIO_FFMPEG[audio]
-            else:
-                profile = CODEC_PROFILES[codec]
-                encoder = profile["gpu"] if use_gpu and profile["gpu"] else profile["cpu"]
-                cmd += ["-c:v", str(encoder)]
-                args = str(profile["args"]).strip()
-                if args:
-                    cmd += args.split()
-                cmd += AUDIO_FFMPEG[audio]
-            cmd.append(dst)
-            subprocess.run(cmd, capture_output=True, creationflags=CREATE_NO_WINDOW, check=True)
-        finally:
-            os.unlink(concat_file)
+            signal.signal(sig, _on_signal)
+        except (ValueError, OSError):
+            pass  # not on main thread / unsupported platform
 
-        progress.update(task, completed=1)
+    if ipc:
+        try:
+            outputs = export_scenes(
+                jobs, str(output), file_stem, settings,
+                on_progress=emit_progress, on_event=emit_event,
+                abort=abort, ffmpeg=ff, ffprobe=fp,
+            )
+        except Exception as e:  # if BLE001 report structured error to the app
+            log(f"EXPORT FATAL: {e}")
+            print(json.dumps({"schema_version": "1.0", "outputs": [],
+                              "error": {"message": str(e), "type": type(e).__name__}}), flush=True)
+            raise typer.Exit(1)
+        print(json.dumps({"schema_version": "1.0", "outputs": outputs, "error": None}), flush=True)
+        return
 
-    ok(f"Merged -> {dst}")
+    banner("export")
+    with make_progress() as progress:
+        task = progress.add_task(f"Exporting {len(jobs)} clip(s)", total=100)
+
+        def _cb(pct: int, msg: str) -> None:
+            progress.update(task, completed=pct, description=msg)
+
+        outputs = export_scenes(
+            jobs, str(output), file_stem, settings,
+            on_progress=_cb, abort=abort, ffmpeg=ff, ffprobe=fp,
+        )
+    ok(f"{len(outputs)} file(s) -> {output}")
