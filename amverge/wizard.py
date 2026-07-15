@@ -629,6 +629,19 @@ def _wizard_deadframes() -> None:
 
 def _wizard_pipeline() -> None:
     os.system("cls" if os.name == "nt" else "clear")
+    from .commands.pipeline.pipeline import _PIPELINE_ENABLED, _AVAILABLE_OPS
+    if not _PIPELINE_ENABLED:
+        from .ui import banner, fail
+        banner("pipeline")
+        available = [k for k, v in _AVAILABLE_OPS.items() if v]
+        missing = [k for k, v in _AVAILABLE_OPS.items() if not v]
+        fail(
+            f"Pipeline requires at least 2 operations installed.\n"
+            f"  Installed: {', '.join(available) if available else 'none'}\n"
+            f"  Missing:   {', '.join(missing)}\n"
+            f"  Run: pip install amverge[{','.join(missing)}]"
+        )
+        return
     from .commands.pipeline.pipeline import pipeline as _run_pipeline
     _run_pipeline()
 

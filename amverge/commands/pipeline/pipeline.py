@@ -1,6 +1,7 @@
 """
 Chain multiple operations (deadframes, upscale, interpolate) into a pipeline.
 
+Requires at least 2 of [deadframes], [upscale], [interpolation] extras installed.
 Run interactively with no arguments. Load saved presets with --load <name>.
 """
 from __future__ import annotations
@@ -12,6 +13,40 @@ import typer
 from ...ui import banner, console, err, make_progress, ok, fail, warn
 from ...ui.interactive import select, checkboxes, confirm, text_input
 from ...core.pipeline.presets import list_presets, load_preset, save_preset, delete_preset
+
+
+def _check_op_deadframes():
+    try:
+        from ...core.deadframes import DEADFRAMES_AVAILABLE as _ok
+        return _ok
+    except ImportError:
+        return False
+
+
+def _check_op_upscale():
+    try:
+        from ...core.upscaling import UPSCALE_AVAILABLE as _ok
+        return _ok
+    except ImportError:
+        return False
+
+
+def _check_op_interpolate():
+    try:
+        from ...core.interpolation import INTERPOLATION_AVAILABLE as _ok
+        return _ok
+    except ImportError:
+        return False
+
+
+_AVAILABLE_OPS = {
+    "deadframes": _check_op_deadframes(),
+    "upscale": _check_op_upscale(),
+    "interpolate": _check_op_interpolate(),
+}
+
+_AVAILABLE_COUNT = sum(1 for v in _AVAILABLE_OPS.values() if v)
+_PIPELINE_ENABLED = _AVAILABLE_COUNT >= 2
 
 
 def _prompt_deadframes(defaults: dict | None = None):
@@ -279,9 +314,21 @@ def pipeline(
 ) -> None:
     """Chain multiple operations (deadframes, upscale, interpolate) into a pipeline.
 
+    Requires at least 2 of the deadframes, upscale, interpolation extras installed.
     Run interactively with arrow-key navigation. Save presets with --save <name>.
     Load saved presets with --load <name>.
     """
+    if not _PIPELINE_ENABLED:
+        available = [k for k, v in _AVAILABLE_OPS.items() if v]
+        missing_ops = [k for k, v in _AVAILABLE_OPS.items() if not v]
+        fail(
+            f"Pipeline requires at least 2 operations installed. "
+            f"You have: {', '.join(available) if available else 'none'}. "
+            f"Missing: {', '.join(missing_ops)}. "
+            f"Install extras: pip install amverge[{' '.join(missing_ops)}]"
+        )
+        raise typer.Exit(1)
+
     if list_presets_flag:
         banner("pipeline presets")
         presets = list_presets()
@@ -326,16 +373,27 @@ def pipeline(
         banner("pipeline")
         err.print("  [muted]Select operations to run in sequence. Use space to toggle, enter to confirm.[/]\n")
 
-        op_names = ["deadframes  [dim](remove static frames)[/]", "upscale  [dim](AI super-resolution)[/]", "interpolate  [dim](frame interpolation)[/]"]
-        op_keys = ["deadframes", "upscale", "interpolate"]
-        ops_defaults = [i for i, k in enumerate(op_keys) if k in config.get("operations", [])]
-
+        op_names = [
+            f"{k}  [dim]{lbl}[/]"
+            for k, lbl in [
+                ("deadframes", "(remove static frames)"),
+                ("upscale", "(AI super-resolution)"),
+                ("interpolate", "(frame interpolation)"),
+            ]
+            if _AVAILABLE_OPS.get(k)
+        ]
+        op_keys_selected = [k for k in op_names]
+        for i, name in enumerate(op_names):
+            for k in ["deadframes", "upscale", "interpolate"]:
+                if name.startswith(k):
+                    op_keys_selected[i] = k
+                    break
         selected = checkboxes(op_names, "Select operations:", defaults=ops_defaults, console=err)
         if not selected:
             fail("At least one operation required.")
             raise typer.Exit(1)
 
-        config["operations"] = [op_keys[i] for i in selected]
+        config["operations"] = [op_keys_selected[i] for i in selected]
         err.print()
 
         if "deadframes" in config["operations"]:
