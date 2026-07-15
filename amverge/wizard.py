@@ -627,6 +627,12 @@ def _wizard_deadframes() -> None:
             fail(str(e))
 
 
+def _wizard_pipeline() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    from .commands.pipeline.pipeline import pipeline as _run_pipeline
+    _run_pipeline()
+
+
 def _wizard_depth_map() -> None:
     os.system("cls" if os.name == "nt" else "clear")
     from .ui import banner, console, err, ok, fail, make_progress
@@ -709,6 +715,7 @@ _WORKFLOW: list[tuple[str, str, object]] = [
     ("upscale",     "AI upscale video (ml, shader, onnx)",       _wizard_upscale),
     ("interpolate", "frame interpolation (RIFE or Flowframes)",  _wizard_interpolate),
     ("deadframes", "remove static frames (deadframe remover)",     _wizard_deadframes),
+    ("pipeline",   "chain deadframes + upscale + interpolate",      _wizard_pipeline),
     ("depth-map",   "generate depth maps from video",            _wizard_depth_map),
 ]
 
