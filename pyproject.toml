@@ -44,6 +44,7 @@ dependencies = [
     "av>=12",
     "pillow>=10",
     "numpy>=1.26",
+    "questionary>=2.0",
 ]
 
 [project.scripts]
