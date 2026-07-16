@@ -13,6 +13,26 @@ from .ffmpeg_helpers import CREATE_NO_WINDOW, build_ffmpeg_pipe, get_color_args,
 from .registry import QUALITY_PRESETS, get_model
 
 
+def resolve_onnx_providers(onnxruntime):
+    """Pick the ONNX Runtime execution providers for this machine.
+
+    Preference order is CUDA, then DirectML, then CPU. DirectML is the only
+    GPU provider that reaches an AMD or Intel card on Windows, and it ships in
+    the separate onnxruntime-directml distribution, so it is absent from a
+    stock onnxruntime install and the list falls through to CPU.
+
+    Returns:
+        A provider name list suitable for ``InferenceSession(providers=...)``.
+    """
+    available = onnxruntime.get_available_providers()
+    providers = []
+    for name in ("CUDAExecutionProvider", "DmlExecutionProvider"):
+        if name in available:
+            providers.append(name)
+    providers.append("CPUExecutionProvider")
+    return providers
+
+
 def get_artcnn_dir():
     return os.path.join(get_models_dir(), "artcnn")
 
@@ -127,10 +147,7 @@ def upscale_video_artcnn(input_path, output_path, model_key, entry, scale, prese
 
     q = QUALITY_PRESETS.get(preset, QUALITY_PRESETS["high"])
 
-    providers = []
-    if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
-        providers.append("CUDAExecutionProvider")
-    providers.append("CPUExecutionProvider")
+    providers = resolve_onnx_providers(onnxruntime)
 
     if not is_artcnn_downloaded(model_key):
         download_artcnn(model_key, progress_cb)
