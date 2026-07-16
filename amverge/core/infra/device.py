@@ -34,7 +34,8 @@ _MARKERS = (
 
 _PS_ADAPTERS = (
     "Get-CimInstance Win32_VideoController | "
-    "ForEach-Object { $_.Name + '|' + $_.AdapterRAM + '|' + $_.DriverVersion }"
+    "ForEach-Object { $_.Name + '|' + $_.AdapterRAM + '|' + $_.DriverVersion "
+    "+ '|' + $_.ConfigManagerErrorCode }"
 )
 
 _REG_QUERY = (
@@ -133,6 +134,27 @@ def _registry_vram() -> dict:
     return sizes
 
 
+def _adapter_usable(parts: list[str]) -> bool:
+    """Whether a Win32_VideoController row describes a working adapter.
+
+    The class lists adapters that are present but not usable: disabled in
+    Device Manager, driver failed to start, resource conflict. They keep their
+    name, VRAM and driver version, so a probe that only reads those treats a
+    disabled card as the primary GPU and sends the user down a backend that
+    cannot run.
+
+    ConfigManagerErrorCode is 0 only when the device is working properly. A row
+    without the field is trusted, since an older provider that omits it should
+    not black out every GPU.
+    """
+    if len(parts) < 4:
+        return True
+    code = parts[3].strip()
+    if not code:
+        return True
+    return code == "0"
+
+
 def _probe_windows() -> list[GpuDevice]:
     output = _run_ps(_PS_ADAPTERS)
     if not output:
@@ -148,6 +170,8 @@ def _probe_windows() -> list[GpuDevice]:
         name = parts[0].strip()
         vendor = classify_vendor(name)
         if vendor == VENDOR_NONE:
+            continue
+        if not _adapter_usable(parts):
             continue
 
         vram_bytes = reg_sizes.get(name.lower(), 0)

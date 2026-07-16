@@ -71,7 +71,7 @@ def gpu() -> None:
     elif gap == "torch_not_cuda":
         t1.add_row("PyTorch (CUDA)",     "[warn]cpu only[/]  torch built without CUDA")
     elif gap == "no_torch_backend":
-        t1.add_row("PyTorch (CUDA)",     f"[warn]cpu only[/]  no CUDA backend for a {detected.vendor} GPU")
+        t1.add_row("PyTorch (CUDA)",     f"[warn]cpu only[/]  no CUDA backend for an {detected.vendor.upper()} GPU")
     else:
         t1.add_row("PyTorch (CUDA)",     "[warn]cpu only[/]  no GPU detected")
 
