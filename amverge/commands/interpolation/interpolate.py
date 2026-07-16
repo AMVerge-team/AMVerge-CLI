@@ -4,8 +4,7 @@ from pathlib import Path
 
 import typer
 
-from ...ui import banner, console, err, make_progress, ok, fail
-from ...core.infra.diagnostics import get_gpu_info
+from ...ui import banner, console, err, gpu_line, make_progress, ok, fail
 from ...core.infra.ffmpeg_bootstrap import is_portable_ffmpeg_installed, ensure_ffmpeg
 from ...core.upscaling.monitor import SystemMonitor, format_eta
 from ...core.interpolation.registry import (
@@ -145,13 +144,10 @@ def interpolate(
 
     banner("interpolate")
 
-    gpu_info = get_gpu_info()
-    if gpu_info.get("cuda_available"):
-        vram = gpu_info.get("vram_gb", 0)
-        console.print(f"  GPU: [accent]{gpu_info.get('gpu_name', 'N/A')}[/accent]  "
-                      f"VRAM: [accent]{vram:.1f} GB[/accent]")
-    else:
-        console.print("  [warn]No NVIDIA GPU detected. Interpolation on CPU will be very slow.[/warn]")
+    gpu_info = gpu_line(
+        label="GPU:",
+        alternatives="'amverge flowframes' runs RIFE on this GPU through Vulkan (ncnn).",
+    )
 
     entry = INTERPOLATION_REGISTRY[model]
     console.print(f"  Model: [accent]{entry['name']}[/accent]  "
@@ -167,7 +163,7 @@ def interpolate(
     from ...core.interpolation import interpolate_video
 
     monitor = SystemMonitor(enabled=not no_monitor)
-    monitor.stats["gpu_name"] = gpu_info.get("gpu_name", "GPU")
+    monitor.stats["gpu_name"] = gpu_info.get("gpu_name") or "GPU"
     monitor.start()
 
     def _update_display():

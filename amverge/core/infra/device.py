@@ -286,30 +286,27 @@ def torch_accelerated() -> bool:
     return get_device_type() != "cpu"
 
 
-def vulkan_hint(gpu: GpuDevice | None = None) -> str | None:
-    """Return a one line hint pointing a non-CUDA GPU at the Vulkan backends.
+def torch_backend_gap() -> str | None:
+    """Classify why the PyTorch paths cannot use the GPU, if they cannot.
 
-    Returns ``None`` when PyTorch is already GPU accelerated, so callers can
-    treat a truthy result as "the torch path will be slow here".
+    Returns ``None`` when PyTorch is already GPU accelerated. Otherwise one of:
+
+    ``no_gpu``
+        Nothing was detected. Only the CPU is available.
+    ``no_torch_backend``
+        A GPU is present that PyTorch has no backend for. This is every AMD and
+        Intel card on Windows. The Vulkan paths are the answer.
+    ``torch_not_cuda``
+        An NVIDIA card is present but PyTorch was installed without CUDA, so
+        reinstalling torch fixes it.
+
+    Callers own the wording. This module stays free of CLI vocabulary.
     """
     if torch_accelerated():
         return None
-    gpu = gpu or detect_gpu()
-    if gpu.is_amd:
-        return (
-            f"{gpu.name or 'AMD GPU'} detected. PyTorch models have no AMD backend on "
-            "Windows and will run on CPU. Use the Vulkan paths instead: "
-            "'--method shader' for upscaling, 'amverge flowframes' for interpolation."
-        )
-    if gpu.vendor == VENDOR_INTEL:
-        return (
-            f"{gpu.name or 'Intel GPU'} detected. PyTorch models will run on CPU. "
-            "Use the Vulkan paths instead: '--method shader' for upscaling, "
-            "'amverge flowframes' for interpolation."
-        )
+    gpu = detect_gpu()
+    if not gpu.available:
+        return "no_gpu"
     if gpu.is_nvidia:
-        return (
-            f"{gpu.name or 'NVIDIA GPU'} detected but PyTorch has no CUDA support. "
-            "Reinstall torch with CUDA: see https://pytorch.org/get-started/locally/"
-        )
-    return "No GPU detected. Models will run on CPU, which is very slow."
+        return "torch_not_cuda"
+    return "no_torch_backend"
