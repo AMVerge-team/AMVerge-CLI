@@ -12,7 +12,6 @@ from pathlib import Path
 import typer
 
 from ...ui import banner, console, err, gpu_line, make_progress, ok, fail
-from ...core.infra.diagnostics import get_gpu_info
 from ...core.infra.ffmpeg_bootstrap import is_portable_ffmpeg_installed, ensure_ffmpeg
 from ...core.upscaling.monitor import SystemMonitor, format_eta
 from ...core.deadframes.registry import DEADFRAMES_REGISTRY
