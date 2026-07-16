@@ -21,7 +21,26 @@ pip install -e ".[ml]"     # + TransNetV2 ML detection (torch, GPU optional)
 pip install -e ".[interpolation]"   # + RIFE PyTorch CUDA/CPU inference
 pip install -e ".[flowframes]"      # no extra deps (external Flowframes.exe)
 pip install -e ".[upscale]"         # + OpenCV, spandrel, onnxruntime for upscaling
+pip install -e ".[upscale-amd]"     # AMD/Intel: same, but onnxruntime-directml (Windows only)
 ```
+
+`[upscale-amd]` REPLACES `[upscale]`, it does not add to it. Both onnxruntime
+distributions install a module named `onnxruntime` and clobber each other, so
+installing both yields a broken runtime. `pip uninstall onnxruntime` first.
+
+## GPU backends
+
+| Backend | Reaches | Used by |
+|---|---|---|
+| PyTorch CUDA | NVIDIA only | ml upscaling (spandrel), RIFE `interpolate`, TransNetV2, depth |
+| ONNX DirectML | any vendor, Windows | ArtCNN (`[upscale-amd]`) |
+| Vulkan libplacebo | any vendor | Anime4K (`-m anime4k`) |
+| Vulkan ncnn | any vendor | Flowframes `RifeNcnn`/`DainNcnn` (the default) |
+
+There is no AMD PyTorch backend on Windows: ROCm is Linux-only and
+torch-directml pins torch 2.4 and does not support `autocast`. So on AMD the
+torch paths run on CPU by design, and the Vulkan paths are the answer. Route
+users there rather than reporting "no GPU".
 
 No build step. Pure Python package, `hatchling` backend.
 
@@ -52,7 +71,7 @@ twine upload dist/*
 | Scene cutting | Smart cut: lossless copy + re-encode tail, or full re-encode (HEVC/fallback) |
 | Image | Pillow |
 | Numerics | NumPy |
-| GPU | PyTorch (CUDA auto-detected, CPU fallback) |
+| GPU | PyTorch (CUDA, NVIDIA only, CPU fallback). AMD/Intel reach the GPU via Vulkan (Anime4K/libplacebo, Flowframes ncnn) or DirectML (ArtCNN ONNX, `[upscale-amd]` extra) |
 | Edge detection | OpenCV (optional, `[edge]` extra) |
 | Package | hatchling, PyPI name `amverge` |
 | Frame interpolation | Flowframes 1.42.0 (external .exe, Windows-only, NVIDIA GPU recommended; free 1.36.0 planned; `[flowframes]` extra) |
@@ -124,6 +143,7 @@ AMVerge-CLI/
 │       │   └── image.py         crop_image() + CropData - supports animated GIF
 │       ├── infra/
 │       │   ├── binaries.py      get_binary(), get_ffmpeg(), get_ffprobe() - PyInstaller-aware PATH search
+│       │   ├── device.py        detect_gpu(), gpu_vendor(), torch_backend_gap() - vendor-neutral GPU probe
 │       │   ├── diagnostics.py   get_gpu_info(), get_versions() - clean wrappers
 │       │   └── ipc.py           emit_progress(), emit_event(), log(), check_if_path_exists(), build_video_cache_prefix()
 │       ├── keyframes/
@@ -269,6 +289,9 @@ for scene in result.scenes:
 | `core/keyframes/keyframe_align.py` | `get_keyframe_timestamps_pyav` uses PyAV demux with `type(stream.discard).nonkey` enum (PyAV 17.x; was `"NONKEY"` string in older PyAV). `classify_scenes_by_keyframe_alignment` partitions scenes for Phase 1 vs Phase 2 cutting. |
 | `core/thumbnails/thumbnails_streaming.py` | V1 backend mode only. Emits events as each thumbnail completes. Not used in V2 backend. |
 | `core/discord/discord_rpc.py` | Uses same CLIENT_ID as AMVerge app (`1497922104065134823`). Silently no-ops if pypresence not installed. `--no-rpc` flag on detect/export/merge to disable. Methods: idle/detecting/selecting/navigating/exporting/merging/complete/error. |
+| `core/infra/device.py` | Vendor-neutral GPU probe. `torch.cuda.is_available()` answers "can PyTorch use CUDA", NOT "is there a GPU" - on AMD it returns False and callers used to conclude there was no GPU at all. Use `detect_gpu()` for hardware questions, `torch_backend_gap()` to classify why the torch path is CPU-bound. Two Windows gotchas (do not reintroduce): (1) `Win32_VideoController.AdapterRAM` is uint32 and saturates at 4 GiB, misreporting every modern card - real VRAM comes from `HardwareInformation.qwMemorySize` in the display class registry key. (2) PowerShell is invoked as an argv list, never `shell=True` - a shell mangles the GUID braces/backslashes in the registry path and silently returns nothing. PowerShell also exits non-zero on trailing non-terminating errors while emitting valid output, so the exit code is ignored. This module stays free of CLI vocabulary: it returns classifications, `ui.gpu_line()` owns the wording. |
+| `ui/__init__.py` | **`amverge/ui.py` also exists and is dead code** - Python resolves `import amverge.ui` to the package, so edits to `ui.py` compile and do nothing. Always edit `ui/__init__.py`. `fail()` and `gpu_line()` call `escape()` because messages carry literal brackets (`pip install amverge[ml]`) that Rich parses as style tags and silently deletes, leaving `pip install amverge`. Escape any message containing an extra name. |
+| `core/upscaling/monitor.py` | `sample_gpu()` selects its backend ONCE and caches it. It used to run the full chain per call, and the sampler ticks every second, so an AMD box spawned a doomed `nvidia-smi` per second all run. AMD/Intel use `_sample_adapter()` (total VRAM only, live fields None). Do not add a Get-Counter path for utilization: it measured 4.6s per call against a 1s interval. |
 | `core/upscaling/engine.py` | `upscale_model(key, ...)` - unified dispatch. Reads model from registry, routes ml → `_upscale_ml()` (spandrel, in-file), shader → `anime4k.upscale_video_anime4k()`, onnx → `artcnn.upscale_video_artcnn()`. Engine owns the ml path only; shader/onnx live in their own modules. |
 | `core/upscaling/registry.json` | Declarative model registry. To add a model, add one JSON entry with method, name, scales, credit, description, file/hash. CLI auto-discovers everything. `_source` holds the ml/anime4k/artcnn base URLs; `registry.py` builds per-model `url` (ml/onnx) or `download_url` (shader zip). |
 | `core/upscaling/ffmpeg_helpers.py` | Shared FFmpeg utilities used by engine/anime4k/artcnn (avoids circular import): `mux_audio()` (copies source audio with `-c:a copy`, AAC re-encode only as fallback), `build_ffmpeg_pipe()` (rawvideo stdin pipe), `get_color_args()` (probe + pass through source color primaries/transfer/matrix/range), `get_video_dims_ffprobe()`, `encode_thread_count()`, `ensure_ffmpeg()`, `CREATE_NO_WINDOW`. All encoders use `-profile:v high` with NO explicit `-level` (x264 auto-selects; hardcoding 5.1 produced non-compliant streams for 4x-of-HD outputs). |
