@@ -71,13 +71,20 @@ def get_gpu_info() -> dict:
 
     Returns a dict with keys:
         torch_version, cuda_available, cuda_version, gpu_count,
-        gpu_name, vram_gb, transnetv2_available, opencv_available,
-        rpc_available, nelux_available.
+        gpu_name, vram_gb, gpu_vendor, gpu_driver, torch_accelerated,
+        transnetv2_available, opencv_available, rpc_available,
+        nelux_available.
+
+    ``cuda_available`` stays true to its name: it reports whether PyTorch can
+    run on CUDA, not whether a GPU exists. Use ``gpu_vendor`` to tell an AMD
+    card apart from no card at all.
 
     Example:
         >>> info = get_gpu_info()
         >>> if info["cuda_available"]:
         ...     print(f"GPU: {info['gpu_name']} ({info['vram_gb']:.1f} GB)")
+        >>> elif info["gpu_vendor"] == "amd":
+        ...     print("AMD GPU: use the Vulkan backends")
     """
     info: dict = {
         "torch_version": None,
@@ -86,6 +93,9 @@ def get_gpu_info() -> dict:
         "gpu_count": 0,
         "gpu_name": None,
         "vram_gb": 0.0,
+        "gpu_vendor": "none",
+        "gpu_driver": None,
+        "torch_accelerated": False,
         "transnetv2_available": False,
         "opencv_available": False,
         "rpc_available": False,
@@ -99,14 +109,25 @@ def get_gpu_info() -> dict:
         import torch
         info["torch_version"] = torch.__version__
         info["cuda_available"] = torch.cuda.is_available()
+        info["torch_accelerated"] = torch.cuda.is_available()
         if torch.cuda.is_available():
             info["cuda_version"] = torch.version.cuda
             info["gpu_count"] = torch.cuda.device_count()
-            if torch.cuda.device_count() > 0:
-                info["gpu_name"] = torch.cuda.get_device_name(0)
-                props = torch.cuda.get_device_properties(0)
-                info["vram_gb"] = props.total_memory / (1024 ** 3)
     except ImportError:
+        pass
+
+    try:
+        from .device import detect_gpu
+        gpu = detect_gpu()
+        info["gpu_vendor"] = gpu.vendor
+        info["gpu_driver"] = gpu.driver
+        if gpu.name:
+            info["gpu_name"] = gpu.name
+        if gpu.vram_gb:
+            info["vram_gb"] = gpu.vram_gb
+        if gpu.available and not info["gpu_count"]:
+            info["gpu_count"] = 1
+    except Exception:
         pass
 
     try:
@@ -269,6 +290,13 @@ def check_environment() -> EnvironmentCheck:
             cu = ""
             if imp == "torch":
                 cu = f"  CUDA={'yes' if mod.cuda.is_available() else 'no'}"
+                try:
+                    from .device import detect_gpu
+                    gpu = detect_gpu()
+                    if gpu.available:
+                        cu += f"  GPU={gpu.vendor}"
+                except Exception:
+                    pass
             result.checks.append(CheckResult(f"{pkg} {extra}", True, f"v{ver}{cu}"))
         except ImportError:
             result.checks.append(CheckResult(f"{pkg} {extra}", False, "not installed",
