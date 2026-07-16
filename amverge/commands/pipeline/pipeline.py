@@ -388,6 +388,10 @@ def pipeline(
                 if name.startswith(k):
                     op_keys_selected[i] = k
                     break
+        ops_defaults = [
+            i for i, k in enumerate(op_keys_selected)
+            if k in config.get("operations", [])
+        ]
         selected = checkboxes(op_names, "Select operations:", defaults=ops_defaults, console=err)
         if not selected:
             fail("At least one operation required.")
