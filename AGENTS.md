@@ -92,6 +92,10 @@ AMVerge-CLI/
 │   │   │   ├── interpolate.py       amverge interpolate  (Python RIFE inference)
 │       │   │   ├── flowframes.py    amverge flowframes  (Flowframes 1.42.0 external process; free 1.36.0 planned)
 │   │   │   └── flowframes_path.py   amverge flowframes-path  (set/show Flowframes.exe path)
+│   │   ├── deadframes/
+│   │   │   └── deadframes.py    amverge deadframes  (deadframe removal via optical flow + ORB homography)
+│   │   ├── pipeline/
+│   │   │   └── pipeline.py      amverge pipeline  (chain deadframes + upscale + interpolate, preset save/load)
 │   │   ├── info/
 │   │   │   ├── info.py          amverge info  (stream metadata via PyAV)
 │   │   │   └── probe.py         amverge probe  (V2 diagnostics: codec/HEVC/keyframes/scene cache)
@@ -150,6 +154,14 @@ AMVerge-CLI/
 │       │   ├── engine.py               interpolate_video() - RIFE PyTorch CUDA/CPU inference
 │       │   ├── flowframes.py           run_flowframes(), flowframes_available(), cancel_flowframes() - Flowframes 1.42.0 integration; free 1.36.0 planned
 │       │   └── __init__.py             exports: interpolate_video, run_flowframes, INTERPOLATION_REGISTRY, download_weights, ...
+│       ├── deadframes/
+│       │   ├── registry.json          declarative model registry - add models here, CLI auto-discovers
+│       │   ├── registry.py             loads registry.json, builds URLs, query functions
+│       │   ├── weight_loader.py        download_weights(), verify_weight_hash()
+│       │   ├── engine.py               DeadFrameDetector, run_deadframes() - optical flow + ORB homography + motion-area analysis
+│       │   └── __init__.py             exports: run_deadframes, DEADFRAMES_REGISTRY, DEADFRAMES_AVAILABLE, ...
+│       ├── pipeline/
+│       │   └── presets.py       list/load/save/delete pipeline presets as JSON
 │       ├── video/
 │       │   ├── probe_utils.py   probe_video_fps/duration/dimensions/total_frames via ffprobe
 │       │   ├── scene_utils.py   scenes_to_objects(), scenes_frames_to_seconds()

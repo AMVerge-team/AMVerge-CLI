@@ -99,7 +99,7 @@ def generate_thumbnails_streaming(
                 {**s, "thumbnail_ready": position_ready[i]}
                 for i, s in enumerate(scenes)
             ]
-            emit_event("INITIAL_CLIPS_READY", json.dumps(scenes_json))
+            emit_event("INITIAL_CLIPS_READY|" + json.dumps(scenes_json))
             initial_emitted[0] = True
 
         try_advance_pairs_locked()

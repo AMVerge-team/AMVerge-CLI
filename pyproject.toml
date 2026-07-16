@@ -44,6 +44,7 @@ dependencies = [
     "av>=12",
     "pillow>=10",
     "numpy>=1.26",
+    "questionary>=2.0",
 ]
 
 [project.scripts]
@@ -57,6 +58,7 @@ upscale       = ["torch>=2.0", "opencv-python-headless>=4.9", "spandrel>=0.3", "
 interpolation = ["torch>=2.0", "opencv-python-headless>=4.9", "scipy>=1.10"]
 flowframes    = []
 depth         = ["depth-anything-v2>=0.1", "opencv-python-headless>=4.9"]
+deadframes    = ["opencv-python-headless>=4.9"]
 all           = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0", "opencv-python-headless>=4.9", "pypresence>=4.3", "spandrel>=0.3", "onnxruntime>=1.16", "scipy>=1.10", "depth-anything-v2>=0.1"]
 dev           = ["pyinstaller>=6"]
 
@@ -68,4 +70,5 @@ include = [
     "examples/**/*.md",
     "docs/*.md",
     "amverge/core/upscaling/registry.json",
+    "amverge/core/deadframes/registry.json",
 ]
