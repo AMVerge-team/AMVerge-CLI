@@ -71,7 +71,7 @@ def get_gpu_info() -> dict:
 
     Returns a dict with keys:
         torch_version, cuda_available, cuda_version, gpu_count,
-        gpu_name, vram_gb, gpu_vendor, gpu_driver, torch_accelerated,
+        gpu_name, vram_gb, gpu_vendor, gpu_driver,
         transnetv2_available, opencv_available, rpc_available,
         nelux_available.
 
@@ -95,7 +95,6 @@ def get_gpu_info() -> dict:
         "vram_gb": 0.0,
         "gpu_vendor": "none",
         "gpu_driver": None,
-        "torch_accelerated": False,
         "transnetv2_available": False,
         "opencv_available": False,
         "rpc_available": False,
@@ -109,7 +108,6 @@ def get_gpu_info() -> dict:
         import torch
         info["torch_version"] = torch.__version__
         info["cuda_available"] = torch.cuda.is_available()
-        info["torch_accelerated"] = torch.cuda.is_available()
         if torch.cuda.is_available():
             info["cuda_version"] = torch.version.cuda
             info["gpu_count"] = torch.cuda.device_count()

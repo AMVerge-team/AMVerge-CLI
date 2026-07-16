@@ -288,15 +288,13 @@ def detect_gpu(refresh: bool = False) -> GpuDevice:
         match = next(
             (a for a in adapters if a.vendor == VENDOR_NVIDIA and a.vram_gb > 0), None,
         )
-        if match is not None and torch_gpu.vram_gb <= 0:
+        if match is not None:
             torch_gpu = GpuDevice(
-                vendor=VENDOR_NVIDIA, name=torch_gpu.name, vram_gb=match.vram_gb,
-                driver=match.driver, torch_cuda=True,
-            )
-        elif match is not None:
-            torch_gpu = GpuDevice(
-                vendor=VENDOR_NVIDIA, name=torch_gpu.name, vram_gb=torch_gpu.vram_gb,
-                driver=match.driver, torch_cuda=True,
+                vendor=VENDOR_NVIDIA,
+                name=torch_gpu.name,
+                vram_gb=torch_gpu.vram_gb or match.vram_gb,
+                driver=match.driver,
+                torch_cuda=True,
             )
         _cache = torch_gpu
         return _cache
@@ -323,12 +321,6 @@ def get_device_type() -> str:
         return "cuda" if torch.cuda.is_available() else "cpu"
     except ImportError:
         return "cpu"
-
-
-def get_torch_device():
-    """Return the :class:`torch.device` the ML paths should use."""
-    import torch
-    return torch.device(get_device_type())
 
 
 def torch_accelerated() -> bool:
