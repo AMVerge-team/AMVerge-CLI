@@ -696,10 +696,13 @@ def run_deadframes(
     if progress_cb:
         progress_cb(80, "Encoding")
 
-    try:
-        subprocess.run(cmd, check=True, creationflags=_CREATE_NO_WINDOW)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"FFmpeg failed: {e}")
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        creationflags=_CREATE_NO_WINDOW,
+    )
+    if result.returncode != 0:
+        tail = "\n".join(result.stderr.strip().splitlines()[-10:])
+        raise RuntimeError(f"FFmpeg failed:\n{tail}")
 
     if progress_cb:
         progress_cb(100, "Done")

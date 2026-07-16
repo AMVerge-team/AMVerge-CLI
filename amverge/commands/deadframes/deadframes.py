@@ -213,6 +213,8 @@ def deadframes(
         )
         raise typer.Exit(1)
 
+    output.parent.mkdir(parents=True, exist_ok=True)
+
     from ...core.deadframes.engine import DEADFRAMES_AVAILABLE
 
     if not DEADFRAMES_AVAILABLE:

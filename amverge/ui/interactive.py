@@ -14,16 +14,7 @@ except ImportError:
     Style = None
     INTERACTIVE_AVAILABLE = False
 
-_AMVERGE_STYLE = Style([
-    ("qmark", "fg:#22c55e bold"),
-    ("question", "bold"),
-    ("answer", "fg:#22c55e bold"),
-    ("pointer", "fg:#22c55e bold"),
-    ("highlighted", "fg:#22c55e bold"),
-    ("selected", "fg:#22c55e"),
-    ("instruction", "fg:#5f5f5f"),
-    ("text", ""),
-])
+_AMVERGE_STYLE = None
 
 
 def _check():
@@ -31,6 +22,23 @@ def _check():
         raise ImportError(
             "questionary is required for interactive mode. Install with: pip install questionary"
         )
+
+
+def _style():
+    global _AMVERGE_STYLE
+    if _AMVERGE_STYLE is None:
+        _check()
+        _AMVERGE_STYLE = Style([
+            ("qmark", "fg:#22c55e bold"),
+            ("question", "bold"),
+            ("answer", "fg:#22c55e bold"),
+            ("pointer", "fg:#22c55e bold"),
+            ("highlighted", "fg:#22c55e bold"),
+            ("selected", "fg:#22c55e"),
+            ("instruction", "fg:#5f5f5f"),
+            ("text", ""),
+        ])
+    return _AMVERGE_STYLE
 
 
 def select(
@@ -46,7 +54,7 @@ def select(
         message,
         choices=options,
         default=default_choice,
-        style=_AMVERGE_STYLE,
+        style=_style(),
         qmark=">",
     ).ask()
 
@@ -72,7 +80,7 @@ def checkboxes(
     answer = questionary.checkbox(
         message,
         choices=choices,
-        style=_AMVERGE_STYLE,
+        style=_style(),
         qmark=">",
         instruction="(space to toggle, enter to confirm)",
     ).ask()
@@ -91,7 +99,7 @@ def confirm(message: str = "Confirm?", default: bool = True, console: Optional[C
         message,
         choices=options,
         default=default_choice,
-        style=_AMVERGE_STYLE,
+        style=_style(),
         qmark=">",
     ).ask()
 
@@ -105,7 +113,7 @@ def text_input(message: str = "Input:", default: str = "", console: Optional[Con
     answer = questionary.text(
         message,
         default=default,
-        style=_AMVERGE_STYLE,
+        style=_style(),
         qmark=">",
     ).ask()
     return answer if answer is not None else ""

@@ -9,6 +9,7 @@ Color palette (from frontend/src/styles/variables.css):
 from __future__ import annotations
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
@@ -128,7 +129,9 @@ def warn(msg: str) -> None:
     console.print(f"[warn]>[/] {msg}")
 
 def fail(msg: str) -> None:
-    err.print(f"[error]>[/] {msg}")
+    # Escape: messages carry literal brackets (ffmpeg filter labels, extras
+    # like amverge[ml]) that rich would otherwise strip as style tags.
+    err.print(f"[error]>[/] {escape(str(msg))}")
 
 def dim(msg: str) -> None:
     console.print(f"[muted]{msg}[/]")
