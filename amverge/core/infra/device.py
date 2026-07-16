@@ -19,8 +19,6 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
-
 VENDOR_NVIDIA = "nvidia"
 VENDOR_AMD = "amd"
 VENDOR_INTEL = "intel"
@@ -32,18 +30,14 @@ _MARKERS = (
     (VENDOR_INTEL, (r"\bintel\b", r"\barc\b", r"\buhd\b", r"\biris\b")),
 )
 
-_PS_ADAPTERS = (
-    "Get-CimInstance Win32_VideoController | "
-    "ForEach-Object { $_.Name + '|' + $_.AdapterRAM + '|' + $_.DriverVersion "
-    "+ '|' + $_.ConfigManagerErrorCode }"
+_DISPLAY_CLASS_KEY = (
+    r"SYSTEM\CurrentControlSet\Control\Class"
+    r"\{4d36e968-e325-11ce-bfc1-08002be10318}"
 )
 
-_REG_QUERY = (
-    "Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\"
-    "{4d36e968-e325-11ce-bfc1-08002be10318}\\*' -ErrorAction SilentlyContinue | "
-    "Where-Object { $_.'HardwareInformation.qwMemorySize' } | "
-    "ForEach-Object { $_.DriverDesc + '|' + $_.'HardwareInformation.qwMemorySize' }"
-)
+_PCI_ENUM_KEY = r"SYSTEM\CurrentControlSet\Enum\PCI"
+
+CONFIGFLAG_DISABLED = 0x00000001
 
 _cache: "GpuDevice | None" = None
 
@@ -99,92 +93,124 @@ def classify_vendor(name: str | None) -> str:
     return VENDOR_NONE
 
 
-def _run_ps(command: str) -> str:
-    """Run a PowerShell snippet and return its stdout.
-
-    The command is passed as an argv list, never through a shell. Quoting a
-    registry path through a shell mangles the GUID braces and backslashes and
-    silently yields nothing. PowerShell also reports a non-zero exit for a
-    trailing non-terminating error while still emitting valid output, so the
-    exit code is not consulted.
-    """
-    try:
-        proc = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
-            capture_output=True, text=True, timeout=20,
-            creationflags=CREATE_NO_WINDOW,
-        )
-    except Exception:
-        return ""
-    return (proc.stdout or "").strip()
-
-
-def _registry_vram() -> dict:
-    """Map adapter name to VRAM bytes from the driver registry key.
-
-    Win32_VideoController.AdapterRAM is a uint32 and saturates at 4 GiB, which
-    misreports every modern card. The class registry key holds the real size.
-    """
-    sizes: dict = {}
-    for line in _run_ps(_REG_QUERY).splitlines():
-        parts = line.strip().split("|")
-        if len(parts) < 2 or not parts[1].strip().isdigit():
+def _reg_values(key) -> dict:
+    import winreg
+    out = {}
+    for i in range(winreg.QueryInfoKey(key)[1]):
+        try:
+            name, value, _ = winreg.EnumValue(key, i)
+        except OSError:
             continue
-        sizes[parts[0].strip().lower()] = int(parts[1].strip())
-    return sizes
+        out[name] = value
+    return out
 
 
-def _adapter_usable(parts: list[str]) -> bool:
-    """Whether a Win32_VideoController row describes a working adapter.
+def _disabled_pci_ids() -> set:
+    """VEN_xxxx&DEV_xxxx ids that are disabled in Device Manager.
 
-    The class lists adapters that are present but not usable: disabled in
-    Device Manager, driver failed to start, resource conflict. They keep their
-    name, VRAM and driver version, so a probe that only reads those treats a
-    disabled card as the primary GPU and sends the user down a backend that
-    cannot run.
-
-    ConfigManagerErrorCode is 0 only when the device is working properly. A row
-    without the field is trusted, since an older provider that omits it should
-    not black out every GPU.
+    The display class key carries the name and VRAM but not the device state.
+    That lives under the PCI enum key, whose ConfigFlags has CONFIGFLAG_DISABLED
+    set when the user turns the adapter off. Reading it needs no elevation.
     """
-    if len(parts) < 4:
-        return True
-    code = parts[3].strip()
-    if not code:
-        return True
-    return code == "0"
+    import winreg
+
+    disabled = set()
+    try:
+        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _PCI_ENUM_KEY)
+    except OSError:
+        return disabled
+
+    with root:
+        i = 0
+        while True:
+            try:
+                dev_id = winreg.EnumKey(root, i)
+            except OSError:
+                break
+            i += 1
+            try:
+                dev_key = winreg.OpenKey(root, dev_id)
+            except OSError:
+                continue
+            with dev_key:
+                j = 0
+                while True:
+                    try:
+                        inst = winreg.EnumKey(dev_key, j)
+                    except OSError:
+                        break
+                    j += 1
+                    try:
+                        with winreg.OpenKey(dev_key, inst) as inst_key:
+                            flags = winreg.QueryValueEx(inst_key, "ConfigFlags")[0]
+                    except OSError:
+                        continue
+                    if isinstance(flags, int) and flags & CONFIGFLAG_DISABLED:
+                        disabled.add(_ven_dev(dev_id))
+    return disabled
+
+
+def _ven_dev(device_id: str) -> str:
+    """Reduce a PCI id to its VEN_xxxx&DEV_xxxx part, upper case."""
+    tail = device_id.upper().split("\\")[-1]
+    bits = [b for b in tail.split("&") if b.startswith(("VEN_", "DEV_"))]
+    return "&".join(bits)
 
 
 def _probe_windows() -> list[GpuDevice]:
-    output = _run_ps(_PS_ADAPTERS)
-    if not output:
+    """Read the display adapters from the driver registry.
+
+    Win32_VideoController answers the same question through WMI, but
+    Get-CimInstance measured around 9 seconds on a laptop with two GPUs, and
+    detect_gpu() sits in the startup path of every upscale and interpolate run.
+    The registry holds the same fields and answers in about a millisecond.
+    """
+    import winreg
+
+    try:
+        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS_KEY)
+    except OSError:
         return []
 
-    reg_sizes = _registry_vram()
+    disabled = _disabled_pci_ids()
     found: list[GpuDevice] = []
 
-    for line in output.splitlines():
-        parts = line.strip().split("|")
-        if not parts or not parts[0].strip():
-            continue
-        name = parts[0].strip()
-        vendor = classify_vendor(name)
-        if vendor == VENDOR_NONE:
-            continue
-        if not _adapter_usable(parts):
-            continue
+    with root:
+        i = 0
+        while True:
+            try:
+                sub = winreg.EnumKey(root, i)
+            except OSError:
+                break
+            i += 1
+            if not sub.isdigit():
+                continue
+            try:
+                key = winreg.OpenKey(root, sub)
+            except OSError:
+                continue
+            with key:
+                vals = _reg_values(key)
 
-        vram_bytes = reg_sizes.get(name.lower(), 0)
-        if not vram_bytes and len(parts) > 1 and parts[1].strip().isdigit():
-            vram_bytes = int(parts[1].strip())
+            name = vals.get("DriverDesc")
+            vendor = classify_vendor(name)
+            if vendor == VENDOR_NONE:
+                continue
 
-        driver = parts[2].strip() if len(parts) > 2 and parts[2].strip() else None
-        found.append(GpuDevice(
-            vendor=vendor,
-            name=name,
-            vram_gb=vram_bytes / (1024 ** 3) if vram_bytes else 0.0,
-            driver=driver,
-        ))
+            match_id = vals.get("MatchingDeviceId")
+            if match_id and _ven_dev(match_id) in disabled:
+                continue
+
+            vram = vals.get("HardwareInformation.qwMemorySize") or 0
+            if not isinstance(vram, int):
+                vram = 0
+
+            found.append(GpuDevice(
+                vendor=vendor,
+                name=name.strip(),
+                vram_gb=vram / (1024 ** 3) if vram else 0.0,
+                driver=vals.get("DriverVersion") or None,
+            ))
 
     return found
 
