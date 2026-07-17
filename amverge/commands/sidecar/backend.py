@@ -43,8 +43,6 @@ def backend(
     use_keyframe = method.startswith("keyframe")
 
     if use_keyframe:
-        # Keyframe detection is pure PyAV I-frame demux: no torch, no CUDA, no
-        # model. Boundaries land on keyframes so every scene cuts losslessly.
         device = "cpu"
         use_cuda = False
         detector_tag = "keyframe"
