@@ -254,8 +254,10 @@ def _build_ffmpeg_cmd(
         cmd += ["-an"]
 
     if is_10bit:
-        cmd.insert(cmd.index("high") + 1, "5.1")
-        cmd.insert(cmd.index("-profile:v"), "-level")
+        # 10-bit encodes with libx265, whose profile is main10; the h264 "high"
+        # profile is invalid here and left ffmpeg treating "high" as an output
+        # filename ("Unable to choose an output format for 'high'").
+        cmd[cmd.index("high")] = "main10"
 
     if color_args:
         cmd += color_args
@@ -502,6 +504,7 @@ class DeadFrameDetector:
         auto: bool = False,
         auto_sample_limit: int = 0,
         progress_cb: Optional[Callable[[int, str], None]] = None,
+        preview_cb: Optional[Callable[[object, int], None]] = None,
     ) -> list[bool]:
         cap = self.cv2.VideoCapture(input_path)
         if not cap.isOpened():
@@ -557,6 +560,8 @@ class DeadFrameDetector:
             if pair_idx % 10 == 0 and total_frames > 1:
                 pct = min(50, int(pair_idx * 50 / (total_frames - 1)))
                 _emit(pct)
+                if preview_cb:
+                    preview_cb(curr_frame, pct)
         cap.release()
         _emit(50, "Detected")
 
@@ -607,6 +612,7 @@ def run_deadframes(
     prores: bool = False,
     no_audio: bool = False,
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    preview_cb: Optional[Callable[[object, int], None]] = None,
 ) -> dict[str, Any]:
     if not DEADFRAMES_AVAILABLE:
         raise ImportError(
@@ -638,6 +644,7 @@ def run_deadframes(
         auto=auto,
         auto_sample_limit=auto_sample_limit,
         progress_cb=progress_cb,
+        preview_cb=preview_cb,
     )
 
     if progress_cb:

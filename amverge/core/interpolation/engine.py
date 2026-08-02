@@ -142,6 +142,7 @@ def interpolate_video(
     fit_w: int = 0,
     fit_h: int = 0,
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    preview_cb: Optional[Callable[[object, int], None]] = None,
 ) -> None:
     entry = get_model(model_key)
     if entry is None:
@@ -253,9 +254,12 @@ def interpolate_video(
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
 
-            if progress_cb:
+            if progress_cb or preview_cb:
                 pct = min(100, int((frame_idx / max(1, total_frames - 1)) * 100))
-                progress_cb(pct, f"Interpolating... {frame_idx}/{total_frames - 1}")
+                if progress_cb:
+                    progress_cb(pct, f"Interpolating... {frame_idx}/{total_frames - 1}")
+                if preview_cb:
+                    preview_cb(curr_frame, pct)
 
         del model
         gc.collect()

@@ -77,13 +77,9 @@ def detect_scenes_by_keyframe(
 
     bounds: list[float] = [0.0]
     for c in sorted(float(x) for x in cut_points):
-        # Keep strictly increasing and strictly inside (0, duration) so the
-        # final scene closes cleanly on the video's end rather than a near-dupe.
         if c > bounds[-1] + 1e-6 and (duration <= 0.0 or c < duration - 1e-6):
             bounds.append(c)
 
-    # Close the last scene on the real duration; if duration is unknown, extend
-    # past the last boundary so a valid final scene still exists.
     end = duration if duration > bounds[-1] + 1e-6 else bounds[-1] + max(min_duration, 0.04)
     bounds.append(end)
 

@@ -27,6 +27,7 @@ def depth_map(
     colormap: str = typer.Option("inferno", "--colormap", "-c", help="Color palette: inferno, viridis, plasma, magma, turbo, jet, twilight, hot, cool, rainbow, ocean, bone, winter, summer"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm download prompts"),
     no_monitor: bool = typer.Option(False, "--no-monitor", help="Disable system monitor during processing"),
+    ipc: bool = typer.Option(False, "--ipc", hidden=True, help="Emit structured PROGRESS|/PREVIEW_FRAME| events on stderr (app mode)"),
 ) -> None:
     """Generate depth maps from video using Depth-Anything-V2.
 
@@ -58,6 +59,30 @@ def depth_map(
     if colormap not in COLMAPS:
         fail(f"Unknown colormap: {colormap}. Available: {', '.join(COLMAPS.keys())}")
         raise typer.Exit(1)
+
+    if ipc:
+        from ...core.infra.ipc import emit_progress
+        from ...core.infra.preview import ipc_callbacks
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        progress_cb, preview_cb = ipc_callbacks("depth")
+        try:
+            generate_depth_map(
+                input_path=str(input.resolve()),
+                output_path=str(output.resolve()),
+                encoder=encoder,
+                input_size=input_size,
+                pred_only=pred_only,
+                grayscale=grayscale,
+                colormap=colormap,
+                progress_cb=progress_cb,
+                preview_cb=preview_cb,
+            )
+        except Exception as e:
+            emit_progress(100, f"Error: {e}")
+            raise typer.Exit(1)
+        emit_progress(100, f"Saved: {output}")
+        return
 
     banner("depth-map")
 

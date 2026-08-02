@@ -15,6 +15,7 @@ from ...core.video.scene_utils import scenes_to_objects
 from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
 from ...core.codec.codec_utils import check_if_hevc
 from ...core.cutting.smart_cut import cut_all_scenes
+from ...core.cutting.segmenter import run_ffmpeg_segment_streaming
 from ...core.thumbnails import make_thumbnail
 
 
@@ -179,8 +180,18 @@ def backend(
             ]
             emit_event(f"INITIAL_CLIPS_READY|{json.dumps(initial_clips)}")
 
-            emit_progress(82, "Extracting keyframe timestamps...")
-            keyframes = get_keyframe_timestamps_pyav(str(input_video))
+            if use_keyframe:
+                # Every scene boundary IS a keyframe timestamp by construction
+                # (detect_scenes_by_keyframe cuts on I-frames), so re-demuxing the
+                # whole file here just to recover them is a wasted full-file pass.
+                # merge_short_scenes drops some boundaries, making this a subset of
+                # the real keyframe list — fine, because its only consumers are the
+                # alignment check below (every start is present, so all scenes
+                # classify as copy) and phase-2 cutting, which is empty here.
+                keyframes = sorted({float(s["start_sec"]) for s in scenes})
+            else:
+                emit_progress(82, "Extracting keyframe timestamps...")
+                keyframes = get_keyframe_timestamps_pyav(str(input_video))
             is_hevc = check_if_hevc(str(input_video))
 
             scene_pairs = [(s["start_sec"], s["end_sec"]) for s in scenes]
@@ -221,17 +232,63 @@ def backend(
                         thumb_pool.submit(_gen_thumb, scene_index, clip_path, clip_mode == "copy")
                     )
 
-            cut_all_scenes(
-                input_file=input_video,
-                scenes=phase1_scenes,
-                keyframes=keyframes,
-                out_dir=scenes_out_dir,
-                use_cuda=use_cuda,
-                is_hevc=is_hevc,
-                max_workers=8,
-                on_ready=_on_clip_ready,
-                progress_range=(82, 99),
+            use_segmenter = (
+                not phase2_scenes
+                and len(scenes) > 1
+                and all(s["scene_index"] == i for i, s in enumerate(scenes))
             )
+
+            if use_segmenter:
+                scenes_out_dir.mkdir(parents=True, exist_ok=True)
+                emitted: set[int] = set()
+
+                def _on_segment(idx: int, path: str) -> None:
+                    if idx in emitted:
+                        return
+                    emitted.add(idx)
+                    _on_clip_ready({
+                        "scene_index": idx,
+                        "clip_path": path,
+                        "clip_mode": "copy",
+                    })
+
+                def _on_seg_progress(frac: float) -> None:
+                    emit_progress(
+                        82 + int(frac * 17),
+                        f"Cutting scenes... {int(frac * 100)}%",
+                    )
+
+                emit_progress(82, f"Cutting {len(scenes)} scenes...")
+                run_ffmpeg_segment_streaming(
+                    str(input_video),
+                    str(scenes_out_dir / "scene_%04d.mp4"),
+                    [s["end_sec"] for s in scenes[:-1]],
+                    total_duration=input_video_duration,
+                    on_segment=_on_segment,
+                    on_progress=_on_seg_progress,
+                )
+                for s in scenes:
+                    idx = s["scene_index"]
+                    if idx in emitted:
+                        continue
+                    clip = scenes_out_dir / f"scene_{idx:04d}.mp4"
+                    _on_clip_ready({
+                        "scene_index": idx,
+                        "clip_path": str(clip) if clip.exists() else None,
+                        "clip_mode": "copy" if clip.exists() else "failed",
+                    })
+            else:
+                cut_all_scenes(
+                    input_file=input_video,
+                    scenes=phase1_scenes,
+                    keyframes=keyframes,
+                    out_dir=scenes_out_dir,
+                    use_cuda=use_cuda,
+                    is_hevc=is_hevc,
+                    max_workers=8,
+                    on_ready=_on_clip_ready,
+                    progress_range=(82, 99),
+                )
 
             emit_progress(100, "Keyframe clips ready")
             emit_event("PHASE1_COMPLETE")
