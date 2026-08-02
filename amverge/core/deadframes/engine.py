@@ -254,9 +254,6 @@ def _build_ffmpeg_cmd(
         cmd += ["-an"]
 
     if is_10bit:
-        # 10-bit encodes with libx265, whose profile is main10; the h264 "high"
-        # profile is invalid here and left ffmpeg treating "high" as an output
-        # filename ("Unable to choose an output format for 'high'").
         cmd[cmd.index("high")] = "main10"
 
     if color_args:

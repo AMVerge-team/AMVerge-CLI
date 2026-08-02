@@ -181,13 +181,6 @@ def backend(
             emit_event(f"INITIAL_CLIPS_READY|{json.dumps(initial_clips)}")
 
             if use_keyframe:
-                # Every scene boundary IS a keyframe timestamp by construction
-                # (detect_scenes_by_keyframe cuts on I-frames), so re-demuxing the
-                # whole file here just to recover them is a wasted full-file pass.
-                # merge_short_scenes drops some boundaries, making this a subset of
-                # the real keyframe list — fine, because its only consumers are the
-                # alignment check below (every start is present, so all scenes
-                # classify as copy) and phase-2 cutting, which is empty here.
                 keyframes = sorted({float(s["start_sec"]) for s in scenes})
             else:
                 emit_progress(82, "Extracting keyframe timestamps...")
@@ -226,7 +219,6 @@ def backend(
                 clip_path = result.get("clip_path") or ""
                 clip_mode = result.get("clip_mode") or "failed"
                 emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
-                # Queue the poster off the cut worker threads.
                 if clip_path and Path(clip_path).exists():
                     thumb_futures.append(
                         thumb_pool.submit(_gen_thumb, scene_index, clip_path, clip_mode == "copy")
@@ -316,8 +308,6 @@ def backend(
                 emit_progress_updates=False,
             )
 
-            # Wait for every queued poster so the final manifest's thumbnail_ready
-            # flags reflect which jpgs actually exist on disk.
             for _f in thumb_futures:
                 _f.result()
             thumb_pool.shutdown(wait=True)
