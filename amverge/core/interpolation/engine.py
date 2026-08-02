@@ -191,7 +191,15 @@ def interpolate_video(
     try:
         ret, prev_frame = cap.read()
         if not ret:
-            raise RuntimeError("No frames in video")
+            # The container opened but nothing decoded: either the codec is one
+            # OpenCV can't read, or an upstream pass emitted an empty file. Name
+            # both the file and what was probed so it's actionable.
+            raise RuntimeError(
+                f"No decodable frames in {os.path.basename(str(input_path))} "
+                f"(codec reported {w}x{h} @ {fps_val:.3f}fps, {total_frames} frames). "
+                "The file may use a pixel format OpenCV cannot decode, or a "
+                "previous pass produced an empty video."
+            )
 
         frame_idx = 0
         first_frame = True
