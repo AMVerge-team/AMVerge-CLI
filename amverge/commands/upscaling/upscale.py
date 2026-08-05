@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from ...ui import banner, console, err, make_progress, ok, fail
+from ...ui import banner, console, err, gpu_line, make_progress, ok, fail
 from ...core.infra.diagnostics import get_gpu_info
 from ...core.infra.ffmpeg_bootstrap import is_portable_ffmpeg_installed, ensure_ffmpeg
 from ...core.upscaling.monitor import SystemMonitor, format_eta
@@ -148,13 +148,12 @@ def upscale(
         _ensure_model_downloaded(model, auto_yes=yes)
 
         if method == "ml":
-            gpu_info = get_gpu_info()
-            if gpu_info.get("cuda_available"):
-                vram = gpu_info.get("vram_gb", 0)
-                console.print(f"  GPU: [accent]{gpu_info.get('gpu_name', 'N/A')}[/accent]  "
-                              f"VRAM: [accent]{vram:.1f} GB[/accent]")
-            else:
-                console.print("  [warn]No NVIDIA GPU detected. Upscaling on CPU will be very slow.[/warn]")
+            gpu_line(
+                label="GPU:",
+                alternatives="Backends that do use this GPU: '-m anime4k' (Anime4K GLSL "
+                             "via Vulkan) or '-m R8F64' (ArtCNN ONNX, needs "
+                             "'pip install amverge[upscale-amd]' for DirectML).",
+            )
 
         console.print(f"  Model: [accent]{entry.get('name', model)}[/accent]  "
                       f"Scale: [accent]{scale}x[/accent]  "
@@ -180,7 +179,7 @@ def upscale(
     from ...core.upscaling.engine import upscale_model
 
     monitor = SystemMonitor(enabled=not no_monitor and method in ("ml", "onnx"))
-    monitor.stats["gpu_name"] = get_gpu_info().get("gpu_name", "GPU")
+    monitor.stats["gpu_name"] = get_gpu_info().get("gpu_name") or "GPU"
     monitor.start()
 
     def _update_display():

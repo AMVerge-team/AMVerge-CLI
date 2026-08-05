@@ -3,8 +3,12 @@ import threading
 import time
 from typing import Optional
 
+_UNSET = object()
+_sampler = _UNSET
+_sampler_lock = threading.Lock()
 
-def sample_gpu():
+
+def _sample_nvidia_smi():
     try:
         import subprocess
         smi = subprocess.run(
@@ -24,7 +28,10 @@ def sample_gpu():
                 }
     except Exception:
         pass
+    return None
 
+
+def _sample_torch_cuda():
     try:
         import torch
         if torch.cuda.is_available():
@@ -37,8 +44,66 @@ def sample_gpu():
             }
     except Exception:
         pass
+    return None
+
+
+def _sample_adapter():
+    """Report what the OS adapter list knows: total VRAM and nothing live.
+
+    There is no cheap per-vendor utilization source on Windows outside
+    nvidia-smi. The GPU performance counters do expose it, but Get-Counter
+    takes several seconds per call against a one second sampling interval, so
+    it is not usable here. Live fields stay None and the UI renders them as
+    unknown rather than stalling the sampler thread.
+    """
+    try:
+        from ..infra.device import detect_gpu
+        gpu = detect_gpu()
+        if not gpu.available or not gpu.vram_gb:
+            return None
+        return {
+            "gpu_util": None,
+            "vram_used_mb": None,
+            "vram_total_mb": gpu.vram_gb * 1024,
+            "gpu_temp": None,
+        }
+    except Exception:
+        return None
+
+
+def _select_sampler():
+    try:
+        from ..infra.device import detect_gpu
+        gpu = detect_gpu()
+    except Exception:
+        gpu = None
+
+    if gpu is None or gpu.is_nvidia:
+        for fn in (_sample_nvidia_smi, _sample_torch_cuda):
+            if fn() is not None:
+                return fn
+
+    if gpu is not None and gpu.available:
+        if _sample_adapter() is not None:
+            return _sample_adapter
 
     return None
+
+
+def sample_gpu():
+    """Sample GPU telemetry, or None when nothing can be read.
+
+    The backend is chosen once and cached. Probing on every call meant an AMD
+    machine spawned a doomed nvidia-smi process every second for the whole run.
+    """
+    global _sampler
+    if _sampler is _UNSET:
+        with _sampler_lock:
+            if _sampler is _UNSET:
+                _sampler = _select_sampler()
+    if _sampler is None:
+        return None
+    return _sampler()
 
 
 def sample_cpu():

@@ -135,3 +135,53 @@ def fail(msg: str) -> None:
 
 def dim(msg: str) -> None:
     console.print(f"[muted]{msg}[/]")
+
+
+def gpu_line(indent: str = "  ", label: str = "GPU:", torch_path: bool = True,
+             alternatives: str = "") -> dict:
+    """Print the GPU status row and return the dict from get_gpu_info().
+
+    Reports the GPU that is physically present, which is not the same question
+    as whether PyTorch can drive it. An AMD card is named and shown, then the
+    caller's alternatives are offered when the torch path would fall to CPU.
+
+    Args:
+        indent: leading whitespace, to match the caller's block.
+        label: row label, padded by the caller to align its own rows.
+        torch_path: whether the caller is about to run a PyTorch model. Those
+            reach the GPU through CUDA only, so a non-NVIDIA card means CPU
+            speed. Pass False from paths that run on any vendor, so they stay
+            quiet instead of warning about a slowdown that will not happen.
+        alternatives: what to suggest when the torch path would be slow,
+            phrased for this command. Escaped, so literal brackets survive.
+    """
+    from ..core.infra.device import torch_backend_gap
+    from ..core.infra.diagnostics import get_gpu_info
+
+    info = get_gpu_info()
+    name = info.get("gpu_name")
+    vram = info.get("vram_gb") or 0.0
+
+    if name:
+        vram_txt = f"  VRAM: [accent]{vram:.1f} GB[/]" if vram else ""
+        console.print(f"{indent}{label} [accent]{escape(name)}[/]{vram_txt}")
+
+    if not torch_path:
+        return info
+
+    gap = torch_backend_gap()
+    if gap is None:
+        return info
+
+    if gap == "torch_not_cuda":
+        msg = ("PyTorch is installed without CUDA, so this runs on CPU. "
+               "Reinstall it from https://pytorch.org/get-started/locally/")
+    elif gap == "no_torch_backend":
+        msg = "PyTorch cannot use this GPU, so this runs on CPU and will be slow."
+        if alternatives:
+            msg += f" {alternatives}"
+    else:
+        msg = "No GPU detected. This runs on CPU and will be very slow."
+
+    console.print(f"{indent}[warn]{escape(msg)}[/]")
+    return info

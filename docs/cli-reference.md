@@ -159,7 +159,9 @@ amverge probe episode.mp4 --cache-dir ./scenes
 
 ### `amverge gpu`
 
-PyTorch version, CUDA availability, GPU name and VRAM, optional deps status.
+Detected GPU (vendor, name, VRAM, driver), PyTorch and CUDA status, which GPU
+backends are active (PyTorch CUDA, ONNX DirectML, Vulkan libplacebo, Vulkan
+Flowframes), and optional deps status.
 
 ```bash
 amverge gpu
@@ -337,6 +339,9 @@ amverge interpolate episode.mp4 -f 2 -y     # auto-download weights
 | `--no-monitor` | false | Disable live GPU/CPU/RAM/ETA display |
 
 Requires `pip install amverge[interpolation]`. CUDA auto-detected, CPU fallback.
+PyTorch reaches the GPU through CUDA only, so this is NVIDIA only. On AMD or Intel
+it runs on CPU: use `amverge flowframes` instead, which runs RIFE on any GPU via
+Vulkan (ncnn).
 Weights auto-downloaded on first run to `%APPDATA%/com.amverge.cli/models/interpolation/`.
 
 ### `amverge flowframes`

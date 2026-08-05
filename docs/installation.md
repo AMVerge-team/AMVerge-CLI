@@ -54,16 +54,20 @@ Adds pypresence for Discord RPC status updates during long operations.
 ### AI Upscaling
 
 ```bash
-pip install amverge[upscale]
+pip install amverge[upscale]        # NVIDIA or CPU
+pip install amverge[upscale-amd]    # AMD or Intel (Windows)
 ```
 
 Adds torch + opencv + spandrel for AI video upscaling (ShuffleCUGAN / ArtCNN ONNX).
 Anime4K shader-based upscaling uses FFmpeg only - no extra deps needed.
 
+The method is picked from the model key, there is no `--method` flag.
+Run `amverge upscale --list-models` to see every key.
+
 ```bash
-amverge upscale episode.mp4 --method ml --model adore -s 2
-amverge upscale episode.mp4 --method artcnn --artcnn-model C4F32
-amverge upscale episode.mp4 --method anime4k --anime4k-mode medium
+amverge upscale episode.mp4 -m adore -s 2        # ml, spandrel
+amverge upscale episode.mp4 -m C4F32             # onnx, ArtCNN
+amverge upscale episode.mp4 -m anime4k --mode medium
 ```
 
 ### AI Frame Interpolation (Python RIFE)
@@ -74,10 +78,72 @@ pip install amverge[interpolation]
 
 Adds torch + opencv for RIFE PyTorch CUDA/CPU frame interpolation.
 
+PyTorch reaches the GPU through CUDA, so this path is NVIDIA only. On AMD or
+Intel it runs on CPU. Use `amverge flowframes` instead, which runs RIFE on any
+GPU through Vulkan. See [AMD and Intel GPUs](#amd-and-intel-gpus).
+
 ```bash
 amverge interpolate episode.mp4 -f 2 -m rife4.25
 amverge interpolate episode.mp4 -f 4 -m rife4.25-heavy
 ```
+
+## AMD and Intel GPUs
+
+PyTorch has no AMD backend on Windows: ROCm is Linux-only. So the PyTorch paths
+(`amverge interpolate`, `-m adore` and the other ml upscale models, TransNetV2,
+depth) fall back to CPU on an AMD or Intel card.
+
+Everything else reaches the GPU. Check what your machine can do:
+
+```bash
+amverge gpu
+```
+
+The `GPU Backends` table names the card and reports each backend as active or
+absent, with the reason.
+
+| Instead of | Use | Reaches the GPU via |
+|---|---|---|
+| `amverge upscale -m adore` (ml) | `amverge upscale -m anime4k` | Vulkan, libplacebo |
+| `amverge upscale -m adore` (ml) | `amverge upscale -m C4F32` | DirectML, needs `[upscale-amd]` |
+| `amverge interpolate` | `amverge flowframes` | Vulkan, ncnn |
+
+### ONNX upscaling on AMD
+
+```bash
+pip uninstall onnxruntime
+pip install amverge[upscale-amd]
+```
+
+`[upscale-amd]` replaces `[upscale]`. Both ship a module named `onnxruntime`
+and clobber each other, so uninstall the CPU one first. Windows only:
+onnxruntime-directml publishes no Linux or macOS wheels.
+
+Confirm the provider is live:
+
+```bash
+amverge gpu    # ONNX (DirectML) -> active
+```
+
+### Interpolation on AMD
+
+`amverge flowframes` defaults to `--ai RifeNcnn`, which is Vulkan based and
+runs on any vendor. The `RifeCuda`, `FlavrCuda` and `XvfiCuda` engines are
+NVIDIA only.
+
+```bash
+amverge flowframes episode.mp4 -f 2 --ai RifeNcnn
+```
+
+If it exits immediately, the usual causes are a missing Vulkan runtime (update
+your GPU driver) or a missing Visual C++ Redistributable.
+
+### Anime4K on AMD
+
+No extra install. It runs as a GLSL shader chain through FFmpeg libplacebo,
+which is Vulkan based and vendor-neutral. `amverge gpu` reports
+`Vulkan (libplacebo)` as active when your FFmpeg build includes it. If it does
+not, Anime4K silently falls back to lanczos, which is not GPU accelerated.
 
 ### Deadframe Removal
 

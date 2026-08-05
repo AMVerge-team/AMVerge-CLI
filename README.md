@@ -22,6 +22,7 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 - **Edge detection** - Canny edges + cosine similarity for difficult encodes
 - **AI Upscaling** - ShuffleCUGAN (ML), Anime4K (shaders), ArtCNN (ONNX) super-resolution
 - **Frame Interpolation** - Python RIFE (PyTorch CUDA/CPU) + Flowframes 1.42.0 integration (free 1.36.0 planned)
+- **AMD / Intel GPUs** - Vulkan (Anime4K, Flowframes ncnn) and DirectML (ArtCNN ONNX) paths; run `amverge gpu` to see what your card can reach
 - **Depth Maps** - per-frame monocular depth estimation via Depth-Anything-V2 (GPU/CPU)
 - **Deadframe Removal** - optical flow + ORB homography + motion-area analysis (OpenCV)
 - **Pipeline** - chain deadframes + upscale + interpolate, save/load presets, interactive or TUI
