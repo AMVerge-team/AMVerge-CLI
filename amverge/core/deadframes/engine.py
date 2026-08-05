@@ -176,6 +176,44 @@ def _get_color_args(input_path: str) -> list[str]:
     return args
 
 
+def _x265_profile(pix_fmt: str) -> str:
+    """Pick the x265 profile that matches the pixel format's chroma subsampling.
+
+    x265 rejects ``main10`` outright for anything but 4:2:0 ("main10 profile not
+    compatible with i422 input chroma subsampling"), so hard-coding it made the
+    encode fail on 10-bit 4:2:2/4:4:4 input — which is exactly what a ProRes
+    export produces (``yuv422p10le``).
+    """
+    if "444" in pix_fmt:
+        return "main444-10"
+    if "422" in pix_fmt:
+        return "main422-10"
+    return "main10"
+
+
+def _decodable_frame_count(path: str, limit: int = 2) -> int:
+    """Frames actually decodable from ``path``, giving up after ``limit``.
+
+    Uses the same OpenCV decoder the interpolation pass uses, so a file that
+    passes here is one that pass can definitely read.
+    """
+    if cv2 is None:
+        return limit
+    cap = cv2.VideoCapture(str(path))
+    try:
+        if not cap.isOpened():
+            return 0
+        count = 0
+        while count < limit:
+            ok, _ = cap.read()
+            if not ok:
+                break
+            count += 1
+        return count
+    finally:
+        cap.release()
+
+
 def _build_ffmpeg_cmd(
     input_path: str,
     output_path: str,
@@ -230,6 +268,7 @@ def _build_ffmpeg_cmd(
 
     encoder = "libx265" if is_10bit else "libx264"
     output_pix_fmt = pix_fmt if is_10bit else "yuv420p"
+    profile = _x265_profile(output_pix_fmt) if is_10bit else "high"
 
     cmd = [
         get_ffmpeg(), "-y",
@@ -244,7 +283,7 @@ def _build_ffmpeg_cmd(
         "-crf", "18",
         "-preset", "medium",
         "-tune", "animation",
-        "-profile:v", "high",
+        "-profile:v", profile,
         "-movflags", "+faststart",
     ]
 
@@ -252,10 +291,6 @@ def _build_ffmpeg_cmd(
         cmd += ["-map", "[outa]"]
     elif no_audio:
         cmd += ["-an"]
-
-    if is_10bit:
-        cmd.insert(cmd.index("high") + 1, "5.1")
-        cmd.insert(cmd.index("-profile:v"), "-level")
 
     if color_args:
         cmd += color_args
@@ -502,6 +537,7 @@ class DeadFrameDetector:
         auto: bool = False,
         auto_sample_limit: int = 0,
         progress_cb: Optional[Callable[[int, str], None]] = None,
+        preview_cb: Optional[Callable[[object, int], None]] = None,
     ) -> list[bool]:
         cap = self.cv2.VideoCapture(input_path)
         if not cap.isOpened():
@@ -557,6 +593,8 @@ class DeadFrameDetector:
             if pair_idx % 10 == 0 and total_frames > 1:
                 pct = min(50, int(pair_idx * 50 / (total_frames - 1)))
                 _emit(pct)
+                if preview_cb:
+                    preview_cb(curr_frame, pct)
         cap.release()
         _emit(50, "Detected")
 
@@ -607,6 +645,7 @@ def run_deadframes(
     prores: bool = False,
     no_audio: bool = False,
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    preview_cb: Optional[Callable[[object, int], None]] = None,
 ) -> dict[str, Any]:
     if not DEADFRAMES_AVAILABLE:
         raise ImportError(
@@ -638,6 +677,7 @@ def run_deadframes(
         auto=auto,
         auto_sample_limit=auto_sample_limit,
         progress_cb=progress_cb,
+        preview_cb=preview_cb,
     )
 
     if progress_cb:
@@ -654,7 +694,7 @@ def run_deadframes(
     kept = sum(1 for d in decisions if d)
     dropped = total - kept
 
-    if dropped == 0 or kept == 0:
+    if dropped == 0 or kept <= 1:
         import shutil
         if progress_cb:
             progress_cb(90, "Copying input")
@@ -703,6 +743,12 @@ def run_deadframes(
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-10:])
         raise RuntimeError(f"FFmpeg failed:\n{tail}")
+
+    if _decodable_frame_count(output_path) < 2:
+        import shutil
+        if progress_cb:
+            progress_cb(90, "Result had no usable frames - copying input")
+        shutil.copy2(input_path, output_path)
 
     if progress_cb:
         progress_cb(100, "Done")
