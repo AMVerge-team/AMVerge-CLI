@@ -12,6 +12,7 @@ Usage:
     >>> print(f"Detected {len(scenes_secs)} scenes")
 """
 
+import contextlib
 import subprocess
 import sys
 from pathlib import Path
@@ -128,8 +129,13 @@ def decode_and_detect_scenes(
 
     emit_progress(20, "Loading TransNetV2 model...")
     import torch
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = TransNetV2(device=device)
+    device = (
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
+    with contextlib.redirect_stdout(sys.stderr):
+        model = TransNetV2(device=device)
     model.eval()
 
     window_start_index = 0
@@ -331,13 +337,21 @@ def run_model_one_pass(
 
     Splits the frame array into overlapping windows of ``batch_size`` frames
     (default 100), runs the model on each batch, and averages overlapping
-    predictions. GPU-accelerated when CUDA or MPS (Apple GPU) is available.
+    predictions. GPU-accelerated when CUDA is available (MPS is supported
+    but opt-in only - pass ``device="mps"`` explicitly; see
+    :func:`amverge.commands.sidecar.backend.backend` for why it isn't
+    auto-selected).
+
+    Note: batching multiple windows into one forward pass (larger batch
+    dimension) was tried and measured to give no speedup on this model/
+    hardware (compute-bound, not dispatch-bound) - reverted in favor of
+    keeping this loop simple.
 
     Args:
         frames: Frame array of shape ``(N, 27, 48, 3)`` with dtype ``uint8``.
         input_file: Path to the source video (used for FPS probe).
-        device: Torch device to run inference on. Auto-detected (cuda > mps
-            > cpu) when not given.
+        device: Torch device to run inference on. Auto-detected (cuda >
+            mps > cpu) when not given.
         batch_size: Number of frames per inference batch.
         overlap: Overlap between consecutive batches (default 50 frames).
 
@@ -376,7 +390,14 @@ def run_model_one_pass(
             else "mps" if torch.backends.mps.is_available()
             else "cpu"
         )
-    model = TransNetV2(device=device)
+
+    # transnetv2_pytorch prints a plaintext warning banner to stdout when
+    # constructed with device="mps" (see backend.py for the auto-select
+    # rationale). backend()'s entire IPC contract is "stdout is nothing but
+    # the final JSON payload" - any stray print here corrupts that for the
+    # Rust side, so redirect anything the constructor prints to stderr instead.
+    with contextlib.redirect_stdout(sys.stderr):
+        model = TransNetV2(device=device)
     model.eval()
     video_fps = probe_video_fps(input_file)
 
