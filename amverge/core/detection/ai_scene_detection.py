@@ -337,15 +337,7 @@ def run_model_one_pass(
 
     Splits the frame array into overlapping windows of ``batch_size`` frames
     (default 100), runs the model on each batch, and averages overlapping
-    predictions. GPU-accelerated when CUDA is available (MPS is supported
-    but opt-in only - pass ``device="mps"`` explicitly; see
-    :func:`amverge.commands.sidecar.backend.backend` for why it isn't
-    auto-selected).
-
-    Note: batching multiple windows into one forward pass (larger batch
-    dimension) was tried and measured to give no speedup on this model/
-    hardware (compute-bound, not dispatch-bound) - reverted in favor of
-    keeping this loop simple.
+    predictions. GPU-accelerated when CUDA is available, MPS if MPS available.
 
     Args:
         frames: Frame array of shape ``(N, 27, 48, 3)`` with dtype ``uint8``.

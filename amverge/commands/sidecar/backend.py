@@ -61,16 +61,6 @@ def backend(
             raise SystemExit(1)
 
         force_cpu = method.endswith("_cpu")
-        # MPS is auto-selected (cuda > mps > cpu) as of this commit.
-        # transnetv2_pytorch's own device auto-detection skips MPS by
-        # default ("MPS has consistency issues" per its source), but that
-        # warning traces to CPU-fallback for MPS-unsupported ops, which we
-        # verified does not occur for this model on the installed torch
-        # version (every op used has a native MPS kernel - see the
-        # PYTORCH_ENABLE_MPS_FALLBACK strict-mode check), plus multiple
-        # full-episode CPU-vs-MPS comparisons across varied content came
-        # back bit-identical. ~20-25% faster inference with no observed
-        # divergence.
         if force_cpu:
             device = "cpu"
         elif torch.cuda.is_available():
