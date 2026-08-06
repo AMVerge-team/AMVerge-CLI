@@ -176,6 +176,74 @@ def decode_and_detect_scenes(
     return scenes_secs, scenes_frames
 
 
+def decode_video_frames_ffmpeg(input_video: str | Path) -> np.ndarray:
+    """Decode all video frames into a numpy array using FFmpeg (cross-platform).
+
+    Pipes raw RGB24 frames at TransNetV2 input resolution (48x27) from an
+    FFmpeg subprocess. Used wherever Nelux (Windows-only NVDEC decode) is
+    unavailable, e.g. on Linux/macOS or a machine with no NVIDIA GPU. Mirrors
+    :func:`decode_video_frames_nelux`'s return contract so callers can swap
+    between the two decode paths freely.
+
+    Args:
+        input_video: Path to the source video file.
+
+    Returns:
+        ndarray of shape ``(num_frames, 27, 48, 3)`` with dtype ``uint8``.
+
+    Example:
+        >>> frames = decode_video_frames_ffmpeg("episode.mp4")
+        >>> print(frames.shape)  # (378, 27, 48, 3)
+    """
+    log("Running FFmpeg video decode...")
+
+    from ..infra.binaries import get_ffmpeg
+
+    video_fps = probe_video_fps(input_video)
+    video_duration = probe_video_duration(input_video)
+    total_frames = probe_video_total_frames(input_video, video_fps, video_duration)
+
+    cmd = [
+        get_ffmpeg(), "-y",
+        "-i", str(input_video),
+        "-pix_fmt", "rgb24",
+        "-vf", f"scale={FRAME_WIDTH}:{FRAME_HEIGHT}",
+        "-f", "rawvideo",
+        "pipe:1",
+    ]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if process.stdout is None:
+        raise RuntimeError("Failed to create stdout pipe")
+
+    frames: list[np.ndarray] = []
+    actual_frames = 0
+    last_progress = 19
+
+    while True:
+        raw_frame = process.stdout.read(FRAME_BYTES)
+        if len(raw_frame) == 0:
+            break
+        frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape(
+            FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS
+        )
+        frames.append(frame)
+        actual_frames += 1
+        if actual_frames % 10 == 0:
+            last_progress = _emit_loop_progress(
+                actual_frames, total_frames, 20, 35, "Decoding video...", last_progress
+            )
+
+    process.stdout.close()
+    process.wait()
+
+    emit_progress(55, f"Decoding video... ({actual_frames}/{_safe_total(total_frames)})")
+
+    if not frames:
+        return np.empty((0, FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS), dtype=np.uint8)
+
+    return np.stack(frames)
+
+
 def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
     """Decode all video frames into a numpy array using Nelux (Windows only).
 
@@ -257,16 +325,19 @@ def run_model_one_pass(
     input_file: str | Path,
     batch_size: int = 100,
     overlap: int = 50,
+    device: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run TransNetV2 inference on pre-decoded frames.
 
     Splits the frame array into overlapping windows of ``batch_size`` frames
     (default 100), runs the model on each batch, and averages overlapping
-    predictions. GPU-accelerated when CUDA is available.
+    predictions. GPU-accelerated when CUDA or MPS (Apple GPU) is available.
 
     Args:
         frames: Frame array of shape ``(N, 27, 48, 3)`` with dtype ``uint8``.
         input_file: Path to the source video (used for FPS probe).
+        device: Torch device to run inference on. Auto-detected (cuda > mps
+            > cpu) when not given.
         batch_size: Number of frames per inference batch.
         overlap: Overlap between consecutive batches (default 50 frames).
 
@@ -299,7 +370,12 @@ def run_model_one_pass(
     counts = np.zeros(num_frames)
     stride = batch_size - overlap
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device is None:
+        device = (
+            "cuda" if torch.cuda.is_available()
+            else "mps" if torch.backends.mps.is_available()
+            else "cpu"
+        )
     model = TransNetV2(device=device)
     model.eval()
     video_fps = probe_video_fps(input_file)
