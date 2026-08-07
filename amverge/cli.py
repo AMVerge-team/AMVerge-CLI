@@ -22,6 +22,7 @@ from .commands.interpolation.flowframes import flowframes
 from .commands.interpolation.flowframes_path import flowframes_path as flowframes_path_cmd
 from .commands.interpolation.interpolate import interpolate
 from .commands.sidecar.backend import backend
+from .commands.sidecar.materialize_clips import materialize_clips
 from .commands.sidecar.rpc_server import rpc_server
 from .commands.depth.depth_map import depth_map
 from .commands.deadframes.deadframes import deadframes
@@ -50,6 +51,7 @@ app.command()(scenes)
 
 # App backend replacement (hidden - called by Rust sidecar)
 app.command(hidden=True)(backend)
+app.command(name="materialize-clips", hidden=True)(materialize_clips)
 app.command(name="rpc-server", hidden=True)(rpc_server)
 
 # Upscale
