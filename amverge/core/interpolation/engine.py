@@ -142,6 +142,7 @@ def interpolate_video(
     fit_w: int = 0,
     fit_h: int = 0,
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    preview_cb: Optional[Callable[[object, int], None]] = None,
 ) -> None:
     entry = get_model(model_key)
     if entry is None:
@@ -190,7 +191,15 @@ def interpolate_video(
     try:
         ret, prev_frame = cap.read()
         if not ret:
-            raise RuntimeError("No frames in video")
+            # The container opened but nothing decoded: either the codec is one
+            # OpenCV can't read, or an upstream pass emitted an empty file. Name
+            # both the file and what was probed so it's actionable.
+            raise RuntimeError(
+                f"No decodable frames in {os.path.basename(str(input_path))} "
+                f"(codec reported {w}x{h} @ {fps_val:.3f}fps, {total_frames} frames). "
+                "The file may use a pixel format OpenCV cannot decode, or a "
+                "previous pass produced an empty video."
+            )
 
         frame_idx = 0
         first_frame = True
@@ -253,9 +262,12 @@ def interpolate_video(
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
 
-            if progress_cb:
+            if progress_cb or preview_cb:
                 pct = min(100, int((frame_idx / max(1, total_frames - 1)) * 100))
-                progress_cb(pct, f"Interpolating... {frame_idx}/{total_frames - 1}")
+                if progress_cb:
+                    progress_cb(pct, f"Interpolating... {frame_idx}/{total_frames - 1}")
+                if preview_cb:
+                    preview_cb(curr_frame, pct)
 
         del model
         gc.collect()

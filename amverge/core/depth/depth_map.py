@@ -215,6 +215,7 @@ def generate_depth_map(
     grayscale: bool = False,
     colormap: str = "inferno",
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    preview_cb: Optional[Callable[[object, int], None]] = None,
 ) -> None:
     if not DEPTH_AVAILABLE:
         raise ImportError(
@@ -331,9 +332,12 @@ def generate_depth_map(
                 if device == "cuda":
                     torch.cuda.empty_cache()
 
-            if progress_cb:
+            if progress_cb or preview_cb:
                 pct = min(99, max(1, int(frame_idx / max(1, total_frames) * 99)))
-                progress_cb(pct, f"Processing depth map... {frame_idx}/{total_frames}")
+                if progress_cb:
+                    progress_cb(pct, f"Processing depth map... {frame_idx}/{total_frames}")
+                if preview_cb:
+                    preview_cb(out_frame, pct)
 
     finally:
         cap.release()

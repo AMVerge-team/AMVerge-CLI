@@ -142,6 +142,10 @@ def deadframes(
         False, "--no-monitor",
         help="Disable system monitor during processing",
     ),
+    ipc: bool = typer.Option(
+        False, "--ipc", hidden=True,
+        help="Emit structured PROGRESS|/PREVIEW_FRAME| events on stderr (app mode)",
+    ),
 ) -> None:
     """Remove dead (static subject) frames from video and output compacted CFR.
 
@@ -222,6 +226,38 @@ def deadframes(
             "OpenCV (cv2) is required. Run: pip install amverge[deadframes]"
         )
         raise typer.Exit(1)
+
+    if ipc:
+        from ...core.infra.ipc import emit_progress
+        from ...core.infra.preview import ipc_callbacks
+        from ...core.deadframes import run_deadframes
+
+        _ensure_ffmpeg_interactive(auto_yes=True)
+        _ensure_model_downloaded(method, auto_yes=True)
+        progress_cb, preview_cb = ipc_callbacks("deadframes")
+        try:
+            run_deadframes(
+                input_path=str(input.resolve()),
+                output_path=str(output.resolve()),
+                flow_threshold=0.5,
+                motion_area_fraction=0.15,
+                detect_scale=detect_scale,
+                keep_talking=keep_talking or safe,
+                keep_camera=keep_camera or safe,
+                parallax_mode=parallax,
+                auto=auto or safe or keep_talking or keep_camera,
+                cadence=cadence,
+                small_movements=small_movements,
+                prores=prores,
+                no_audio=no_audio,
+                progress_cb=progress_cb,
+                preview_cb=preview_cb,
+            )
+        except Exception as e:
+            emit_progress(100, f"Error: {e}")
+            raise typer.Exit(1)
+        emit_progress(100, f"Saved: {output}")
+        return
 
     _ensure_ffmpeg_interactive(auto_yes=yes)
     _ensure_model_downloaded(method, auto_yes=yes)

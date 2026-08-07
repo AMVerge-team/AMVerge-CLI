@@ -8,7 +8,7 @@ CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 FFMPEG_DOWNLOAD_URL = (
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
-    "ffmpeg-master-latest-win64-gpl.zip"
+    "ffmpeg-n8.1-latest-win64-gpl-8.1.zip"
 )
 
 
