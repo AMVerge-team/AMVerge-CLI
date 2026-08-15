@@ -384,6 +384,82 @@ amverge flowframes-path "C:\Flowframes\Flowframes.exe"   # set and persist
 
 ---
 
+### `amverge deadframes`
+
+Remove dead (static subject) frames from video using optical flow and feature matching.
+Output is CFR-compacted: kept frames packed back-to-back, duration shortens.
+
+```bash
+amverge deadframes episode.mp4
+amverge deadframes episode.mp4 -o cleaned.mp4
+amverge deadframes episode.mp4 --auto                # auto-calibrate thresholds
+amverge deadframes episode.mp4 --safe                # keep-talking + keep-camera
+amverge deadframes episode.mp4 --keep-talking        # keep subtle mouth motion
+amverge deadframes episode.mp4 --keep-camera         # keep camera pan/zoom
+amverge deadframes episode.mp4 --cadence 5           # tighter cadence smoothing
+amverge deadframes episode.mp4 --prores --no-audio   # ProRes, no audio
+amverge deadframes episode.mp4 --parallax            # invert camera motion rule
+amverge deadframes --list-methods
+amverge deadframes --credits
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `INPUT` (arg) | required | Input video file |
+| `--output / -o` | `deadframes_output.mp4` | Output video file |
+| `--method / -m` | `heuristic` | Detection method key from registry |
+| `--auto` | false | Auto-calibrate thresholds from frame-pair distribution |
+| `--keep-talking` | false | Keep subtle dialogue/mouth motion |
+| `--keep-camera` | false | Keep camera pan/zoom/shake |
+| `--safe` | false | Only drop completely static frames |
+| `--cadence` | `3` | Min consecutive dead frames to drop |
+| `--detect-scale` | `1.0` | Detection resolution scale (0.5 = half size) |
+| `--small-movements` | - | Custom flow threshold (0=keep all) |
+| `--prores` | false | Export Apple ProRes instead of H.264 |
+| `--parallax` | false | Invert camera motion rule for parallax shots |
+| `--no-audio` | false | Drop audio track |
+| `--list-methods` | false | List available detection methods |
+| `--credits` | false | Show credits |
+| `--yes / -y` | false | Auto-confirm download prompts |
+| `--download` | false | Download model weights without running |
+| `--no-monitor` | false | Disable live GPU/CPU/RAM/ETA display |
+
+Requires `pip install amverge[deadframes]`. Uses OpenCV Farneback optical flow,
+ORB feature matching with RANSAC homography, and motion-area analysis.
+Audio is trimmed to match kept video segments; use `--no-audio` to drop.
+
+---
+
+### `amverge pipeline`
+
+Chain deadframe removal, AI upscaling, and frame interpolation into a single run.
+Interactive prompts with arrow-key navigation. Save presets with --save <name>.
+
+```bash
+amverge pipeline                          # interactive mode
+amverge pipeline input.mp4                # with input specified
+amverge pipeline --load my-preset          # load saved preset
+amverge pipeline --save my-preset          # save current settings
+amverge pipeline --list                    # list saved presets
+amverge pipeline --delete my-preset        # delete a preset
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `INPUT` (arg) | prompted | Input video file |
+| `--load / -l` | - | Load a saved pipeline preset by name |
+| `--save / -s` | - | Save current settings as a named preset |
+| `--list` | false | List saved pipeline presets |
+| `--delete` | - | Delete a saved pipeline preset |
+| `--yes / -y` | false | Auto-confirm download prompts |
+
+Runs operations in sequence (deadframes `->` upscale `->` interpolate). After each step,
+choose whether to chain the output or revert to the original input. Requires at least
+2 of the deadframes, upscale, interpolation extras installed. Presets stored as JSON
+in `%APPDATA%/com.amverge.cli/pipelines/`.
+
+---
+
 ## Info Commands
 
 ```bash

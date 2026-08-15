@@ -1,6 +1,6 @@
 {
   "_source": {
-    "interpolation": "https://github.com/moongetsu/AniSmooth-Models/releases/download/interpolation"
+    "interpolation": "https://github.com/AniScripts/AniSmooth-Models/releases/download/interpolation"
   },
   "rife4.6": {
     "method": "rife",
@@ -141,11 +141,25 @@
     "heavy": false
   },
   "pervfi": {
-    "method": "rife",
-    "name": "PerVFI",
-    "credit": "by yhzhai / PKU-IMRE",
-    "description": "Perception-oriented Video Frame Interpolation (35 MB)",
+    "method": "pervfi",
+    "name": "PerVFI (v00)",
+    "credit": "by Guangyang Wu et al. (CVPR 2024)",
+    "description": "Perception-oriented VFI with normalizing flow (GMFlow + PerVFI v00, ~35 MB gen + ~300 MB flow)",
     "file": "pervfi.pth",
-    "heavy": false
+    "flow_estimator": "gmflow",
+    "flow_file": "gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth",
+    "generator": "v00",
+    "heavy": true
+  },
+  "pervfi-vb": {
+    "method": "pervfi",
+    "name": "PerVFI (vb - fast)",
+    "credit": "by Guangyang Wu et al. (CVPR 2024)",
+    "description": "Perception-oriented VFI with fast decoder (GMFlow + PerVFI vb, faster inference)",
+    "file": "pervfi_vb.pth",
+    "flow_estimator": "gmflow",
+    "flow_file": "gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth",
+    "generator": "vb",
+    "heavy": true
   }
 }

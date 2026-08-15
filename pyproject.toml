@@ -4,7 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "amverge"
-version = "0.2.1"
+# Single-sourced from amverge/__version__.py, which `amverge version` and the
+# library both report — the two drifted apart when this was hardcoded.
+dynamic = ["version"]
 description = "AMVerge Features as a CLI Tool and Python Library"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -44,6 +46,7 @@ dependencies = [
     "av>=12",
     "pillow>=10",
     "numpy>=1.26",
+    "questionary>=2.0",
 ]
 
 [project.scripts]
@@ -54,10 +57,15 @@ ml            = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0"]
 edge          = ["opencv-python-headless>=4.9"]
 discord       = ["pypresence>=4.3"]
 upscale       = ["torch>=2.0", "opencv-python-headless>=4.9", "spandrel>=0.3", "onnxruntime>=1.16"]
-interpolation = ["torch>=2.0", "opencv-python-headless>=4.9"]
+interpolation = ["torch>=2.0", "opencv-python-headless>=4.9", "scipy>=1.10"]
 flowframes    = []
-all           = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0", "opencv-python-headless>=4.9", "pypresence>=4.3", "spandrel>=0.3", "onnxruntime>=1.16"]
+depth         = ["depth-anything-v2>=0.1", "opencv-python-headless>=4.9"]
+deadframes    = ["opencv-python-headless>=4.9"]
+all           = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0", "opencv-python-headless>=4.9", "pypresence>=4.3", "spandrel>=0.3", "onnxruntime>=1.16", "scipy>=1.10", "depth-anything-v2>=0.1"]
 dev           = ["pyinstaller>=6"]
+
+[tool.hatch.version]
+path = "amverge/__version__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["amverge"]
@@ -67,4 +75,5 @@ include = [
     "examples/**/*.md",
     "docs/*.md",
     "amverge/core/upscaling/registry.json",
+    "amverge/core/deadframes/registry.json",
 ]

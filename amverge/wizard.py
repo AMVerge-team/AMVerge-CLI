@@ -471,6 +471,223 @@ def _wizard_info() -> None:
             console.print(t)
 
 
+
+
+
+def _wizard_upscale() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    from .ui import banner, console, err, ok, fail, make_progress
+    from .core.upscaling import (
+        UPSCALE_AVAILABLE, UPSCALE_REGISTRY,
+        upscale_model, download_weights, is_weight_downloaded,
+        download_anime4k_shaders, is_anime4k_downloaded,
+        download_artcnn, is_artcnn_downloaded,
+    )
+    banner("upscale")
+    if not UPSCALE_AVAILABLE:
+        fail("Upscaling not available.\n  pip install amverge[upscale]")
+        return
+    input_video = _ask("video path", "video.mp4")
+    if not input_video or not Path(input_video).exists():
+        fail(f"File not found: {input_video}")
+        return
+    keys = list(UPSCALE_REGISTRY.keys())
+    model_key = _ask_choice("model key", keys, keys[0])
+    entry = UPSCALE_REGISTRY[model_key]
+    method = entry.get("method", "ml")
+    if method == "ml" and not is_weight_downloaded(model_key):
+        with make_progress() as progress:
+            task_id = progress.add_task(f"Downloading {entry.get('name', model_key)}...", total=100)
+            download_weights(model_key, progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m))
+    elif method == "shader" and not is_anime4k_downloaded():
+        with make_progress() as progress:
+            task_id = progress.add_task("Downloading Anime4K shaders...", total=100)
+            download_anime4k_shaders()
+            progress.update(task_id, completed=100, description="Done")
+    elif method == "onnx" and not is_artcnn_downloaded(model_key):
+        download_artcnn(model_key)
+    scale = _ask_int("scale factor", 2, 1, 8)
+    output = f"{Path(input_video).stem}_upscaled.mp4"
+    with make_progress() as progress:
+        task_id = progress.add_task("Upscaling...", total=100)
+        try:
+            upscale_model(model_key, input_path=input_video, output_path=output, scale=scale,
+                          progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m))
+            ok(f"Saved: {output}")
+        except Exception as e:
+            fail(str(e))
+
+
+def _wizard_interpolate() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    from .ui import banner, console, err, ok, fail, make_progress
+    from .core.interpolation import (
+        INTERPOLATION_REGISTRY, INTERPOLATION_AVAILABLE,
+        interpolate_video, download_weights, is_weight_downloaded,
+        flowframes_available, run_flowframes,
+    )
+    banner("interpolate")
+    if not INTERPOLATION_AVAILABLE:
+        fail("Interpolation not available.\n  pip install amverge[interpolation]")
+        return
+    input_video = _ask("video path", "video.mp4")
+    if not input_video or not Path(input_video).exists():
+        fail(f"File not found: {input_video}")
+        return
+    use_flowframes = _ask_yn("use Flowframes (external .exe)", False)
+    if use_flowframes:
+        if not flowframes_available():
+            fail("Flowframes not available.\nSet with: amverge flowframes-path <path>")
+            return
+        factor = _ask_int("interpolation factor", 2, 2, 16)
+        output_dir = os.path.dirname(input_video) or "."
+        with make_progress() as progress:
+            task_id = progress.add_task("Interpolating with Flowframes...", total=100)
+            try:
+                run_flowframes(input_path=input_video, output_dir=output_dir, factor=factor,
+                               progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m))
+                ok(f"Done in {output_dir}")
+            except Exception as e:
+                fail(str(e))
+    else:
+        keys = list(INTERPOLATION_REGISTRY.keys())
+        model_key = _ask_choice("model key", keys, keys[0])
+        if not is_weight_downloaded(model_key):
+            with make_progress() as progress:
+                entry = INTERPOLATION_REGISTRY[model_key]
+                task_id = progress.add_task(f"Downloading {entry.get('name', model_key)}...", total=100)
+                download_weights(model_key, progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m))
+        factor = _ask_int("interpolation factor", 2, 2, 16)
+        output = f"{Path(input_video).stem}_{factor}x.mp4"
+        with make_progress() as progress:
+            task_id = progress.add_task("Interpolating...", total=100)
+            try:
+                interpolate_video(input_video, output, factor=factor, model_key=model_key,
+                                  progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m))
+                ok(f"Saved: {output}")
+            except Exception as e:
+                fail(str(e))
+
+
+def _wizard_deadframes() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    from .ui import banner, ok, fail, make_progress
+    from .core.deadframes import (
+        DEADFRAMES_REGISTRY, DEADFRAMES_AVAILABLE,
+        run_deadframes, is_weight_downloaded, download_weights,
+    )
+    banner("deadframes")
+    if not DEADFRAMES_AVAILABLE:
+        fail("OpenCV not installed.\n  pip install amverge[deadframes]")
+        return
+    input_video = _ask("video path", "video.mp4")
+    if not input_video or not Path(input_video).exists():
+        fail(f"File not found: {input_video}")
+        return
+    keys = list(DEADFRAMES_REGISTRY.keys())
+    method_key = _ask_choice("method key", keys, keys[0])
+    entry = DEADFRAMES_REGISTRY[method_key]
+    if "file" in entry and not is_weight_downloaded(method_key):
+        with make_progress() as progress:
+            task_id = progress.add_task(
+                f"Downloading {entry.get('name', method_key)}...", total=100
+            )
+            download_weights(
+                method_key,
+                progress_cb=lambda p, m: progress.update(
+                    task_id, completed=p, description=m
+                ),
+            )
+    keep_talking = _ask_yn("keep talking (subtle mouth motion)", False)
+    keep_camera = _ask_yn("keep camera pan/zoom/shake", False)
+    safe = _ask_yn("safe mode (--keep-talking --keep-camera)", False)
+    use_auto = safe or keep_talking or keep_camera or _ask_yn("auto-calibrate thresholds", False)
+    cadence = _ask_int("cadence (min consecutive dead to drop)", 3, 1, 30)
+    no_audio = _ask_yn("drop audio", False)
+    output = f"{Path(input_video).stem}_deadframes.mp4"
+    use_keep_talking = keep_talking or safe
+    use_keep_camera = keep_camera or safe
+    with make_progress() as progress:
+        task_id = progress.add_task("Removing dead frames...", total=100)
+        try:
+            result = run_deadframes(
+                input_path=input_video,
+                output_path=output,
+                keep_talking=use_keep_talking,
+                keep_camera=use_keep_camera,
+                auto=use_auto,
+                cadence=cadence,
+                no_audio=no_audio,
+                progress_cb=lambda p, m: progress.update(
+                    task_id, completed=p, description=m
+                ),
+            )
+            ok(f"Saved: {output} ({result['duration_after']:.1f}s)")
+        except Exception as e:
+            fail(str(e))
+
+
+def _wizard_pipeline() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    from .commands.pipeline.pipeline import _PIPELINE_ENABLED, _AVAILABLE_OPS
+    if not _PIPELINE_ENABLED:
+        from .ui import banner, fail
+        banner("pipeline")
+        available = [k for k, v in _AVAILABLE_OPS.items() if v]
+        missing = [k for k, v in _AVAILABLE_OPS.items() if not v]
+        fail(
+            f"Pipeline requires at least 2 operations installed.\n"
+            f"  Installed: {', '.join(available) if available else 'none'}\n"
+            f"  Missing:   {', '.join(missing)}\n"
+            f"  Run: pip install amverge[{','.join(missing)}]"
+        )
+        return
+    from .commands.pipeline.pipeline import pipeline as _run_pipeline
+    _run_pipeline()
+
+
+def _wizard_depth_map() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    from .ui import banner, console, err, ok, fail, make_progress
+    from .core.depth import (
+        DEPTH_AVAILABLE, MODEL_CONFIGS, is_model_downloaded,
+        download_model, generate_depth_map,
+    )
+    banner("depth-map")
+    if not DEPTH_AVAILABLE:
+        fail("Depth-Anything-V2 not installed.\n  pip install amverge[depth]")
+        return
+    input_video = _ask("video path", "video.mp4")
+    if not input_video or not Path(input_video).exists():
+        fail(f"File not found: {input_video}")
+        return
+    encoder = _ask("encoder (vits/vitb/vitl)", "vits").strip().lower()
+    if encoder not in MODEL_CONFIGS:
+        fail(f"Unknown encoder: {encoder}. Using vits.")
+        encoder = "vits"
+    pred_only = _ask("depth only? (y/n)", "n").strip().lower().startswith("y")
+    grayscale = _ask("grayscale? (y/n)", "n").strip().lower().startswith("y")
+    output = f"{Path(input_video).stem}_depth.mp4"
+    if not is_model_downloaded(encoder):
+        with make_progress() as progress:
+            task_id = progress.add_task(f"Downloading Depth-Anything-V2-{encoder}...", total=100)
+            download_model(encoder, progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m))
+    with make_progress() as progress:
+        task_id = progress.add_task("Processing...", total=100)
+        try:
+            generate_depth_map(
+                input_path=input_video,
+                output_path=output,
+                encoder=encoder,
+                pred_only=pred_only,
+                grayscale=grayscale,
+                progress_cb=lambda p, m: progress.update(task_id, completed=p, description=m),
+            )
+            ok(f"Saved: {output}")
+        except Exception as e:
+            fail(str(e))
+
+
 # ---------------------------------------------------------------------------
 # Info pages
 # ---------------------------------------------------------------------------
@@ -504,10 +721,15 @@ def _wizard_changelog() -> None:
 # ---------------------------------------------------------------------------
 
 _WORKFLOW: list[tuple[str, str, object]] = [
-    ("detect",    "split video into scenes at cut boundaries", _wizard_detect),
-    ("export",    "export selected scenes from a detect run",  _wizard_export),
-    ("merge",     "merge multiple clips into one file",        _wizard_merge),
-    ("info",      "show video stream metadata",                _wizard_info),
+    ("detect",      "split video into scenes at cut boundaries", _wizard_detect),
+    ("export",      "export selected scenes from a detect run",  _wizard_export),
+    ("merge",       "merge multiple clips into one file",        _wizard_merge),
+    ("info",        "show video stream metadata",                _wizard_info),
+    ("upscale",     "AI upscale video (ml, shader, onnx)",       _wizard_upscale),
+    ("interpolate", "frame interpolation (RIFE or Flowframes)",  _wizard_interpolate),
+    ("deadframes", "remove static frames (deadframe remover)",     _wizard_deadframes),
+    ("pipeline",   "chain deadframes + upscale + interpolate",      _wizard_pipeline),
+    ("depth-map",   "generate depth maps from video",            _wizard_depth_map),
 ]
 
 _INFO: list[tuple[str, str, object]] = [

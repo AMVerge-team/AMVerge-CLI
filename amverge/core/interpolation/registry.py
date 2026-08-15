@@ -46,6 +46,10 @@ def get_rife_models():
     return {k: v for k, v in INTERPOLATION_REGISTRY.items() if v["method"] == "rife"}
 
 
+def get_pervfi_models():
+    return {k: v for k, v in INTERPOLATION_REGISTRY.items() if v["method"] == "pervfi"}
+
+
 def get_all_model_keys():
     return list(INTERPOLATION_REGISTRY.keys())
 

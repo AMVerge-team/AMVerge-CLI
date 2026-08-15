@@ -197,6 +197,7 @@ from .core.interpolation import (
     INTERPOLATION_AVAILABLE as _INTERP_AVAILABLE,
     get_model as get_interp_model,
     get_rife_models,
+    get_pervfi_models,
     get_all_model_keys as get_all_interp_model_keys,
     get_model_credit as get_interp_model_credit,
     download_weights as download_interp_weights,
@@ -205,6 +206,24 @@ from .core.interpolation import (
     verify_weight_hash as verify_interp_weight_hash,
     load_weights_if_available as load_interp_weights_if_available,
 )
+
+# -- Depth ----------------------------------------------------------------
+try:
+    from .core.depth import (
+        DEPTH_AVAILABLE,
+        generate_depth_map,
+        download_model,
+        is_model_downloaded,
+        MODEL_CONFIGS,
+        COLMAPS,
+    )
+except ImportError:
+    DEPTH_AVAILABLE = False
+    generate_depth_map = None
+    download_model = None
+    is_model_downloaded = None
+    MODEL_CONFIGS = {}
+    COLMAPS = {}
 
 __all__ = [
     "__version__",
@@ -288,4 +307,8 @@ __all__ = [
     "get_interp_model_credit", "download_interp_weights",
     "is_interp_weight_downloaded", "get_interp_weight_path",
     "verify_interp_weight_hash", "load_interp_weights_if_available",
+    # Depth
+    "DEPTH_AVAILABLE", "generate_depth_map",
+    "download_model", "is_model_downloaded",
+    "MODEL_CONFIGS", "COLMAPS",
 ]

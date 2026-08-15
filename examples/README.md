@@ -55,6 +55,7 @@ Scripts accept a video path as command-line argument. If none given, defaults to
 | [upscale/](upscale/) | AI video upscaling: ML, Anime4K shaders, ArtCNN | [upscale] for ML/ArtCNN |
 | [interpolation/](interpolation/) | RIFE PyTorch + Flowframes 1.42.0 frame interpolation (free 1.36.0 planned) | [interpolation] for RIFE, Flowframes for FF |
 | [custom-pipeline/](custom-pipeline/) | full end-to-end pipeline from scratch | [ml] |
+| [depth/](depth/) | monocular depth estimation (Depth-Anything-V2) | [depth] |
 
 ---
 

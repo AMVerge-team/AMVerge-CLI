@@ -1,36 +1,6 @@
 from __future__ import annotations
 
-"""Smart scene cutting with lossless copy, smartcut, and re-encode fallback.
-
-Four cut modes depending on scene boundary alignment with keyframes:
-
-    copy         - start is on a keyframe: lossless stream copy
-    snapped_copy - HEVC CPU, nearest keyframe within 5s: lossless from snap
-    smartcut     - H.264, next keyframe within 90%: encode head + lossless tail
-    reencode     - fallback: full re-encode with NVENC (GPU) or CPU encoder
-
-Usage:
-    >>> from amverge.core.cutting.smart_cut import cut_all_scenes
-    >>> from amverge.core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
-    >>> from amverge.core.codec.codec_utils import check_if_hevc
-    >>> from pathlib import Path
-    >>>
-    >>> keyframes = get_keyframe_timestamps_pyav("episode.mp4")
-    >>> is_hevc = check_if_hevc("episode.mp4")
-    >>> scenes = [{"scene_index": 0, "start_sec": 0.0, "end_sec": 5.0}]
-    >>>
-    >>> results = cut_all_scenes(
-    ...     input_file=Path("episode.mp4"),
-    ...     scenes=scenes,
-    ...     keyframes=keyframes,
-    ...     out_dir=Path("./scenes"),
-    ...     use_cuda=True,
-    ...     is_hevc=is_hevc,
-    ...     on_ready=lambda r: print(r["clip_mode"]),
-    ... )
-    >>> for r in results:
-    ...     print(f"Scene {r['scene_index']}: {r['clip_mode']}")
-"""
+"""Smart scene cutting with lossless copy, smartcut, and re-encode fallback."""
 
 import os
 import subprocess
@@ -39,12 +9,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
-from ..infra.binaries import get_ffmpeg
+from ..infra.binaries import get_ffmpeg, get_ffprobe
 from ..infra.ipc import emit_progress, log
 
 KEYFRAME_SNAP_THRESHOLD = 0.2
 PRE_SEEK_OFFSET = 10.0
 HEVC_SNAP_MAX = 5.0
+TRAILING_GOP_MAX_PACKETS = 5
 
 
 def _background_kwargs() -> dict:
@@ -83,6 +54,67 @@ def _lossless_copy(
         "-movflags", "+faststart",
         str(out_path),
     ])
+
+
+def _video_keyframe_layout(path: Path) -> tuple[int, list[int]]:
+    """Return ``(packet_count, keyframe_packet_indexes)`` for the video stream."""
+    import json
+
+    try:
+        out = subprocess.run(
+            [
+                get_ffprobe(), "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "packet=flags", "-of", "json", str(path),
+            ],
+            capture_output=True, text=True, **_background_kwargs(),
+        ).stdout
+        packets = json.loads(out).get("packets", []) if out.strip() else []
+    except Exception:
+        return 0, []
+    keys = [i for i, p in enumerate(packets) if "K" in (p.get("flags") or "")]
+    return len(packets), keys
+
+
+def _trim_trailing_partial_gop(out_path: Path) -> bool:
+    """Drop a trailing partial GOP from a stream-copied clip.
+
+    Open-GOP sources interleave the next GOP's keyframe with the current GOP's
+    trailing B-frames, so a stream copy ending on a scene boundary drags in that
+    keyframe plus a frame or two. When such clips are concatenated the orphan
+    packets carry picture order counts that collide with the following clip,
+    decoding as "Duplicate POC in a sequence" corruption in strict players
+    (VLC tolerates it). Re-mux keeping only the packets before that keyframe.
+
+    Returns True when the clip was trimmed.
+    """
+    count, keys = _video_keyframe_layout(out_path)
+    if count <= 0 or len(keys) < 2:
+        return False
+    last_key = keys[-1]
+    if last_key <= 0 or (count - last_key) > TRAILING_GOP_MAX_PACKETS:
+        return False
+
+    trimmed = out_path.with_name(out_path.stem + "_trim" + out_path.suffix)
+    try:
+        _run_ffmpeg([
+            get_ffmpeg(), "-y",
+            "-i", str(out_path),
+            "-map", "0:v:0", "-map", "0:a?",
+            "-c", "copy",
+            "-frames:v", str(last_key),
+            "-movflags", "+faststart",
+            str(trimmed),
+        ])
+    except Exception:
+        trimmed.unlink(missing_ok=True)
+        return False
+
+    if not trimmed.exists() or trimmed.stat().st_size == 0:
+        trimmed.unlink(missing_ok=True)
+        return False
+
+    os.replace(str(trimmed), str(out_path))
+    return True
 
 
 def _encode_segment(
@@ -187,6 +219,7 @@ def cut_scene(
 
     if _start_is_on_keyframe(start_sec, keyframes):
         _lossless_copy(input_file, start_sec, end_sec, out_path)
+        _trim_trailing_partial_gop(out_path)
         return str(out_path), "copy"
 
     k_next = _find_next_keyframe_after(keyframes, start_sec)
@@ -204,6 +237,7 @@ def cut_scene(
                     snap_kf = keyframes[ci]
         if snap_kf is not None and best_diff <= HEVC_SNAP_MAX and snap_kf < end_sec:
             _lossless_copy(input_file, snap_kf, end_sec, out_path)
+            _trim_trailing_partial_gop(out_path)
             return str(out_path), "snapped_copy"
 
     can_smartcut = (
@@ -223,6 +257,7 @@ def cut_scene(
         finally:
             head_path.unlink(missing_ok=True)
             tail_path.unlink(missing_ok=True)
+        _trim_trailing_partial_gop(out_path)
         return str(out_path), "smartcut"
 
     _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)

@@ -14,6 +14,7 @@ from .registry import (
     QUALITY_PRESETS,
     get_model,
     get_rife_models,
+    get_pervfi_models,
     get_all_model_keys,
     get_model_credit,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "QUALITY_PRESETS",
     "get_model",
     "get_rife_models",
+    "get_pervfi_models",
     "get_all_model_keys",
     "get_model_credit",
     "download_weights",

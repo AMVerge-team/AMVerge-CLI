@@ -27,6 +27,13 @@ from ...core.interpolation.weight_loader import (
     get_weight_path as _interp_weight_path,
 )
 from ...core.interpolation.flowframes import FLOWFRAMES_MODELS, is_flowframes_model_installed, flowframes_available
+from ...core.depth import (
+    DEPTH_AVAILABLE as _DEPTH_AVAILABLE,
+    MODEL_CONFIGS,
+    is_model_downloaded as _depth_is_downloaded,
+    download_model as _depth_download,
+)
+from ...core.infra.config import get_amverge_config_dir
 
 
 def _format_size(size_bytes):
@@ -74,15 +81,16 @@ def models(
     upscale_only: bool = typer.Option(False, "--upscale", "-u", help="Show only upscale models"),
     interpolation_only: bool = typer.Option(False, "--interpolation", "-i", help="Show only interpolation models"),
     flowframes_only: bool = typer.Option(False, "--flowframes", "-ff", help="Show only Flowframes models"),
+    depth_only: bool = typer.Option(False, "--depth", "-d", help="Show only depth models"),
     delete: Optional[str] = typer.Option(None, "--delete", help="Delete a model by key"),
     download: Optional[str] = typer.Option(None, "--download", help="Download a model by key"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show file paths and hashes"),
     show_storage: bool = typer.Option(False, "--storage", help="Show storage directories"),
 ) -> None:
-    """Manage model files (upscaling and interpolation).
+    """Manage model files (upscaling, interpolation, depth, and Flowframes).
 
-    Without options, lists all models from both registries with download status.
-    Use --upscale, --interpolation, or --flowframes to filter. Use --delete to remove a model,
+    Without options, lists all models from all registries with download status.
+    Use --upscale, --interpolation, --depth, or --flowframes to filter. Use --delete to remove a model,
     --download to fetch one.
     """
     banner("models")
@@ -93,37 +101,43 @@ def models(
         console.print(f"  ArtCNN ONNX:   [dim]{os.path.join(get_models_dir(), 'artcnn')}[/dim]")
         console.print(f"  Interpolation: [dim]{os.path.join(get_models_dir(), 'interpolation')}[/dim]")
         console.print(f"  Flowframes:    [dim]%LOCALAPPDATA%\\Flowframes\\FlowframesData\\pkgs\\[/dim]")
+        console.print(f"  Depth:         [dim]{os.path.join(os.path.dirname(get_models_dir()), 'depth')}[/dim]")
         console.print(f"  FFmpeg:        [dim]{os.path.dirname(os.path.dirname(WEIGHTS_DIR))}/ffmpeg/bin[/dim]")
         return
 
-    show_both = not upscale_only and not interpolation_only and not flowframes_only
+    show_both = not upscale_only and not interpolation_only and not flowframes_only and not depth_only
 
     if delete:
-        _handle_delete(delete, upscale_only, interpolation_only, flowframes_only, show_both)
+        _handle_delete(delete, upscale_only, interpolation_only, flowframes_only, depth_only, show_both)
         return
 
     if download:
-        _handle_download_action(download, upscale_only, interpolation_only, flowframes_only, show_both)
+        _handle_download_action(download, upscale_only, interpolation_only, flowframes_only, depth_only, show_both)
         return
 
     if show_both or upscale_only:
         _show_upscale_table(verbose)
     if show_both or interpolation_only:
-        if show_both or upscale_only:
+        if upscale_only:
             console.print()
         _show_interpolation_table(verbose)
     if show_both or flowframes_only:
-        if show_both or upscale_only or interpolation_only:
+        if upscale_only or interpolation_only:
             console.print()
         _show_flowframes_table(verbose)
+    if show_both or depth_only:
+        if upscale_only or interpolation_only or flowframes_only:
+            console.print()
+        _show_depth_table(verbose)
 
 
-def _handle_delete(key, upscale_only, interpolation_only, flowframes_only, show_both):
+def _handle_delete(key, upscale_only, interpolation_only, flowframes_only, depth_only, show_both):
     in_upscale = key in UPSCALE_REGISTRY or key in get_ml_models() or key in get_onnx_models() or key == "anime4k"
     in_interp = key in INTERPOLATION_REGISTRY
     in_ff = key in FLOWFRAMES_MODELS
+    in_depth = key in MODEL_CONFIGS
 
-    if not in_upscale and not in_interp and not in_ff:
+    if not in_upscale and not in_interp and not in_ff and not in_depth:
         fail(f"Unknown key: {key}")
         raise typer.Exit(1)
 
@@ -131,6 +145,8 @@ def _handle_delete(key, upscale_only, interpolation_only, flowframes_only, show_
         _do_upscale_delete(key)
     if in_interp and (show_both or interpolation_only):
         _do_interp_delete(key)
+    if in_depth and (show_both or depth_only):
+        _do_depth_delete(key)
     if in_ff:
         fail("Flowframes models are managed by Flowframes.exe, not amverge")
 
@@ -170,12 +186,13 @@ def _do_interp_delete(key):
         fail(f"Not on disk: {key}")
 
 
-def _handle_download_action(key, upscale_only, interpolation_only, flowframes_only, show_both):
+def _handle_download_action(key, upscale_only, interpolation_only, flowframes_only, depth_only, show_both):
     in_upscale = key in get_ml_models() or key == "anime4k" or key in get_onnx_models()
     in_interp = key in INTERPOLATION_REGISTRY
     in_ff = key in FLOWFRAMES_MODELS
+    in_depth = key in MODEL_CONFIGS
 
-    if not in_upscale and not in_interp and not in_ff:
+    if not in_upscale and not in_interp and not in_ff and not in_depth:
         fail(f"Unknown key: {key}")
         raise typer.Exit(1)
 
@@ -183,6 +200,8 @@ def _handle_download_action(key, upscale_only, interpolation_only, flowframes_on
         _do_upscale_download(key)
     if in_interp and (show_both or interpolation_only):
         _do_interp_download(key)
+    if in_depth and (show_both or depth_only):
+        _do_depth_download(key)
     if in_ff:
         fail("Flowframes models are managed by Flowframes.exe, not amverge")
 
@@ -258,7 +277,8 @@ def _show_interpolation_table(verbose):
         downloaded = _interp_is_downloaded(key)
         path = _interp_weight_path(key)
         size = _format_size(os.path.getsize(path)) if os.path.exists(path) else "-"
-        method_tag = "[#a78bfa]rife[/]"
+        method = entry.get("method", "rife")
+        method_tag = "[#a78bfa]rife[/]" if method == "rife" else f"[#a78bfa]{method}[/]"
         status = "[accent]downloaded[/]" if downloaded else "[muted]not downloaded[/]"
 
         if verbose:
@@ -301,3 +321,64 @@ def _show_flowframes_table(verbose):
     total = sum(1 for k in FLOWFRAMES_MODELS if is_flowframes_model_installed(k))
     console.print(f"  [dim]{total}/{len(FLOWFRAMES_MODELS)} Flowframes models installed[/]  "
                   f"[dim]managed by Flowframes.exe | --verbose | --storage[/]")
+
+
+def _depth_model_path(key):
+    config = MODEL_CONFIGS.get(key, {})
+    file = config.get("file", "")
+    if not file:
+        return None
+    return os.path.join(get_amverge_config_dir(), "models", "depth", file)
+
+
+def _depth_model_size(key):
+    path = _depth_model_path(key)
+    if path and os.path.exists(path):
+        return _format_size(os.path.getsize(path))
+    return "-"
+
+
+def _do_depth_delete(key):
+    path = _depth_model_path(key)
+    if path and os.path.exists(path):
+        os.unlink(path)
+        ok(f"Deleted: {key}")
+    else:
+        fail(f"Not on disk: {key}")
+
+
+def _do_depth_download(key):
+    entry = MODEL_CONFIGS.get(key, {})
+    console.print(f"  Downloading [accent]Depth-Anything-V2-{key}[/accent]...")
+    _depth_download(key)
+    ok(f"Downloaded: {key}")
+
+
+def _show_depth_table(verbose):
+    from ...core.infra.config import get_amverge_config_dir
+
+    if verbose:
+        columns = ("Key", "bright_black", {}), ("File", "bright_black", {}), ("Size", "bright_black", {}), ("URL", "bright_black", {}), ("Status", "bright_black", {})
+    else:
+        columns = ("Model", "bright_black", {}), ("Size", "bright_black", {}), ("", "bright_black", {})
+
+    table = make_table(*columns, title=None)
+
+    for key, config in MODEL_CONFIGS.items():
+        downloaded = _depth_is_downloaded(key)
+        size = _depth_model_size(key)
+        status = "[accent]downloaded[/]" if downloaded else "[muted]not downloaded[/]"
+
+        if verbose:
+            file = config.get("file", "-")
+            url = config.get("url", "-")
+            table.add_row(f"[bold]{key}[/]", file, size, url[:80] + "..." if len(url) > 80 else url, status)
+        else:
+            name = f"Depth-Anything-V2-{key.upper()}"
+            table.add_row(f"[bold]{name}[/]", size, status)
+
+    console.print(table)
+    console.print()
+    total = sum(1 for k in MODEL_CONFIGS if _depth_is_downloaded(k))
+    console.print(f"  [dim]{total}/{len(MODEL_CONFIGS)} depth models downloaded[/]  "
+                  f"[dim]--download <key> | --delete <key> | --verbose | --storage[/]")

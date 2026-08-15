@@ -1,6 +1,6 @@
 {
   "_source": {
-    "ml": "https://github.com/moongetsu/AniSmooth-Models/releases/download/",
+    "ml": "https://github.com/AniScripts/AniSmooth-Models/releases/download/",
     "anime4k": "https://github.com/bloc97/Anime4K/releases/download/v4.0.1/Anime4K_v4.0.zip",
     "artcnn": "https://github.com/Artoriuz/ArtCNN/releases/download/v1.6.2/"
   },

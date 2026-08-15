@@ -72,6 +72,7 @@ def interpolate(
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm download prompts"),
     download: bool = typer.Option(False, "--download", help="Download model weights without running"),
     no_monitor: bool = typer.Option(False, "--no-monitor", help="Disable system monitor during interpolation"),
+    ipc: bool = typer.Option(False, "--ipc", hidden=True, help="Emit structured PROGRESS|/PREVIEW_FRAME| events on stderr (app mode)"),
 ) -> None:
     """Interpolate video frames using AI frame interpolation (RIFE).
 
@@ -139,6 +140,34 @@ def interpolate(
     if not INTERPOLATION_AVAILABLE:
         fail("Interpolation requires torch and opencv. Run: pip install amverge[interpolation]")
         raise typer.Exit(1)
+
+    if ipc:
+        from ...core.infra.ipc import emit_progress
+        from ...core.infra.preview import ipc_callbacks
+        from ...core.interpolation import interpolate_video
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_ffmpeg_interactive(auto_yes=True)
+        _ensure_model_downloaded(model, auto_yes=True)
+        progress_cb, preview_cb = ipc_callbacks("interpolate")
+        try:
+            interpolate_video(
+                input_path=str(input.resolve()),
+                output_path=str(output.resolve()),
+                model_key=model,
+                factor=factor,
+                preset=preset,
+                target_size_mb=target_size_mb,
+                fit_w=fit_w,
+                fit_h=fit_h,
+                progress_cb=progress_cb,
+                preview_cb=preview_cb,
+            )
+        except Exception as e:
+            emit_progress(100, f"Error: {e}")
+            raise typer.Exit(1)
+        emit_progress(100, f"Saved: {output}")
+        return
 
     _ensure_ffmpeg_interactive(auto_yes=yes)
     _ensure_model_downloaded(model, auto_yes=yes)

@@ -92,6 +92,10 @@ AMVerge-CLI/
 │   │   │   ├── interpolate.py       amverge interpolate  (Python RIFE inference)
 │       │   │   ├── flowframes.py    amverge flowframes  (Flowframes 1.42.0 external process; free 1.36.0 planned)
 │   │   │   └── flowframes_path.py   amverge flowframes-path  (set/show Flowframes.exe path)
+│   │   ├── deadframes/
+│   │   │   └── deadframes.py    amverge deadframes  (deadframe removal via optical flow + ORB homography)
+│   │   ├── pipeline/
+│   │   │   └── pipeline.py      amverge pipeline  (chain deadframes + upscale + interpolate, preset save/load)
 │   │   ├── info/
 │   │   │   ├── info.py          amverge info  (stream metadata via PyAV)
 │   │   │   └── probe.py         amverge probe  (V2 diagnostics: codec/HEVC/keyframes/scene cache)
@@ -121,7 +125,8 @@ AMVerge-CLI/
 │       ├── infra/
 │       │   ├── binaries.py      get_binary(), get_ffmpeg(), get_ffprobe() - PyInstaller-aware PATH search
 │       │   ├── diagnostics.py   get_gpu_info(), get_versions() - clean wrappers
-│       │   └── ipc.py           emit_progress(), emit_event(), log(), check_if_path_exists(), build_video_cache_prefix()
+│       │   ├── ipc.py           emit_progress(), emit_event(), log(), check_if_path_exists(), build_video_cache_prefix()
+│       │   └── preview.py        PreviewEmitter + ipc_callbacks() - throttled JPEG snapshots, emits PREVIEW_FRAME|tag|path|seq (ping-pongs 2 files/tag)
 │       ├── keyframes/
 │       │   ├── keyframe_align.py    get_keyframe_timestamps_pyav(), classify_scenes_by_keyframe_alignment()
 │       │   └── keyframes.py         generate_keyframes() - PyAV packet demux (V1 detect command)
@@ -150,6 +155,14 @@ AMVerge-CLI/
 │       │   ├── engine.py               interpolate_video() - RIFE PyTorch CUDA/CPU inference
 │       │   ├── flowframes.py           run_flowframes(), flowframes_available(), cancel_flowframes() - Flowframes 1.42.0 integration; free 1.36.0 planned
 │       │   └── __init__.py             exports: interpolate_video, run_flowframes, INTERPOLATION_REGISTRY, download_weights, ...
+│       ├── deadframes/
+│       │   ├── registry.json          declarative model registry - add models here, CLI auto-discovers
+│       │   ├── registry.py             loads registry.json, builds URLs, query functions
+│       │   ├── weight_loader.py        download_weights(), verify_weight_hash()
+│       │   ├── engine.py               DeadFrameDetector, run_deadframes() - optical flow + ORB homography + motion-area analysis
+│       │   └── __init__.py             exports: run_deadframes, DEADFRAMES_REGISTRY, DEADFRAMES_AVAILABLE, ...
+│       ├── pipeline/
+│       │   └── presets.py       list/load/save/delete pipeline presets as JSON
 │       ├── video/
 │       │   ├── probe_utils.py   probe_video_fps/duration/dimensions/total_frames via ffprobe
 │       │   ├── scene_utils.py   scenes_to_objects(), scenes_frames_to_seconds()
@@ -248,8 +261,13 @@ for scene in result.scenes:
 | `ui.py` | `err` console (stderr) used for all interactive/wizard output. `console` (stdout) for command results. Do not mix them. `ok()`/`warn()`/`fail()` use ASCII-safe marker `>` - Python `●`/`→` crash on CP1252 Windows terminals. |
 | `core/similarity/similarity.py` | `find_similar_pairs()` accepts both `scene_index` and `index` keys for V1 (collect_scenes) / V2 (Scene.to_dict()) compat. |
 | `commands/export/export.py` | `CODEC_PROFILES`/`AUDIO_FFMPEG`/`CODEC_ALIASES`/`PRORES_CODECS`/`_resolve_gpu` imported from `core/codec/codec_utils.py`. |
+| `commands/sidecar/backend.py` cutting | `video_files` imports where every scene is keyframe-aligned (no re-encode candidates, contiguous indexes) cut with `run_ffmpeg_segment_streaming()` - the V1/main prod pipeline ported 1:1: one contiguous segment-muxer pass, `-c:v copy`, audio re-encoded `aac 160k stereo 48k`, `-reset_timestamps 1`. Produces single-GOP clips that concat-merge cleanly (open-GOP sources corrupt with per-scene `-ss/-t` copies). CLIP_READY streams live per segment (parsed from the muxer's `Opening ... for writing` lines) and PROGRESS ticks from `-progress pipe:2`. Falls back to `cut_all_scenes` for mixed/re-encode scene sets (TransNetV2). |
+| `core/cutting/segmenter.py` | `run_ffmpeg_segment_streaming()` = same ffmpeg args/output as `run_ffmpeg_segment()` plus `on_segment(index, path)` / `on_progress(fraction)` callbacks. |
+| `core/infra/ffmpeg_bootstrap.py` | Downloads a PINNED release-branch build (`ffmpeg-n8.1-latest-win64-gpl-8.1.zip`), never `ffmpeg-master-latest`. The master nightly (observed on N-125515, 2026-07-10) has a segment-muxer regression: on long multi-segment runs with re-encoded audio, later segments get a single audio packet with a large negative pts, which merges into files that start at a nonzero timestamp, mute instantly, and crash players on seek. Release 8.x builds are unaffected. Existing installs are not auto-refreshed (`is_portable_ffmpeg_installed` only checks existence) - a machine that already fetched the nightly must delete `%APPDATA%/com.amverge.cli/ffmpeg` and re-run so it re-downloads the pinned build. |
+| `core/cutting/smart_cut.py` | Stream-copy cuts run `_trim_trailing_partial_gop()` afterwards. Open-GOP sources (HEVC anime) interleave the next GOP's keyframe with the current GOP's trailing B-frames, so a copy ending on a scene boundary drags in that keyframe plus 1-2 packets. Those orphan packets collide on picture order count when clips are concatenated, decoding as "Duplicate POC in a sequence" corruption in strict players (VLC tolerates it). Trimming them also cuts the per-clip audio deficit from ~0.24s to ~0.01s. Guarded by `TRAILING_GOP_MAX_PACKETS`, so mid-clip keyframes in long scenes are never trimmed. |
 | `pipeline.py` | `DetectionMethod` is `Literal["keyframe", "edge", "transnetv2"]`. `DecodeMethod` is `Literal["ffmpeg", "nelux"]` (transnetv2 only; default `ffmpeg`). TransNetV2 path: `ffmpeg` uses `decode_and_detect_scenes()`, `nelux` uses `decode_video_frames_nelux()` + `run_model_one_pass()`, then `cut_all_scenes()` (V2 pipeline). `nelux` runs `nelux_available()` smoke test first and falls back to `ffmpeg` if missing. Monkey-patches `emit_progress` on `ai_scene_detection`/`smart_cut` module-local refs (not `ipc` module) to route IPC progress to Rich callback. |
-| `core/infra/ipc.py` | IPC protocol for Tauri app. V2 events: `PROGRESS\|pct\|msg`, `INITIAL_CLIPS_READY\|json`, `CLIP_READY\|idx\|path\|mode`, `PHASE1_COMPLETE`, `REENCODE_PROGRESS\|done\|total`. stdout reserved for final JSON. Never mix IPC output with Rich output. |
+| `core/infra/ipc.py` | IPC protocol for Tauri app. V2 events: `PROGRESS\|pct\|msg`, `INITIAL_CLIPS_READY\|json`, `CLIP_READY\|idx\|path\|mode`, `PHASE1_COMPLETE`, `REENCODE_PROGRESS\|done\|total`, `PREVIEW_FRAME\|tag\|path\|seq`. stdout reserved for final JSON. Never mix IPC output with Rich output. |
+| `--ipc` flag (hidden) | `depth-map`, `deadframes`, `interpolate` accept `--ipc`: bypasses the Rich `SystemMonitor`/`Live` display and instead streams `PROGRESS\|`/`PREVIEW_FRAME\|` on stderr (via `core/infra/preview.ipc_callbacks`), auto-confirms downloads. Standalone (non-`--ipc`) behavior is unchanged. The engines (`generate_depth_map`, `run_deadframes`, `interpolate_video`) take an additive `preview_cb(frame_bgr, pct)` param, default `None`. Used by the app to run post-export passes with a live progress+preview modal. |
 | `core/detection/ai_scene_detection.py` | TransNetV2 inference. Requires `[ml]` extra. `TRANSNET_AVAILABLE` flag guards import at module level - raises clear `ImportError` if missing. Do not import torch at module level in other files. |
 | `core/cutting/smart_cut.py` | Four cut modes: `copy` (start on keyframe), `snapped_copy` (HEVC CPU - snaps to nearest keyframe within 5s), `smartcut` (H.264 - encode tiny head + lossless tail), `reencode` (full fallback). Never remove the HEVC CPU path - HEVC re-encode without CUDA takes 10+ minutes. |
 | `core/codec/codec_utils.py` | `check_if_hevc()` via ffprobe. Also contains `CODEC_PROFILES` (14 codec -> ffmpeg encoder mappings), `AUDIO_FFMPEG` (10 audio choices), `CODEC_ALIASES`, `PRORES_CODECS`, `resolve_gpu()`, `is_hevc()`. Single source of truth - `commands/export/export.py` and `wizard.py` import from here. Do not duplicate these dicts. |
