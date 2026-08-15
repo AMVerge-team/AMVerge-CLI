@@ -12,9 +12,14 @@ Example:
 """
 
 import subprocess
+import sys
 from pathlib import Path
 
 from ..infra.binaries import get_ffprobe
+
+# Without this every ffprobe call flashes its own console window when the CLI
+# runs inside the windowed (--noconsole) app sidecar.
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 def probe_video_fps(input_video: str | Path) -> float:
@@ -31,7 +36,9 @@ def probe_video_fps(input_video: str | Path) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1",
         str(input_video),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
+    )
     num, den = map(int, result.stdout.strip().split("/"))
     return num / den
 
@@ -50,7 +57,9 @@ def probe_video_dimensions(input_video: str | Path) -> tuple[int, int]:
         "-of", "csv=s=x:p=0",
         str(input_video),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
+    )
     width, height = map(int, result.stdout.strip().split("x"))
     return width, height
 
@@ -68,7 +77,9 @@ def probe_video_duration(input_video: str | Path) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1",
         str(input_video),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
+    )
     return float(result.stdout.strip())
 
 

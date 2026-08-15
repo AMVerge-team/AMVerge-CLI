@@ -15,9 +15,13 @@ Example:
 """
 
 import subprocess
+import sys
 from pathlib import Path
 
 from ..infra.binaries import get_ffprobe
+
+# Keeps ffprobe from flashing a console window under the windowed app sidecar.
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 # -- Codec profile tables --------------------------------------------------
 
@@ -136,7 +140,7 @@ def check_if_hevc(video: str | Path) -> bool:
         "-of", "default=nk=1:nw=1",
         path,
     ]
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
     if p.returncode != 0:
         err = (p.stderr or "").strip()
         raise RuntimeError(

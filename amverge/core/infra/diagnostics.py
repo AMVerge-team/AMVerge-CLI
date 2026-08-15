@@ -13,6 +13,9 @@ import os
 import subprocess
 import sys
 import tempfile
+
+# `doctor` runs from the app too, where a console window would flash.
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -215,7 +218,10 @@ def check_environment() -> EnvironmentCheck:
     try:
         from .binaries import get_ffmpeg
         ff = get_ffmpeg()
-        r = subprocess.run([ff, "-version"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(
+            [ff, "-version"], capture_output=True, text=True, timeout=5,
+            creationflags=CREATE_NO_WINDOW,
+        )
         line = r.stdout.splitlines()[0] if r.stdout else ""
         result.checks.append(CheckResult("ffmpeg", r.returncode == 0, line[:80],
             "install ffmpeg and add to PATH" if r.returncode != 0 else ""))
@@ -226,7 +232,10 @@ def check_environment() -> EnvironmentCheck:
     try:
         from .binaries import get_ffprobe
         fp = get_ffprobe()
-        r = subprocess.run([fp, "-version"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(
+            [fp, "-version"], capture_output=True, text=True, timeout=5,
+            creationflags=CREATE_NO_WINDOW,
+        )
         line = r.stdout.splitlines()[0] if r.stdout else ""
         result.checks.append(CheckResult("ffprobe", r.returncode == 0, line[:80],
             "install ffprobe and add to PATH" if r.returncode != 0 else ""))

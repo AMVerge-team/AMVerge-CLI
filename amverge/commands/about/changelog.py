@@ -7,6 +7,10 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v0.3.1", [
+        "Windows: no more console windows flashing during import, probing and detection",
+        "Windows: CREATE_NO_WINDOW added to the remaining ffmpeg/ffprobe subprocess calls",
+    ]),
     ("v0.3.0", [
         "Interpolation: RIFE PyTorch CUDA/CPU inference (interpolate command)",
         "Interpolation: 18 RIFE models (4.6 through 4.25-heavy, Elexor, PerVFI)",

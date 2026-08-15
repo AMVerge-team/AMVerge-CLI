@@ -349,7 +349,12 @@ class AmvergeVideo:
                 "-f", "rawvideo",
                 "pipe:1",
             ]
-            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            p = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                creationflags=CREATE_NO_WINDOW,
+            )
             if p.stdout is None:
                 raise RuntimeError("Failed to create ffmpeg stdout pipe")
             total = max(1, self.total_frames)

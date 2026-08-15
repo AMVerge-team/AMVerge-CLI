@@ -22,6 +22,10 @@ import numpy as np
 from ..infra.ipc import emit_progress, log
 from .nelux_runtime import _get_nelux_video_reader
 from ..video.probe_utils import probe_video_fps, probe_video_duration, probe_video_total_frames
+
+# The decode fallback runs whenever nelux is unavailable, which is the normal
+# case in the app sidecar — without this each decode flashes a console window.
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 from ..video.scene_utils import scenes_frames_to_seconds
 from ..transnet.transnet_constants import (
     FRAME_BYTES,
@@ -123,7 +127,9 @@ def decode_and_detect_scenes(
         "-f", "rawvideo",
         "pipe:1",
     ]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
+    )
     if process.stdout is None:
         raise RuntimeError("Failed to create stdout pipe")
 
@@ -217,7 +223,9 @@ def decode_video_frames_ffmpeg(input_video: str | Path) -> np.ndarray:
         "-f", "rawvideo",
         "pipe:1",
     ]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
+    )
     if process.stdout is None:
         raise RuntimeError("Failed to create stdout pipe")
 
