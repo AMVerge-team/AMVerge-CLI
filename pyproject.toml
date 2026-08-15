@@ -4,7 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "amverge"
-version = "0.2.1"
+# Single-sourced from amverge/__version__.py, which `amverge version` and the
+# library both report — the two drifted apart when this was hardcoded.
+dynamic = ["version"]
 description = "AMVerge Features as a CLI Tool and Python Library"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -61,6 +63,9 @@ depth         = ["depth-anything-v2>=0.1", "opencv-python-headless>=4.9"]
 deadframes    = ["opencv-python-headless>=4.9"]
 all           = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0", "opencv-python-headless>=4.9", "pypresence>=4.3", "spandrel>=0.3", "onnxruntime>=1.16", "scipy>=1.10", "depth-anything-v2>=0.1"]
 dev           = ["pyinstaller>=6"]
+
+[tool.hatch.version]
+path = "amverge/__version__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["amverge"]
