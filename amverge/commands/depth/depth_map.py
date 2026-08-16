@@ -7,14 +7,11 @@ import typer
 from ...ui import banner, console, err, ok, fail
 from ...core.infra.diagnostics import get_gpu_info
 from ...core.upscaling.monitor import SystemMonitor, format_eta
-from ...core.depth import (
-    DEPTH_AVAILABLE,
-    MODEL_CONFIGS,
-    COLMAPS,
-    is_model_downloaded,
-    download_model,
-    generate_depth_map,
-)
+
+# NOTE: amverge.core.depth is imported inside depth_map() rather than here.
+# cli.py imports every command module at startup, so a module-scope import of
+# the depth stack makes torch load for `amverge --help` and every unrelated
+# command. Every use below is already inside the function body.
 
 
 def depth_map(
@@ -41,6 +38,15 @@ def depth_map(
     Based on https://github.com/DepthAnything/Depth-Anything-V2
     Models hosted at https://github.com/AniScripts/AniSmooth-Models
     """
+    from ...core.depth import (
+        DEPTH_AVAILABLE,
+        MODEL_CONFIGS,
+        COLMAPS,
+        is_model_downloaded,
+        download_model,
+        generate_depth_map,
+    )
+
     if not DEPTH_AVAILABLE:
         fail(
             "Depth-Anything V2 not installed.\n"

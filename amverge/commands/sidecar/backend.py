@@ -8,11 +8,9 @@ import typer
 
 from ...core.infra.ipc import emit_progress, emit_event, log, check_if_path_exists, build_video_cache_prefix
 from ...core.thumbnails import make_thumbnail
-from ...core.detection.ai_scene_detection import (
-    decode_video_frames_ffmpeg,
-    decode_video_frames_nelux,
-    run_model_one_pass,
-)
+# NOTE: ai_scene_detection is imported inside backend() — importing it here
+# pulls transnetv2_pytorch (and torch) into every CLI invocation, including
+# keyframe-only imports that never touch the model.
 from ...core.detection.keyframe import detect_scenes_by_keyframe
 from ...core.video.probe_utils import probe_video_duration, probe_video_fps, probe_video_dimensions
 from ...core.video.scene_utils import scenes_to_objects
@@ -39,6 +37,12 @@ def backend(
 
     Emits IPC events to stderr and final JSON to stdout.
     """
+    from ...core.detection.ai_scene_detection import (
+        decode_video_frames_ffmpeg,
+        decode_video_frames_nelux,
+        run_model_one_pass,
+    )
+
     input_video = Path(video_path)
     out_dir = Path(output_dir)
 

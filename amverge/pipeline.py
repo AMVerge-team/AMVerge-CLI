@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from .core.detection.keyframe import detect_cuts_by_keyframe
-from .core.detection.edge import detect_cuts_by_edge
+# NOTE: .core.detection.edge imports cv2 at module scope, so it is imported
+# inside detect_scenes() instead — this module is reachable from the CLI and
+# the edge method is only one of several.
 from .core.cutting.segmenter import collect_scenes, run_ffmpeg_segment
 from .core.thumbnails import generate_thumbnails
 from .core.similarity import find_similar_pairs
@@ -388,6 +390,8 @@ def detect_scenes(
                 progress_cb=_kf_cb,
             )
         else:
+            from .core.detection.edge import detect_cuts_by_edge
+
             cut_points = detect_cuts_by_edge(
                 video_path,
                 threshold=edge_threshold,
