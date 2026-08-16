@@ -43,9 +43,7 @@ jobs:
 
       - name: Build sdist and wheel
         run: python -m build
-
-      # The version comes from amverge/__version__.py. A tag that disagrees with
-      # it would publish a number nobody can reproduce from the source tree.
+        
       - name: Check tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         run: |

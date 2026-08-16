@@ -391,11 +391,6 @@ def run_model_one_pass(
             else "cpu"
         )
 
-    # transnetv2_pytorch prints a plaintext warning banner to stdout when
-    # constructed with device="mps" (see backend.py for the auto-select
-    # rationale). backend()'s entire IPC contract is "stdout is nothing but
-    # the final JSON payload" - any stray print here corrupts that for the
-    # Rust side, so redirect anything the constructor prints to stderr instead.
     with contextlib.redirect_stdout(sys.stderr):
         model = TransNetV2(device=device)
     model.eval()

@@ -49,10 +49,6 @@ def _materialize_one(
         start_sec = float(item["start_sec"])
         end_sec = float(item["end_sec"])
 
-        # `batch_index` (not the scene's own index) drives cut_scene's temp/output
-        # filenames — scenepack clips are pulled from many different episodes, so
-        # two items can share the same original scene_index. Only batch_index is
-        # guaranteed unique among the concurrently-running items in this call.
         cut_path, mode = cut_scene(
             Path(source_path),
             start_sec,
@@ -109,9 +105,6 @@ def materialize_clips(
     total = len(items)
     emit_progress(0, f"Adding {total} clip(s) to Scenepack...")
 
-    # keyframe extraction demuxes the whole source file — cheap relative to
-    # decoding, but not free, and not safe to memoize from multiple threads at
-    # once. Warm the cache serially per unique source before fanning workers out.
     keyframe_cache: dict[str, list[float]] = {}
     hevc_cache: dict[str, bool] = {}
     unique_sources = {

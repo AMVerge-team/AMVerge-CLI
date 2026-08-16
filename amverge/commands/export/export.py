@@ -98,9 +98,6 @@ def export(
     ff, fp = get_ffmpeg(), get_ffprobe()
 
     if inputs_json is not None:
-        # App mode. Each entry is either a string (a pre-cut clip file, exported
-        # whole — video mode) or an object with an optional [start_sec, end_sec]
-        # range to cut from a source episode (webp mode, no clip file on disk).
         raw = json.loads(inputs_json.read_text(encoding="utf-8"))
         if not raw:
             fail("No input clips provided.")
