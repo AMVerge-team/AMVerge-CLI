@@ -48,9 +48,6 @@ def available_ops() -> dict[str, bool]:
     an ML stack, and cli.py imports this module for every command — so doing it
     at module scope made `amverge --help` load torch. @cache keeps the
     compute-once semantics the module constant used to have.
-
-    NOTE: a module-level __getattr__ cannot replace this, because it does not
-    fire for same-module global lookups (the reads inside pipeline() below).
     """
     return {
         "deadframes": _check_op_deadframes(),
