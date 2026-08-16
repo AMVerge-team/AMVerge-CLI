@@ -27,12 +27,9 @@ from ...core.interpolation.weight_loader import (
     get_weight_path as _interp_weight_path,
 )
 from ...core.interpolation.flowframes import FLOWFRAMES_MODELS, is_flowframes_model_installed, flowframes_available
-from ...core.depth import (
-    DEPTH_AVAILABLE as _DEPTH_AVAILABLE,
-    MODEL_CONFIGS,
-    is_model_downloaded as _depth_is_downloaded,
-    download_model as _depth_download,
-)
+# NOTE: amverge.core.depth is imported inside the functions that need it.
+# cli.py imports this module at startup, and a module-scope import here
+# would pull the torch stack into every command.
 from ...core.infra.config import get_amverge_config_dir
 
 
@@ -132,6 +129,7 @@ def models(
 
 
 def _handle_delete(key, upscale_only, interpolation_only, flowframes_only, depth_only, show_both):
+    from ...core.depth import MODEL_CONFIGS
     in_upscale = key in UPSCALE_REGISTRY or key in get_ml_models() or key in get_onnx_models() or key == "anime4k"
     in_interp = key in INTERPOLATION_REGISTRY
     in_ff = key in FLOWFRAMES_MODELS
@@ -187,6 +185,7 @@ def _do_interp_delete(key):
 
 
 def _handle_download_action(key, upscale_only, interpolation_only, flowframes_only, depth_only, show_both):
+    from ...core.depth import MODEL_CONFIGS
     in_upscale = key in get_ml_models() or key == "anime4k" or key in get_onnx_models()
     in_interp = key in INTERPOLATION_REGISTRY
     in_ff = key in FLOWFRAMES_MODELS
@@ -324,6 +323,7 @@ def _show_flowframes_table(verbose):
 
 
 def _depth_model_path(key):
+    from ...core.depth import MODEL_CONFIGS
     config = MODEL_CONFIGS.get(key, {})
     file = config.get("file", "")
     if not file:
@@ -348,6 +348,7 @@ def _do_depth_delete(key):
 
 
 def _do_depth_download(key):
+    from ...core.depth import MODEL_CONFIGS, download_model as _depth_download
     entry = MODEL_CONFIGS.get(key, {})
     console.print(f"  Downloading [accent]Depth-Anything-V2-{key}[/accent]...")
     _depth_download(key)
@@ -355,6 +356,7 @@ def _do_depth_download(key):
 
 
 def _show_depth_table(verbose):
+    from ...core.depth import MODEL_CONFIGS, is_model_downloaded as _depth_is_downloaded
     from ...core.infra.config import get_amverge_config_dir
 
     if verbose:

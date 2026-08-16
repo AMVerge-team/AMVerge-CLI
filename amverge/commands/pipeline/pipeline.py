@@ -6,6 +6,7 @@ Run interactively with no arguments. Load saved presets with --load <name>.
 """
 from __future__ import annotations
 
+from functools import cache
 from pathlib import Path
 
 import typer
@@ -39,14 +40,29 @@ def _check_op_interpolate():
         return False
 
 
-_AVAILABLE_OPS = {
-    "deadframes": _check_op_deadframes(),
-    "upscale": _check_op_upscale(),
-    "interpolate": _check_op_interpolate(),
-}
+@cache
+def available_ops() -> dict[str, bool]:
+    """Which pipeline operations have their extras installed.
 
-_AVAILABLE_COUNT = sum(1 for v in _AVAILABLE_OPS.values() if v)
-_PIPELINE_ENABLED = _AVAILABLE_COUNT >= 2
+    Computed on first call rather than at import. Each _check_op_* import pulls
+    an ML stack, and cli.py imports this module for every command — so doing it
+    at module scope made `amverge --help` load torch. @cache keeps the
+    compute-once semantics the module constant used to have.
+
+    NOTE: a module-level __getattr__ cannot replace this, because it does not
+    fire for same-module global lookups (the reads inside pipeline() below).
+    """
+    return {
+        "deadframes": _check_op_deadframes(),
+        "upscale": _check_op_upscale(),
+        "interpolate": _check_op_interpolate(),
+    }
+
+
+def pipeline_enabled(ops: dict[str, bool] | None = None) -> bool:
+    """A pipeline needs at least two operations available to be worth running."""
+    ops = available_ops() if ops is None else ops
+    return sum(1 for v in ops.values() if v) >= 2
 
 
 def _prompt_deadframes(defaults: dict | None = None):
@@ -318,9 +334,10 @@ def pipeline(
     Run interactively with arrow-key navigation. Save presets with --save <name>.
     Load saved presets with --load <name>.
     """
-    if not _PIPELINE_ENABLED:
-        available = [k for k, v in _AVAILABLE_OPS.items() if v]
-        missing_ops = [k for k, v in _AVAILABLE_OPS.items() if not v]
+    ops = available_ops()
+    if not pipeline_enabled(ops):
+        available = [k for k, v in ops.items() if v]
+        missing_ops = [k for k, v in ops.items() if not v]
         fail(
             f"Pipeline requires at least 2 operations installed. "
             f"You have: {', '.join(available) if available else 'none'}. "
@@ -380,7 +397,7 @@ def pipeline(
                 ("upscale", "(AI super-resolution)"),
                 ("interpolate", "(frame interpolation)"),
             ]
-            if _AVAILABLE_OPS.get(k)
+            if ops.get(k)
         ]
         op_keys_selected = [k for k in op_names]
         for i, name in enumerate(op_names):
