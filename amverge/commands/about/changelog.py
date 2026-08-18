@@ -7,6 +7,9 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v0.4.0"), [
+        "Improved scene detection accuracy by a large margin"
+    ],
     ("v0.3.1", [
         "Windows: no more console windows flashing during import, probing and detection",
         "Windows: CREATE_NO_WINDOW added to the remaining ffmpeg/ffprobe subprocess calls",
