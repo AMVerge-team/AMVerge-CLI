@@ -83,6 +83,7 @@ def models(
     download: Optional[str] = typer.Option(None, "--download", help="Download a model by key"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show file paths and hashes"),
     show_storage: bool = typer.Option(False, "--storage", help="Show storage directories"),
+    emit_json: bool = typer.Option(False, "--json", hidden=True, help="Emit machine-readable JSON instead of tables"),
 ) -> None:
     """Manage model files (upscaling, interpolation, depth, and Flowframes).
 
@@ -90,6 +91,17 @@ def models(
     Use --upscale, --interpolation, --depth, or --flowframes to filter. Use --delete to remove a model,
     --download to fetch one.
     """
+    show_both = not upscale_only and not interpolation_only and not flowframes_only and not depth_only
+
+    if emit_json:
+        _models_json(
+            delete,
+            download,
+            depth=show_both or depth_only,
+            interpolation=show_both or interpolation_only,
+        )
+        return
+
     banner("models")
 
     if show_storage:
@@ -101,8 +113,6 @@ def models(
         console.print(f"  Depth:         [dim]{os.path.join(os.path.dirname(get_models_dir()), 'depth')}[/dim]")
         console.print(f"  FFmpeg:        [dim]{os.path.dirname(os.path.dirname(WEIGHTS_DIR))}/ffmpeg/bin[/dim]")
         return
-
-    show_both = not upscale_only and not interpolation_only and not flowframes_only and not depth_only
 
     if delete:
         _handle_delete(delete, upscale_only, interpolation_only, flowframes_only, depth_only, show_both)
@@ -227,6 +237,96 @@ def _do_interp_download(key):
     console.print(f"  Downloading [accent]{entry.get('name', key)}[/accent]...")
     _interp_download(key)
     ok(f"Downloaded: {key}")
+
+
+def _models_json(delete, download, depth, interpolation):
+    import json
+
+    if download:
+        result = {"result": _json_download(download)}
+    elif delete:
+        result = {"result": _json_delete(delete)}
+    else:
+        payload = {"depth": [], "interpolation": []}
+        if depth:
+            from ...core.depth import MODEL_CONFIGS, is_model_downloaded
+            for key, cfg in MODEL_CONFIGS.items():
+                payload["depth"].append(_depth_json_entry(key, cfg))
+        if interpolation:
+            for key, entry in INTERPOLATION_REGISTRY.items():
+                payload["interpolation"].append(_interp_json_entry(key, entry))
+        result = payload
+
+    print(json.dumps(result), flush=True)
+
+
+def _depth_json_entry(key, cfg):
+    from ...core.depth import is_model_downloaded
+    path = _depth_model_path(key)
+    size = os.path.getsize(path) if path and os.path.exists(path) else 0
+    return {
+        "key": key,
+        "name": f"Depth-Anything-V2-{key.upper()}",
+        "method": "depth",
+        "file": cfg.get("file", ""),
+        "sizeBytes": size,
+        "downloaded": is_model_downloaded(key),
+    }
+
+
+def _interp_json_entry(key, entry):
+    path = _interp_weight_path(key)
+    size = os.path.getsize(path) if os.path.exists(path) else 0
+    return {
+        "key": key,
+        "name": entry.get("name", key),
+        "method": entry.get("method", "rife"),
+        "file": entry.get("file", ""),
+        "sizeBytes": size,
+        "downloaded": _interp_is_downloaded(key),
+    }
+
+
+def _json_download(key):
+    from ...core.depth import MODEL_CONFIGS, download_model as _depth_download
+
+    if key in MODEL_CONFIGS:
+        try:
+            _depth_download(key)
+            return {"ok": True, "action": "download", "key": key, "message": f"Downloaded: {key}"}
+        except Exception as exc:
+            return {"ok": False, "action": "download", "key": key, "message": str(exc)}
+
+    if key in INTERPOLATION_REGISTRY:
+        try:
+            success = _interp_download(key)
+        except Exception as exc:
+            return {"ok": False, "action": "download", "key": key, "message": str(exc)}
+        if success:
+            return {"ok": True, "action": "download", "key": key, "message": f"Downloaded: {key}"}
+        return {"ok": False, "action": "download", "key": key, "message": f"Failed: {key}"}
+
+    return {"ok": False, "action": "download", "key": key, "message": f"Unknown key: {key}"}
+
+
+def _json_delete(key):
+    from ...core.depth import MODEL_CONFIGS
+
+    if key in MODEL_CONFIGS:
+        path = _depth_model_path(key)
+        if path and os.path.exists(path):
+            os.unlink(path)
+            return {"ok": True, "action": "delete", "key": key, "message": f"Deleted: {key}"}
+        return {"ok": False, "action": "delete", "key": key, "message": f"Not on disk: {key}"}
+
+    if key in INTERPOLATION_REGISTRY:
+        path = _interp_weight_path(key)
+        if os.path.exists(path):
+            os.unlink(path)
+            return {"ok": True, "action": "delete", "key": key, "message": f"Deleted: {key}"}
+        return {"ok": False, "action": "delete", "key": key, "message": f"Not on disk: {key}"}
+
+    return {"ok": False, "action": "delete", "key": key, "message": f"Unknown key: {key}"}
 
 
 def _show_upscale_table(verbose):
