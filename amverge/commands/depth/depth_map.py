@@ -8,12 +8,6 @@ from ...ui import banner, console, err, ok, fail
 from ...core.infra.diagnostics import get_gpu_info
 from ...core.upscaling.monitor import SystemMonitor, format_eta
 
-# NOTE: amverge.core.depth is imported inside depth_map() rather than here.
-# cli.py imports every command module at startup, so a module-scope import of
-# the depth stack makes torch load for `amverge --help` and every unrelated
-# command. Every use below is already inside the function body.
-
-
 def depth_map(
     input: Path = typer.Argument(..., help="Input video file"),
     output: Path = typer.Option(Path("depth_output.mp4"), "--output", "-o", help="Output video file"),

@@ -23,8 +23,6 @@ from ..infra.ipc import emit_progress, log
 from .nelux_runtime import _get_nelux_video_reader
 from ..video.probe_utils import probe_video_fps, probe_video_duration, probe_video_total_frames
 
-# The decode fallback runs whenever nelux is unavailable, which is the normal
-# case in the app sidecar — without this each decode flashes a console window.
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 from ..video.scene_utils import scenes_frames_to_seconds
 from ..transnet.transnet_constants import (
@@ -41,6 +39,8 @@ try:
     TRANSNET_AVAILABLE = True
 except ImportError:
     TRANSNET_AVAILABLE = False
+
+DEFAULT_THRESHOLD = 0.5
 
 
 def _safe_total(total_frames: int) -> int:
@@ -63,28 +63,94 @@ def _emit_loop_progress(
     return last
 
 
-def _run_model_batch(
-    model,
-    batch: np.ndarray,
-    start_index: int,
-    scores: np.ndarray,
-    counts: np.ndarray,
-    device: str,
-) -> None:
-    import torch
-    tensor = torch.from_numpy(batch).unsqueeze(dim=0).to(device)
-    with torch.inference_mode():
-        single_frame_pred, _ = model(tensor)
-    preds = single_frame_pred.detach().cpu().numpy().squeeze()
-    end = len(batch)
-    for i, pred in enumerate(preds):
-        global_index = start_index + i
-        scores[global_index] += pred
-        counts[global_index] += 1
+class _WindowedScorer:
+    """Per-frame cut probabilities, windowed the way TransNetV2 expects.
+
+    The model was trained on 100-frame windows in which only the middle 50
+    predictions count - the 25 frames on either side are temporal context and
+    nothing more. Scoring those context frames, as this module used to, invents
+    cuts at the head of a video and weakens real ones at every window seam.
+
+    Frames are pushed in decode order so callers can keep streaming instead of
+    holding a whole episode in memory. The head is padded with copies of the
+    first frame and the tail with copies of the last, matching
+    ``TransNetV2.predict_frames``.
+
+    Example:
+        >>> scorer = _WindowedScorer(model, "cuda")
+        >>> for frame in frames:
+        ...     scorer.push(frame)
+        >>> probs = scorer.finish()
+    """
+
+    def __init__(
+        self,
+        model,
+        device: str,
+        window_size: int = WINDOW_SIZE,
+        stride: int = STRIDE,
+    ) -> None:
+        self._model = model
+        self._device = device
+        self._window = window_size
+        self._stride = stride
+        self._pad = (window_size - stride) // 2
+        self._buffer: list[np.ndarray] = []
+        self._probs: list[float] = []
+        self._count = 0
+        self._last: np.ndarray | None = None
+
+    def push(self, frame: np.ndarray) -> None:
+        """Feed one decoded frame of shape ``(27, 48, 3)``."""
+        if self._count == 0:
+            self._buffer.extend([frame] * self._pad)
+        self._buffer.append(frame)
+        self._last = frame
+        self._count += 1
+        self._drain()
+
+    def finish(self) -> np.ndarray:
+        """Pad the tail, score the remainder, return one probability per frame."""
+        if self._count == 0 or self._last is None:
+            return np.empty(0, dtype=np.float32)
+
+        remainder = self._count % self._stride
+        tail_pad = self._pad + self._stride - (remainder if remainder else self._stride)
+        self._buffer.extend([self._last] * tail_pad)
+        self._drain()
+
+        probs = np.asarray(self._probs, dtype=np.float32)
+        if len(probs) < self._count:
+            probs = np.pad(probs, (0, self._count - len(probs)))
+        return probs[: self._count]
+
+    def _drain(self) -> None:
+        import torch
+        while len(self._buffer) >= self._window:
+            batch = np.stack(self._buffer[: self._window])
+            tensor = torch.from_numpy(batch).unsqueeze(dim=0).to(self._device)
+            with torch.inference_mode():
+                logits, _ = self._model(tensor)
+                preds = torch.sigmoid(logits)
+            preds = preds.detach().cpu().numpy().squeeze()
+            self._probs.extend(preds[self._pad : self._pad + self._stride].tolist())
+            self._buffer = self._buffer[self._stride :]
+
+
+def _scores_to_scenes(model, scores: np.ndarray, threshold: float) -> np.ndarray:
+    """Turn per-frame probabilities into ``(N, 2)`` frame ranges.
+
+    ``predictions_to_scenes`` walks the array with a running index, so an empty
+    one raises before it can return anything.
+    """
+    if len(scores) == 0:
+        return np.empty((0, 2), dtype=np.int32)
+    return model.predictions_to_scenes(scores, threshold=threshold)
 
 
 def decode_and_detect_scenes(
     input_video: str | Path,
+    threshold: float = DEFAULT_THRESHOLD,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Decode video frames and detect scenes with TransNetV2 in one call.
 
@@ -93,6 +159,8 @@ def decode_and_detect_scenes(
 
     Args:
         input_video: Path to the source video file.
+        threshold: Cut confidence in ``0-1`` a frame must exceed to end a scene.
+            Lower cuts more.
 
     Returns:
         Tuple of ``(scenes_secs, scenes_frames)`` - both are ``(N, 2)``
@@ -144,11 +212,7 @@ def decode_and_detect_scenes(
         model = TransNetV2(device=device)
     model.eval()
 
-    window_start_index = 0
-    buffer: list[np.ndarray] = []
-    scores = []
-    counts = []
-
+    scorer = _WindowedScorer(model, device)
     processed = 0
     last_progress = 19
 
@@ -159,15 +223,7 @@ def decode_and_detect_scenes(
         frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape(
             FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS
         )
-        buffer.append(frame)
-        scores.append(0.0)
-        counts.append(0)
-
-        if len(buffer) >= WINDOW_SIZE:
-            batch = np.stack(buffer[:WINDOW_SIZE])
-            _run_model_batch(model, batch, window_start_index, scores, counts, device)
-            buffer = buffer[STRIDE:]
-            window_start_index += STRIDE
+        scorer.push(frame)
 
         processed += 1
         if processed % 10 == 0:
@@ -175,14 +231,13 @@ def decode_and_detect_scenes(
                 processed, total_frames, 20, 30, "Decoding video...", last_progress
             )
 
-    if buffer:
-        batch = np.stack(buffer)
-        _run_model_batch(model, batch, window_start_index, scores, counts, device)
+    process.stdout.close()
+    process.wait()
 
     emit_progress(50, f"Decoding video... ({processed}/{_safe_total(total_frames)})")
 
-    scores_arr = np.array(scores) / np.array(counts)
-    scenes_frames = model.predictions_to_scenes(scores_arr)
+    scores_arr = scorer.finish()
+    scenes_frames = _scores_to_scenes(model, scores_arr, threshold)
     scenes_secs = scenes_frames_to_seconds(scenes_frames, video_fps)
 
     return scenes_secs, scenes_frames
@@ -340,12 +395,14 @@ def run_model_one_pass(
     batch_size: int = 100,
     overlap: int = 50,
     device: str | None = None,
+    threshold: float = DEFAULT_THRESHOLD,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run TransNetV2 inference on pre-decoded frames.
 
     Splits the frame array into overlapping windows of ``batch_size`` frames
-    (default 100), runs the model on each batch, and averages overlapping
-    predictions. GPU-accelerated when CUDA is available, MPS if MPS available.
+    (default 100) and keeps the middle ``batch_size - overlap`` predictions of
+    each - the frames on either edge are context only. GPU-accelerated when
+    CUDA is available, MPS if MPS available.
 
     Args:
         frames: Frame array of shape ``(N, 27, 48, 3)`` with dtype ``uint8``.
@@ -354,6 +411,8 @@ def run_model_one_pass(
             mps > cpu) when not given.
         batch_size: Number of frames per inference batch.
         overlap: Overlap between consecutive batches (default 50 frames).
+        threshold: Cut confidence in ``0-1`` a frame must exceed to end a scene.
+            Lower cuts more.
 
     Returns:
         Tuple of ``(scenes_secs, scenes_frames)`` - both ``(N, 2)`` ndarrays.
@@ -380,8 +439,6 @@ def run_model_one_pass(
     log("Running TransNetV2 one-pass inference...")
     import torch
     num_frames = len(frames)
-    scores = np.zeros(num_frames)
-    counts = np.zeros(num_frames)
     stride = batch_size - overlap
 
     if device is None:
@@ -398,24 +455,18 @@ def run_model_one_pass(
 
     last_progress = 54
 
-    for start in range(0, num_frames, stride):
-        end = min(start + batch_size, num_frames)
-        frames_batch = frames[start:end].copy()
+    scorer = _WindowedScorer(model, device, batch_size, stride)
 
-        tensor = torch.from_numpy(frames_batch).unsqueeze(dim=0).to(device)
-        with torch.inference_mode():
-            single_frame_pred, _ = model(tensor)
-        preds = single_frame_pred.detach().cpu().numpy().squeeze()
+    for index in range(num_frames):
+        scorer.push(frames[index])
+        if (index + 1) % stride == 0:
+            last_progress = _emit_loop_progress(
+                index + 1, num_frames, 55, 20,
+                "Running TransNetV2 scene detection...", last_progress,
+            )
 
-        scores[start:end] += preds
-        counts[start:end] += 1
-
-        last_progress = _emit_loop_progress(
-            end, num_frames, 55, 20, "Running TransNetV2 scene detection...", last_progress
-        )
-
-    final_scores = scores / counts
-    scenes_frames = model.predictions_to_scenes(final_scores)
+    final_scores = scorer.finish()
+    scenes_frames = _scores_to_scenes(model, final_scores, threshold)
     emit_progress(75, f"TransNetV2 complete ({num_frames}/{_safe_total(num_frames)} frames)")
 
     scenes_secs = scenes_frames_to_seconds(scenes_frames, video_fps)
