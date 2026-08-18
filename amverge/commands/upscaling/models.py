@@ -27,9 +27,6 @@ from ...core.interpolation.weight_loader import (
     get_weight_path as _interp_weight_path,
 )
 from ...core.interpolation.flowframes import FLOWFRAMES_MODELS, is_flowframes_model_installed, flowframes_available
-# NOTE: amverge.core.depth is imported inside the functions that need it.
-# cli.py imports this module at startup, and a module-scope import here
-# would pull the torch stack into every command.
 from ...core.infra.config import get_amverge_config_dir
 
 

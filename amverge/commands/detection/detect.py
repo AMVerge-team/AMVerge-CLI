@@ -33,6 +33,7 @@ def detect(
     similarity_threshold: float = typer.Option(0.10, "--similarity-threshold"),
     edge_threshold: float = typer.Option(0.15, "--edge-threshold"),
     edge_radius: float = typer.Option(0.6, "--edge-radius"),
+    threshold: float = typer.Option(0.5, "--threshold", help="transnetv2 cut confidence 0-1 (lower = more cuts; try 0.3 for dark footage)"),
     ipc: bool = typer.Option(False, "--ipc", hidden=True, help="Emit IPC events for Tauri app"),
     no_rpc: bool = typer.Option(False, "--no-rpc", help="Disable Discord RPC"),
 ) -> None:
@@ -47,6 +48,11 @@ def detect(
     if decode_method not in ("ffmpeg", "nelux"):
         fail("--decode-method must be: ffmpeg or nelux")
         raise typer.Exit(1)
+    if not 0.0 < threshold <= 1.0:
+        fail("--threshold must be between 0 (exclusive) and 1")
+        raise typer.Exit(1)
+    if threshold != 0.5 and method != "transnetv2":
+        warn("--threshold only applies to --method transnetv2; ignoring")
     if decode_method != "ffmpeg" and method != "transnetv2":
         warn("--decode-method only applies to --method transnetv2; ignoring")
         decode_method = "ffmpeg"
@@ -57,7 +63,7 @@ def detect(
             decode_method = "ffmpeg"
 
     if ipc:
-        _detect_ipc(video, output, method, min_duration, workers, similarity_threshold, edge_threshold, edge_radius)
+        _detect_ipc(video, output, method, min_duration, workers, similarity_threshold, edge_threshold, edge_radius, threshold)
         return
 
     banner("detect")
@@ -91,6 +97,7 @@ def detect(
                 thumbnail_workers=workers,
                 edge_threshold=edge_threshold,
                 edge_radius=edge_radius,
+                ai_threshold=threshold,
                 progress=on_progress,
             )
 
@@ -152,6 +159,7 @@ def _detect_ipc(
     similarity_threshold: float,
     edge_threshold: float,
     edge_radius: float,
+    ai_threshold: float = 0.5,
 ) -> None:
     import sys
     from ...core.infra.ipc import emit_progress, emit_event
@@ -190,7 +198,7 @@ def _detect_ipc(
         from ...core.cutting.smart_cut import cut_all_scenes
 
         emit_progress(0, "Starting TransNetV2 detection...")
-        scenes_secs, scenes_frames = decode_and_detect_scenes(video_path)
+        scenes_secs, scenes_frames = decode_and_detect_scenes(video_path, threshold=ai_threshold)
 
         emit_progress(80, "Extracting keyframe timestamps...")
         keyframes = get_keyframe_timestamps_pyav(video_path)

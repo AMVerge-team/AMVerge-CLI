@@ -21,9 +21,6 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from .core.detection.keyframe import detect_cuts_by_keyframe
-# NOTE: .core.detection.edge imports cv2 at module scope, so it is imported
-# inside detect_scenes() instead — this module is reachable from the CLI and
-# the edge method is only one of several.
 from .core.cutting.segmenter import collect_scenes, run_ffmpeg_segment
 from .core.thumbnails import generate_thumbnails
 from .core.similarity import find_similar_pairs
@@ -214,6 +211,7 @@ def detect_scenes(
     edge_threshold: float = 0.15,
     edge_radius: float = 0.6,
     edge_blocksize: int = 3,
+    ai_threshold: float = 0.5,
     progress: ProgressCb | None = None,
 ) -> DetectResult:
     """Detect scenes in a video file.
@@ -239,6 +237,9 @@ def detect_scenes(
         edge_threshold: Dissimilarity threshold for edge detection cuts.
         edge_radius: Seconds around each keyframe to scan (edge method only).
         edge_blocksize: Pooling block size for edge maps (edge method only).
+        ai_threshold: TransNetV2 cut confidence in ``0-1`` (transnetv2 method
+            only). Lower cuts more; dark, low-contrast footage scores well
+            under the 0.5 default and often needs ~0.3.
         progress: Optional callback ``(stage, percent, message)`` receiving
             pipeline stage name, 0-100 percent, and a human-readable message.
 
@@ -300,9 +301,13 @@ def detect_scenes(
             _progress("detect", 0, "Starting TransNetV2 detection...")
             if effective_decode == "nelux":
                 frames = decode_video_frames_nelux(video_path)
-                scenes_secs, scenes_frames = run_model_one_pass(frames, video_path)
+                scenes_secs, scenes_frames = run_model_one_pass(
+                    frames, video_path, threshold=ai_threshold
+                )
             else:
-                scenes_secs, scenes_frames = decode_and_detect_scenes(video_path)
+                scenes_secs, scenes_frames = decode_and_detect_scenes(
+                    video_path, threshold=ai_threshold
+                )
         finally:
             scene_det.emit_progress = _orig_emit_scene
             smart_cut.emit_progress = _orig_emit_cut
