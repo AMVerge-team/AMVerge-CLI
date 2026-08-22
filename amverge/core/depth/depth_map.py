@@ -17,10 +17,7 @@ CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 DEPTH_AVAILABLE = False
 try:
-    # depth_anything_v2's own tensor placement (dpt.py's image2tensor) picks
-    # mps whenever it's available, regardless of what device we load the model
-    # onto below — some of its ops have no MPS kernel in every torch build, so
-    # let unsupported ops silently fall back to CPU instead of crashing.
+    # Let unsupported ops silently fall back to CPU instead of crashing.
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     import numpy as np
     import torch
@@ -237,9 +234,6 @@ def generate_depth_map(
         download_model(encoder, progress_cb=progress_cb)
 
     config = MODEL_CONFIGS[encoder]
-    # Must match depth_anything_v2's own device choice (dpt.py's image2tensor
-    # independently picks mps when available): a model on one device fed a
-    # tensor placed on another throws on the very first frame.
     device = (
         "cuda" if torch.cuda.is_available()
         else "mps" if torch.backends.mps.is_available()
@@ -367,10 +361,6 @@ def generate_depth_map(
         except Exception:
             pass
         ffmpeg_proc.wait()
-        # A crash before any frame reached ffmpeg (e.g. a model/device error)
-        # otherwise leaves an empty, corrupted container sitting at the real
-        # output path with no cleanup. Only safe to unlink now that ffmpeg has
-        # actually exited (Windows can't delete a file still open elsewhere).
         if failed and frame_idx == 0 and os.path.exists(output_path):
             try:
                 os.unlink(output_path)
