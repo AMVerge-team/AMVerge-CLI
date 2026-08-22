@@ -314,7 +314,22 @@ def _build_ffmpeg_cmd(
 def _build_audio_filter(
     segments: list[tuple[float, float]],
 ) -> str:
-    return f"[0:a]aselect='{_select_expr(segments, 't')}',asetpts=N/SR/TB[outa]"
+    """atrim per kept range, not aselect: the bundled ffmpeg (8.0.1) ignores
+    aselect here and passes the whole track through, leaving audio running long
+    after the trimmed video ends. atrim behaves identically on both builds, and
+    audio branches are small enough that the buffering that ruled this out for
+    video is not a concern."""
+    audio_parts: list[str] = []
+    audio_labels: list[str] = []
+    for i, (start, end) in enumerate(segments):
+        audio_parts.append(
+            f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{i}]"
+        )
+        audio_labels.append(f"[a{i}]")
+    audio_parts.append(
+        f"{''.join(audio_labels)}concat=n={len(segments)}:v=0:a=1[outa]"
+    )
+    return ";".join(audio_parts)
 
 
 class DeadFrameDetector:
