@@ -7,6 +7,9 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v0.5.0"), [
+        "Fixed deadframes lagging near the end of clips and freezing the video"
+    ],
     ("v0.4.0"), [
         "Improved scene detection accuracy by a large margin"
     ],
