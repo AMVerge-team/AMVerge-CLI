@@ -72,6 +72,7 @@ def export(
     hardware: str = typer.Option("auto", "--hardware", help="auto · gpu · cpu"),
     workers: int = typer.Option(1, "--workers", help="Parallel clip exports"),
     audio_track: int = typer.Option(-1, "--audio-track", help="0-based audio index to hoist to first (preview language); -1 = keep order"),
+    audio_language: str = typer.Option("", "--audio-language", help="language tag to hoist (eng, jpn); resolved per clip, beats --audio-track"),
     ipc: bool = typer.Option(False, "--ipc", hidden=True, help="Emit IPC events for the Tauri app (no Rich UI)"),
 ) -> None:
     """Export selected scenes from a detect run."""
@@ -157,6 +158,7 @@ def export(
         codec=codec, audio=audio, container=container,
         hardware=hardware, merge=merge, workers=max(1, workers),
         audio_track=(audio_track if audio_track >= 0 else None),
+        audio_language=(audio_language.strip().lower() or None),
     )
 
     abort = threading.Event()

@@ -186,12 +186,17 @@ def _hoisted(audio: str, audio_track: int | None, audio_count: int | None) -> bo
     )
 
 
-def audio_map_args(audio: str, audio_track: int | None, audio_count: int | None) -> list[str]:
+def audio_map_args(audio: str, audio_track: int | None, audio_count: int | None,
+                   single: bool = False) -> list[str]:
     """``-map`` args for audio. ``audio_track`` is the user's selected preview
     language as a 0-based audio index; when > 0 with multiple tracks, hoist it to
-    first so editors (After Effects) default to it. Otherwise map all in order."""
+    first so editors (After Effects) default to it. Otherwise map all in order.
+    ``single`` keeps only that one track, for merges whose clips disagree on
+    layout - concat needs every segment to carry identical streams."""
     if audio == "none":
         return []
+    if single:
+        return ["-map", f"0:a:{audio_track or 0}?"]
     if not _hoisted(audio, audio_track, audio_count):
         return ["-map", "0:a?"]
     maps = ["-map", f"0:a:{audio_track}"]
@@ -201,9 +206,12 @@ def audio_map_args(audio: str, audio_track: int | None, audio_count: int | None)
     return maps
 
 
-def disposition_args(audio: str, audio_track: int | None, audio_count: int | None) -> list[str]:
+def disposition_args(audio: str, audio_track: int | None, audio_count: int | None,
+                     single: bool = False) -> list[str]:
     """When hoisting, mark the first (hoisted) audio output as the default track
     and clear default on the rest, so editors pick the preview language."""
+    if single:
+        return []
     if not _hoisted(audio, audio_track, audio_count):
         return []
     args = ["-disposition:a:0", "default"]
@@ -216,6 +224,7 @@ def build_copy_args(
     inp: str, out: str, audio: str,
     seek_ms: int | None = None, dur_ms: int | None = None, bsf: str | None = None,
     audio_track: int | None = None, audio_count: int | None = None,
+    audio_single: bool = False,
 ) -> list[str]:
     """Stream-copy the whole input (pre-cut clip) or a [seek, seek+dur] range
     (cut from a source episode). Input-side ``-ss`` = fast keyframe seek."""
@@ -224,7 +233,7 @@ def build_copy_args(
     if seek_ms and seek_ms > 0:
         args += ["-ss", _time_str(seek_ms)]
     args += ["-i", inp, "-map", "0:v:0"]
-    args += audio_map_args(audio, audio_track, audio_count)
+    args += audio_map_args(audio, audio_track, audio_count, audio_single)
     if dur_ms and dur_ms > 0:
         args += ["-t", _time_str(dur_ms)]
     args += ["-c:v", "copy"]
@@ -234,7 +243,7 @@ def build_copy_args(
         args += ["-c:a", "copy"]
     else:
         args += audio_args(audio)
-    args += disposition_args(audio, audio_track, audio_count)
+    args += disposition_args(audio, audio_track, audio_count, audio_single)
     if bsf:
         args += ["-bsf:v", bsf]
     if ext in ("mp4", "mov"):
@@ -247,6 +256,7 @@ def build_reencode_args(
     inp: str, out: str, codec: str, audio: str, use_gpu: bool,
     seek_ms: int | None = None, dur_ms: int | None = None,
     audio_track: int | None = None, audio_count: int | None = None,
+    audio_single: bool = False,
 ) -> list[str]:
     """Re-encode the whole input (pre-cut clip) or a [seek, seek+dur] range."""
     ext = Path(out).suffix.lstrip(".").lower()
@@ -254,15 +264,18 @@ def build_reencode_args(
     if seek_ms and seek_ms > 0:
         args += ["-ss", _time_str(seek_ms)]
     args += ["-i", inp, "-map", "0:v:0"]
-    args += audio_map_args(audio, audio_track, audio_count)
+    args += audio_map_args(audio, audio_track, audio_count, audio_single)
     if dur_ms and dur_ms > 0:
         args += ["-t", _time_str(dur_ms)]
     args += ["-vf", "setpts=PTS-STARTPTS"]
     if audio not in ("none", "copy"):
-        args += ["-af", "asetpts=PTS-STARTPTS"]
+        # aresample pins the first sample to 0 and fills or trims to keep audio
+        # against video. Without it a segment whose audio starts a fraction late
+        # keeps that offset, and concatenating segments accumulates the drift.
+        args += ["-af", "asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0"]
     args += video_encode_args(codec, use_gpu)
     args += audio_args(audio)
-    args += disposition_args(audio, audio_track, audio_count)
+    args += disposition_args(audio, audio_track, audio_count, audio_single)
     args += ["-fps_mode:v:0", "cfr"]
     if ext in ("mp4", "mov"):
         args += ["-movflags", "+faststart"]
