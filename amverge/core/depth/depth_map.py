@@ -17,6 +17,8 @@ CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 DEPTH_AVAILABLE = False
 try:
+    # Let unsupported ops silently fall back to CPU instead of crashing.
+    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     import numpy as np
     import torch
     import cv2
@@ -232,7 +234,11 @@ def generate_depth_map(
         download_model(encoder, progress_cb=progress_cb)
 
     config = MODEL_CONFIGS[encoder]
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = (
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
 
     model_kwargs = {
         k: v for k, v in config.items()
@@ -339,6 +345,11 @@ def generate_depth_map(
                 if preview_cb:
                     preview_cb(out_frame, pct)
 
+    except Exception:
+        failed = True
+        raise
+    else:
+        failed = False
     finally:
         cap.release()
         del model
@@ -350,6 +361,11 @@ def generate_depth_map(
         except Exception:
             pass
         ffmpeg_proc.wait()
+        if failed and frame_idx == 0 and os.path.exists(output_path):
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
 
     if frame_idx == 0:
         if os.path.exists(output_path):
