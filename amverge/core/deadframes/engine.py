@@ -214,27 +214,39 @@ def _decodable_frame_count(path: str, limit: int = 2) -> int:
         cap.release()
 
 
+def _decisions_to_frame_ranges(decisions: list[bool]) -> list[tuple[int, int]]:
+    """Kept runs as inclusive frame-index ranges."""
+    ranges: list[tuple[int, int]] = []
+    start: int | None = None
+    for i, keep in enumerate(decisions):
+        if keep and start is None:
+            start = i
+        elif not keep and start is not None:
+            ranges.append((start, i - 1))
+            start = None
+    if start is not None:
+        ranges.append((start, len(decisions) - 1))
+    return ranges
+
+
+def _select_expr(ranges: list[tuple[float, float]], var: str) -> str:
+    """OR of the kept ranges, for select/aselect."""
+    return "+".join(f"between({var},{start},{end})" for start, end in ranges)
+
+
 def _build_ffmpeg_cmd(
     input_path: str,
     output_path: str,
-    segments: list[tuple[float, float]],
+    frame_ranges: list[tuple[int, int]],
     fps: float,
     pix_fmt: str,
     prores: bool = False,
     no_audio: bool = False,
     audio_filter: str = "",
 ) -> list[str]:
-    filter_parts: list[str] = []
-    video_labels: list[str] = []
-    for i, (start, end) in enumerate(segments):
-        filter_parts.append(
-            f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{i}]"
-        )
-        video_labels.append(f"[v{i}]")
-    video_concat = "".join(video_labels)
-    filter_parts.append(
-        f"{video_concat}concat=n={len(segments)}:v=1:a=0[outv]"
-    )
+    filter_parts: list[str] = [
+        f"[0:v]select='{_select_expr(frame_ranges, 'n')}',setpts=N/FRAME_RATE/TB[outv]"
+    ]
 
     has_audio_track = bool(audio_filter)
     if has_audio_track:
@@ -302,18 +314,7 @@ def _build_ffmpeg_cmd(
 def _build_audio_filter(
     segments: list[tuple[float, float]],
 ) -> str:
-    audio_parts: list[str] = []
-    audio_labels: list[str] = []
-    for i, (start, end) in enumerate(segments):
-        audio_parts.append(
-            f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{i}]"
-        )
-        audio_labels.append(f"[a{i}]")
-    audio_concat = "".join(audio_labels)
-    audio_parts.append(
-        f"{audio_concat}concat=n={len(segments)}:v=0:a=1[outa]"
-    )
-    return ";".join(audio_parts)
+    return f"[0:a]aselect='{_select_expr(segments, 't')}',asetpts=N/SR/TB[outa]"
 
 
 class DeadFrameDetector:
@@ -690,6 +691,7 @@ def run_deadframes(
     pix_fmt = info["pix_fmt"]
 
     segments = _decisions_to_segments(decisions, fps)
+    frame_ranges = _decisions_to_frame_ranges(decisions)
     total = len(decisions)
     kept = sum(1 for d in decisions if d)
     dropped = total - kept
@@ -725,7 +727,7 @@ def run_deadframes(
     cmd = _build_ffmpeg_cmd(
         input_path=input_path,
         output_path=output_path,
-        segments=segments,
+        frame_ranges=frame_ranges,
         fps=fps,
         pix_fmt=pix_fmt,
         prores=prores,

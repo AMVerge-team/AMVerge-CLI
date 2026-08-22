@@ -38,6 +38,8 @@ class ExportSettings:
     merge: bool = False
     workers: int = 1
     audio_track: Optional[int] = None  # 0-based audio index to hoist to first (preview language)
+    audio_language: Optional[str] = None  # language tag to hoist; resolved per input
+    audio_single: bool = False  # keep only the selected track (mixed-layout merges)
 
 
 @dataclass
@@ -120,6 +122,34 @@ def _all_same_video_codec(ffprobe: str, inputs: list[str]) -> bool:
     return len(seen) == 1 and None not in seen
 
 
+def _copy_concat_safe(ffprobe: str, path: str) -> bool:
+    """True if `path` can be stream-copied into a concat without artifacts.
+
+    A clip whose first displayed frame is not a keyframe, or whose video stream
+    starts after 0, joins badly: the decoder holds the last frame of the previous
+    clip while it waits for a keyframe, and audio keeps running underneath. That
+    is the freeze-then-echo at a join. Such clips go down the re-encode path
+    instead, which rebases timestamps and lands on a clean keyframe.
+    """
+    try:
+        r = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "frame=key_frame,pts_time",
+             "-read_intervals", "%+#1", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+        )
+        first = next((ln for ln in (r.stdout or "").splitlines() if ln.strip()), "")
+        if not first:
+            return False
+        parts = [p.strip() for p in first.split(",")]
+        if parts[0] != "1":
+            return False
+        start = float(parts[1]) if len(parts) > 1 and parts[1] else 0.0
+        return start < 0.001
+    except Exception:
+        return False
+
+
 def probe_audio_stream_count(ffprobe: str, path: str) -> int:
     try:
         r = subprocess.run(
@@ -130,6 +160,29 @@ def probe_audio_stream_count(ffprobe: str, path: str) -> int:
         return len([ln for ln in (r.stdout or "").splitlines() if ln.strip()])
     except Exception:
         return 0
+
+
+def probe_audio_languages(ffprobe: str, path: str) -> list[str]:
+    """Language tag of each audio stream, in order. Untagged streams give ""."""
+    try:
+        r = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream_tags=language", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+        )
+        return [ln.strip().lower() for ln in (r.stdout or "").splitlines()]
+    except Exception:
+        return []
+
+
+def resolve_audio_track(languages: list[str], language: Optional[str]) -> Optional[int]:
+    """Index of the wanted language in this file, or None to leave order alone."""
+    if not language or not languages:
+        return None
+    try:
+        return languages.index(language.lower())
+    except ValueError:
+        return None
 
 
 def probe_duration_ms(ffprobe: str, path: str) -> Optional[int]:
@@ -228,20 +281,27 @@ def _export_one(
     abort: threading.Event,
     active: set,
     audio_count: Optional[int] = None,
+    audio_languages: Optional[list[str]] = None,
 ) -> str:
     """Export one scene to ``out_path``, returning the mode used ("copy" or
     "reencode"). Ladder: copy → re-encode → CPU re-encode."""
     ext = Path(out_path).suffix.lstrip(".").lower()
     track = settings.audio_track
+    if audio_languages:
+        resolved = resolve_audio_track(audio_languages, settings.audio_language)
+        if resolved is not None:
+            track = resolved
+            audio_count = len(audio_languages)
 
     def copy_args() -> list[str]:
         bsf = params.stream_copy_bsf(source_video_codec, ext)
         return params.build_copy_args(job.input, out_path, settings.audio, job.seek_ms, job.dur_ms, bsf,
-                                      track, audio_count)
+                                      track, audio_count, settings.audio_single)
 
     def reencode_args(codec: str, gpu: bool) -> list[str]:
         return params.build_reencode_args(job.input, out_path, codec, settings.audio, gpu,
-                                          job.seek_ms, job.dur_ms, track, audio_count)
+                                          job.seek_ms, job.dur_ms, track, audio_count,
+                                          settings.audio_single)
 
     if settings.codec == "copy":
         try:
@@ -388,8 +448,9 @@ def _individual(
             raise ExportAborted()
         out_path = _out_name(out_dir, file_stem, job.scene_index, settings.container)
         total_ms = job.dur_ms or probe_duration_ms(ffprobe, job.input)
+        langs = probe_audio_languages(ffprobe, job.input) if settings.audio_language else None
         mode = _export_one(job, out_path, settings, ffmpeg, use_gpu, source_video_codec,
-                           total_ms, None, abort, active, audio_count)
+                           total_ms, None, abort, active, audio_count, langs)
         with done_lock:
             done += 1
             outputs[job.scene_index] = out_path
@@ -421,12 +482,18 @@ def _merge(
 
     if settings.codec == "copy" and not has_ranges:
         inputs = [j.input for j in jobs]
-        if _all_same_video_codec(ffprobe, inputs):
+        copy_safe = _all_same_video_codec(ffprobe, inputs) and all(
+            _copy_concat_safe(ffprobe, inp) for inp in inputs
+        )
+        if copy_safe:
             progress(30, "Merging (stream copy)...")
+            merge_langs = probe_audio_languages(ffprobe, inputs[0])
+            merge_track = resolve_audio_track(merge_langs, settings.audio_language)
             try:
                 _concat_copy(inputs, out_path, ext, source_video_codec,
                              settings.audio, ffmpeg, abort, active,
-                             settings.audio_track, audio_count)
+                             merge_track if merge_track is not None else settings.audio_track,
+                             len(merge_langs) if merge_langs else audio_count)
                 event(f"CLIP_READY|0|{out_path}|copy")
                 return out_path
             except ExportAborted:
@@ -439,9 +506,27 @@ def _merge(
 
     seg_copy = settings.codec == "copy" and not force_reencode
     seg_codec = "copy" if seg_copy else (settings.codec if settings.codec != "copy" else "h264_high")
-    seg_settings = ExportSettings(codec=seg_codec, audio=settings.audio, container=ext,
+    # Copied audio keeps its original timestamps while the re-encoded video is
+    # rebased to 0, so the two drift apart from the first join onward. Encoding
+    # the audio lets asetpts/aresample rebase it the same way. Only for segments
+    # that feed a concat; a straight copy merge still passes audio through.
+    seg_audio = "aac" if (not seg_copy and settings.audio == "copy") else settings.audio
+
+    # concat needs every segment to carry the same streams. Clips that already
+    # agree keep all their tracks; a mixed set is narrowed to one track so the
+    # join succeeds, and that track is the language asked for, not an arbitrary
+    # first one.
+    seg_languages = [probe_audio_languages(ffprobe, job.input) for job in jobs]
+    uniform_audio = len({tuple(langs) for langs in seg_languages}) == 1
+    seg_audio_count = len(seg_languages[0]) if uniform_audio and seg_languages else audio_count
+    if not uniform_audio:
+        progress(30, "Clips carry different audio tracks; keeping the selected language only")
+
+    seg_settings = ExportSettings(codec=seg_codec, audio=seg_audio, container=ext,
                                   hardware=settings.hardware, merge=False,
-                                  audio_track=settings.audio_track)
+                                  audio_track=settings.audio_track,
+                                  audio_language=settings.audio_language,
+                                  audio_single=not uniform_audio)
     verb = "Remuxing" if seg_copy else "Encoding"
     with tempfile.TemporaryDirectory() as tmp:
         segments: list[str] = []
@@ -455,7 +540,8 @@ def _merge(
             total_ms = job.dur_ms or probe_duration_ms(ffprobe, job.input)
             _export_one(job, seg, seg_settings, ffmpeg,
                         resolve_use_gpu(seg_settings, detect_gpu_encoders(ffmpeg)),
-                        source_video_codec, total_ms, None, abort, active, audio_count)
+                        source_video_codec, total_ms, None, abort, active,
+                        seg_audio_count, seg_languages[i] if seg_languages else None)
             segments.append(seg)
             progress(30 + int((i + 1) / total * 55), f"{verb} {i + 1}/{total} segments")
 
