@@ -1,4 +1,5 @@
 import os
+import sys
 
 
 def get_amverge_config_dir():
@@ -8,6 +9,8 @@ def get_amverge_config_dir():
     home = os.path.expanduser("~")
     if os.name == "nt":
         return os.path.join(home, "AppData", "Roaming", "com.amverge.cli")
+    if sys.platform == "darwin":
+        return os.path.join(home, "Library", "Application Support", "com.amverge.cli")
     return os.path.join(home, ".config", "com.amverge.cli")
 
 
