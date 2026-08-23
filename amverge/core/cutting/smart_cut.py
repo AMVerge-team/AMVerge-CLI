@@ -124,20 +124,28 @@ def _encode_segment(
     post_seek = start - pre_seek
     duration = end - start
 
-    if use_cuda:
-        encode_args = ["-c:v", "h264_nvenc", "-preset", "p1", "-rc", "vbr", "-cq", "16", "-b:v", "0"]
-    else:
-        encode_args = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16"]
+    def _build_cmd(gpu: bool) -> list[str]:
+        if gpu:
+            enc = ["-c:v", "h264_nvenc", "-preset", "p1", "-rc", "vbr", "-cq", "16", "-b:v", "0"]
+        else:
+            enc = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16"]
+        c = [get_ffmpeg(), "-y"]
+        if pre_seek > 0.0:
+            c += ["-ss", f"{pre_seek:.3f}"]
+        c += ["-i", str(input_file)]
+        c += ["-ss", f"{post_seek:.3f}", "-t", f"{duration:.3f}"]
+        c += ["-map", "0:v:0", "-map", "0:a?", "-pix_fmt", "yuv420p"]
+        c += enc
+        c += ["-c:a", "aac", "-b:a", "128k", str(out_path)]
+        return c
 
-    cmd = [get_ffmpeg(), "-y"]
-    if pre_seek > 0.0:
-        cmd += ["-ss", f"{pre_seek:.3f}"]
-    cmd += ["-i", str(input_file)]
-    cmd += ["-ss", f"{post_seek:.3f}", "-t", f"{duration:.3f}"]
-    cmd += ["-map", "0:v:0", "-map", "0:a?", "-pix_fmt", "yuv420p"]
-    cmd += encode_args
-    cmd += ["-c:a", "aac", "-b:a", "128k", str(out_path)]
-    _run_ffmpeg(cmd)
+    if use_cuda:
+        try:
+            _run_ffmpeg(_build_cmd(gpu=True))
+            return
+        except Exception as exc:
+            log(f"GPU encode failed, falling back to CPU: {exc}")
+    _run_ffmpeg(_build_cmd(gpu=False))
 
 
 def _concat_two(

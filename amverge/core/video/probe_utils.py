@@ -39,8 +39,11 @@ def probe_video_fps(input_video: str | Path) -> float:
     result = subprocess.run(
         cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
     )
-    num, den = map(int, result.stdout.strip().split("/"))
-    return num / den
+    raw = result.stdout.strip().splitlines()[0].strip()
+    if "/" in raw:
+        num, den = map(int, raw.split("/"))
+        return num / den if den != 0 else 0.0
+    return float(raw)
 
 
 def probe_video_dimensions(input_video: str | Path) -> tuple[int, int]:
@@ -60,7 +63,8 @@ def probe_video_dimensions(input_video: str | Path) -> tuple[int, int]:
     result = subprocess.run(
         cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
     )
-    width, height = map(int, result.stdout.strip().split("x"))
+    raw = result.stdout.strip().splitlines()[0].strip()
+    width, height = map(int, raw.split("x"))
     return width, height
 
 
@@ -80,7 +84,8 @@ def probe_video_duration(input_video: str | Path) -> float:
     result = subprocess.run(
         cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
     )
-    return float(result.stdout.strip())
+    raw = result.stdout.strip().splitlines()[0].strip()
+    return float(raw)
 
 
 def probe_video_total_frames(input_video: str | Path, video_fps: float, video_duration: float) -> int:

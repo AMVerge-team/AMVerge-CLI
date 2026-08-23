@@ -1,4 +1,4 @@
-﻿"""High-level scene detection API.
+"""High-level scene detection API.
 
 Usage::
 
@@ -334,7 +334,8 @@ def detect_scenes(
         def _on_clip_ready(result: dict) -> None:
             cut_by_idx[result["scene_index"]] = result
 
-        _progress("segment", 0, f"Cutting {len(phase1_scenes)} scenes (lossless copy)...")
+        total_count = len(raw_scenes)
+        _progress("segment", 0, f"Phase 1/2: Cutting {len(phase1_scenes)}/{total_count} scenes (lossless copy)...")
         scene_det.emit_progress = _emit_patched
         smart_cut.emit_progress = _emit_patched
         _stage = "segment"
@@ -351,7 +352,7 @@ def detect_scenes(
             )
 
             if phase2_scenes:
-                _progress("segment", 60, f"Cutting {len(phase2_scenes)} scenes (re-encode)...")
+                _progress("segment", 60, f"Phase 2/2: Re-encoding {len(phase2_scenes)}/{total_count} scenes...")
                 cut_all_scenes(
                     input_file=Path(video_path),
                     scenes=phase2_scenes,
@@ -367,7 +368,7 @@ def detect_scenes(
             scene_det.emit_progress = _orig_emit_scene
             smart_cut.emit_progress = _orig_emit_cut
 
-        _progress("segment", 100, f"{len(raw_scenes)} scenes written")
+        _progress("segment", 100, f"Completed: {total_count} scenes cut")
 
         scenes = [
             Scene(
