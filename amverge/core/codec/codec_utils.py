@@ -68,9 +68,6 @@ AUDIO_FFMPEG: dict[str, list[str]] = {
     "aac_320":  ["-c:a", "aac", "-b:a", "320k"],
     "pcm16":    ["-c:a", "pcm_s16le"],
     "pcm24":    ["-c:a", "pcm_s24le"],
-    "flac":     ["-c:a", "flac"],
-    "alac":     ["-c:a", "alac"],
-    "opus":     ["-c:a", "libopus"],
     "mp3":      ["-c:a", "libmp3lame"],
     "none":     ["-an"],
 }
