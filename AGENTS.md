@@ -87,7 +87,7 @@ AMVerge-CLI/
 │   │   │   └── merge.py         amverge merge
 │   │   ├── upscaling/
 │   │   │   ├── upscale.py       amverge upscale  (ml / anime4k / artcnn methods, --credits)
-│   │   │   └── models.py        amverge models  (list/delete/download upscale + interpolation model weights)
+│   │   │   └── models.py        amverge models  (list/delete/download depth + interpolation model weights, --json for the app bridge)
 │   │   ├── interpolation/
 │   │   │   ├── interpolate.py       amverge interpolate  (Python RIFE inference)
 │       │   │   ├── flowframes.py    amverge flowframes  (Flowframes 1.42.0 external process; free 1.36.0 planned)
