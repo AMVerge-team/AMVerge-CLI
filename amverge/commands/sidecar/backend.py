@@ -11,6 +11,7 @@ from ...core.thumbnails import make_thumbnail
 from ...core.detection.keyframe import detect_scenes_by_keyframe
 from ...core.video.probe_utils import probe_video_duration, probe_video_fps, probe_video_dimensions
 from ...core.video.scene_utils import scenes_to_objects
+from ...core.detection.short_scenes import merge_short_scenes
 from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
 from ...core.codec.codec_utils import check_if_hevc
 from ...core.cutting.smart_cut import cut_all_scenes
@@ -176,6 +177,14 @@ def backend(
         input_video_fps = probe_video_fps(input_video)
         input_video_width, input_video_height = probe_video_dimensions(input_video)
         scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
+        # A scene of a couple of frames cannot be stream-copied cleanly - the copy
+        # carries a whole GOP under a fraction-of-a-second duration, which plays
+        # far too fast and whose first frame will not decode for a poster. Fold
+        # those into whichever neighbour they look closest to.
+        before_merge = len(scenes)
+        scenes = merge_short_scenes(scenes, str(input_video))
+        if len(scenes) != before_merge:
+            log(f"Merged {before_merge - len(scenes)} ultra-short scene(s) into neighbours")
 
         if import_method == "video_files":
             source_str = str(input_video)

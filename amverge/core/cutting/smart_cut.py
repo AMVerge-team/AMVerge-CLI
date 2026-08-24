@@ -16,6 +16,12 @@ KEYFRAME_SNAP_THRESHOLD = 0.2
 PRE_SEEK_OFFSET = 10.0
 HEVC_SNAP_MAX = 5.0
 TRAILING_GOP_MAX_PACKETS = 5
+# Scenes shorter than this always re-encode. A stream copy can only start on a
+# keyframe, so a sub-second scene ends up carrying a whole GOP: the extra frames
+# arrive flagged discard, decoders skip them, and the clip plays at the wrong
+# speed with no extractable poster frame. Re-encoding rebuilds timestamps from
+# zero, and at a few frames long it costs nothing.
+MIN_COPY_DURATION = 0.5
 
 
 def _background_kwargs() -> dict:
@@ -224,6 +230,10 @@ def cut_scene(
 
     if duration <= 0:
         raise ValueError(f"Non-positive duration for scene {scene_idx}: {duration:.3f}s")
+
+    if duration < MIN_COPY_DURATION:
+        _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)
+        return str(out_path), "reencode"
 
     if _start_is_on_keyframe(start_sec, keyframes):
         _lossless_copy(input_file, start_sec, end_sec, out_path)
