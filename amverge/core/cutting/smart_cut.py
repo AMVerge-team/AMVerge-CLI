@@ -13,6 +13,13 @@ from ..infra.binaries import get_ffmpeg, get_ffprobe
 from ..infra.ipc import emit_progress, log
 
 KEYFRAME_SNAP_THRESHOLD = 0.2
+# ffmpeg's stream-copy `-ss` seek only ever snaps *backward*. A keyframe up
+# to KEYFRAME_SNAP_THRESHOLD *after* start_sec is not somewhere the seek can
+# land -- it's only safe when start_sec already coincides with it. This is
+# the tolerance for "coincides", loose enough to absorb float noise from
+# probing/frame-index math, tight enough to never mistake a merely-nearby
+# keyframe for the one actually at start_sec.
+EXACT_KEYFRAME_EPSILON = 0.001
 PRE_SEEK_OFFSET = 10.0
 HEVC_SNAP_MAX = 5.0
 TRAILING_GOP_MAX_PACKETS = 5
@@ -262,11 +269,27 @@ def _concat_two(
 
 
 def _start_is_on_keyframe(start_sec: float, keyframes: list[float]) -> bool:
+    """Whether a plain ``-ss start_sec -c:v copy`` will actually land on
+    (or acceptably close to) a keyframe.
+
+    ffmpeg's stream-copy seek only ever snaps *backward* to the nearest
+    keyframe at or before the target -- it can never decode-and-discard
+    forward to honor a keyframe that comes later. So a keyframe up to
+    ``KEYFRAME_SNAP_THRESHOLD`` *before* ``start_sec`` is genuinely where the
+    seek will land: an accepted, bounded trim. A keyframe *after*
+    ``start_sec`` only counts when ``start_sec`` already coincides with it
+    (within ``EXACT_KEYFRAME_EPSILON``) -- the seek doesn't need to move
+    forward for anything. Anything further off falls through to
+    smartcut/snapped_copy, which snap the start explicitly rather than
+    assuming this raw seek will do it for them; treating it as copy-safe
+    here would silently drag in whatever earlier content the backward seek
+    actually lands on, e.g. the previous scene.
+    """
     i = bisect_left(keyframes, start_sec)
-    for ci in (i - 1, i):
-        if 0 <= ci < len(keyframes):
-            if abs(keyframes[ci] - start_sec) <= KEYFRAME_SNAP_THRESHOLD:
-                return True
+    if 0 <= i - 1 < len(keyframes) and abs(keyframes[i - 1] - start_sec) <= KEYFRAME_SNAP_THRESHOLD:
+        return True
+    if 0 <= i < len(keyframes) and abs(keyframes[i] - start_sec) <= EXACT_KEYFRAME_EPSILON:
+        return True
     return False
 
 
