@@ -81,23 +81,109 @@ def _video_keyframe_layout(path: Path) -> tuple[int, list[int]]:
     return len(packets), keys
 
 
-def _trim_trailing_partial_gop(out_path: Path) -> bool:
-    """Drop a trailing partial GOP from a stream-copied clip.
+def _video_packet_pts(path: Path) -> list[float]:
+    """Video packet presentation times (seconds), in decode/bitstream order.
 
-    Open-GOP sources interleave the next GOP's keyframe with the current GOP's
-    trailing B-frames, so a stream copy ending on a scene boundary drags in that
-    keyframe plus a frame or two. When such clips are concatenated the orphan
-    packets carry picture order counts that collide with the following clip,
-    decoding as "Duplicate POC in a sequence" corruption in strict players
-    (VLC tolerates it). Re-mux keeping only the packets before that keyframe.
+    NaN marks a packet ffprobe couldn't give a pts for.
+    """
+    import json
+
+    try:
+        out = subprocess.run(
+            [
+                get_ffprobe(), "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "packet=pts_time", "-of", "json", str(path),
+            ],
+            capture_output=True, text=True, **_background_kwargs(),
+        ).stdout
+        packets = json.loads(out).get("packets", []) if out.strip() else []
+    except Exception:
+        return []
+    result = []
+    for p in packets:
+        try:
+            result.append(float(p.get("pts_time")))
+        except (TypeError, ValueError):
+            result.append(float("nan"))
+    return result
+
+
+def _overrun_cutoff(out_path: Path, duration_sec: float) -> int | None:
+    """Decode-order packet index where display content first runs past
+    ``duration_sec``, or ``None`` if nothing overruns it.
+
+    Stream-copied cuts truncate by decode order (ffmpeg's ``-t`` with
+    ``-c:v copy``), not by presentation order. Any GOP with B-frames has
+    packets whose decode timestamp lands inside the requested duration while
+    their *display* timestamp -- and therefore their actual pixel content --
+    is from after it. This catches that regardless of whether a full keyframe
+    got dragged in along with the orphan frames.
+
+    Truncating to a prefix of decode-order packets is always safe: nothing
+    kept ever depends on anything dropped, since dependencies only point
+    backward in decode order.
+    """
+    pts = _video_packet_pts(out_path)
+    valid = [p for p in pts if p == p]  # drop NaNs
+    if not valid:
+        return None
+    # ffmpeg's `-ss X -c:v copy` always numbers output pts relative to the
+    # requested X, so 0.0 *is* the intended clip start -- even when a
+    # separate keyframe-misalignment bug on the head end has dragged in
+    # earlier content with negative pts. Anchoring on min(valid) instead
+    # would measure duration from that bled-in content and over-trim the
+    # tail by however much extra sits at the head.
+    base = 0.0
+    ordered = sorted(valid)
+    gaps = [b - a for a, b in zip(ordered, ordered[1:]) if b > a]
+    frame_period = (sum(gaps) / len(gaps)) if gaps else 0.0
+    limit = duration_sec + frame_period * 0.5  # half-frame slack for float noise
+    return next(
+        (i for i, p in enumerate(pts) if p == p and (p - base) >= limit),
+        None,
+    )
+
+
+def _trim_trailing_partial_gop(out_path: Path, duration_sec: float | None = None) -> bool:
+    """Drop trailing packets whose display content falls outside the clip.
+
+    Two related failure modes land here. Open-GOP sources interleave the next
+    GOP's keyframe with the current GOP's trailing B-frames, so a stream copy
+    ending on a scene boundary drags in that keyframe plus a frame or two --
+    when such clips are concatenated the orphan packets carry picture order
+    counts that collide with the following clip, decoding as "Duplicate POC
+    in a sequence" corruption in strict players (VLC tolerates it). And any
+    GOP with B-frames, open or closed, can leak a few *keyframe-less* trailing
+    packets the same way whenever the cut's end lands mid-GOP -- ffmpeg's
+    stream-copy ``-t`` truncates by decode order, so packets whose decode
+    time is in range but whose display content is from the next scene still
+    get copied through.
+
+    Both checks run independently and whichever wants to cut earlier wins --
+    they catch different concerns (display-time overrun vs. a duplicate GOP
+    that's concat-unsafe even if its content happens to still fall in range)
+    and neither substitutes for the other.
 
     Returns True when the clip was trimmed.
     """
     count, keys = _video_keyframe_layout(out_path)
-    if count <= 0 or len(keys) < 2:
+    if count <= 0:
         return False
-    last_key = keys[-1]
-    if last_key <= 0 or (count - last_key) > TRAILING_GOP_MAX_PACKETS:
+
+    candidates = []
+    if duration_sec is not None and duration_sec > 0:
+        overrun = _overrun_cutoff(out_path, duration_sec)
+        if overrun is not None:
+            candidates.append(overrun)
+    if len(keys) >= 2:
+        last_key = keys[-1]
+        if last_key > 0 and (count - last_key) <= TRAILING_GOP_MAX_PACKETS:
+            candidates.append(last_key)
+
+    if not candidates:
+        return False
+    cutoff = min(candidates)
+    if cutoff <= 0 or cutoff >= count:
         return False
 
     trimmed = out_path.with_name(out_path.stem + "_trim" + out_path.suffix)
@@ -107,7 +193,7 @@ def _trim_trailing_partial_gop(out_path: Path) -> bool:
             "-i", str(out_path),
             "-map", "0:v:0", "-map", "0:a?",
             "-c", "copy",
-            "-frames:v", str(last_key),
+            "-frames:v", str(cutoff),
             "-movflags", "+faststart",
             str(trimmed),
         ])
@@ -237,7 +323,7 @@ def cut_scene(
 
     if _start_is_on_keyframe(start_sec, keyframes):
         _lossless_copy(input_file, start_sec, end_sec, out_path)
-        _trim_trailing_partial_gop(out_path)
+        _trim_trailing_partial_gop(out_path, duration)
         return str(out_path), "copy"
 
     k_next = _find_next_keyframe_after(keyframes, start_sec)
@@ -255,7 +341,7 @@ def cut_scene(
                     snap_kf = keyframes[ci]
         if snap_kf is not None and best_diff <= HEVC_SNAP_MAX and snap_kf < end_sec:
             _lossless_copy(input_file, snap_kf, end_sec, out_path)
-            _trim_trailing_partial_gop(out_path)
+            _trim_trailing_partial_gop(out_path, end_sec - snap_kf)
             return str(out_path), "snapped_copy"
 
     can_smartcut = (
@@ -275,7 +361,7 @@ def cut_scene(
         finally:
             head_path.unlink(missing_ok=True)
             tail_path.unlink(missing_ok=True)
-        _trim_trailing_partial_gop(out_path)
+        _trim_trailing_partial_gop(out_path, duration)
         return str(out_path), "smartcut"
 
     _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)

@@ -34,8 +34,20 @@ VALID_CODECS = {
     "prores_422_lt", "prores_422", "prores_422_hq", "prores_4444", "prores_4444_xq",
 }
 VALID_AUDIO = {"copy", "aac", "aac_320", "pcm16", "pcm24", "flac", "alac", "opus", "mp3", "none"}
-VALID_CONTAINERS = {"mp4", "mkv", "mov"}
+
+# smart_cut's plain "copy" export mode relies on the ISOBMFF edit list (elst)
+# to hide the extra GOP-boundary frames a keyframe-misaligned stream copy can
+# drag in (see cutting/smart_cut.py). Only MP4/MOV carry that box, so those
+# are the only containers where the "copy" export path is safe end-to-end.
+# Containers with no edit-list equivalent (MKV, WebM, ...) would expose that
+# padding as visible bleed -- keep them out of VALID_CONTAINERS until
+# smart_cut is made container-aware.
+VALID_CONTAINERS = {"mp4", "mov"}
 VALID_HARDWARE = {"auto", "gpu", "cpu"}
+
+# Containers we recognize but deliberately reject, so the CLI can explain why
+# instead of just calling them "unknown".
+NO_EDIT_LIST_CONTAINERS = {"mkv", "webm"}
 
 CODEC_ALIASES: dict[str, str] = {
     "h264": "h264_main",

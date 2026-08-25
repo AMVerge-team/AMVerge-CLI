@@ -277,7 +277,7 @@ def _wizard_export() -> None:
     err.print(f"  [muted]  copy/h264/hevc are aliases for main profiles[/]")
     err.print(f"  [muted]  full list: h264_main/high/high10/high422  h265_main/main10/main12/main422_10  av1_main  prores_*[/]\n")
     audio = _ask_choice("audio", ["copy", "aac", "aac_320", "pcm16", "pcm24", "mp3", "none"], "copy")
-    container = _ask_choice("container", ["mp4", "mkv", "mov"], "mp4")
+    container = _ask_choice("container", ["mp4", "mov"], "mp4")
     hardware = _ask_choice("hardware", ["auto", "gpu", "cpu"], "auto")
     err.print()
 
