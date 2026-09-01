@@ -482,6 +482,10 @@ def _merge(
 
     if settings.codec == "copy" and not has_ranges:
         inputs = [j.input for j in jobs]
+        # Each clip is probed before deciding, which is several ffprobe calls
+        # and visibly slow on a long selection. Without this the UI sits on the
+        # previous message for the whole check and looks stalled.
+        progress(20, f"Loading {len(inputs)} clips...")
         copy_safe = _all_same_video_codec(ffprobe, inputs) and all(
             _copy_concat_safe(ffprobe, inp) for inp in inputs
         )
@@ -502,6 +506,7 @@ def _merge(
                 progress(35, "Stream-copy merge failed; re-encoding...")
                 force_reencode = True
         else:
+            progress(25, "Re-encoding for a clean join...")
             force_reencode = True
 
     seg_copy = settings.codec == "copy" and not force_reencode
