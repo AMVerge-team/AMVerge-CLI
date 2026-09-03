@@ -9,10 +9,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     # .depth_map
     'COLMAPS': ('.depth_map', 'COLMAPS'),
     'DEPTH_AVAILABLE': ('.depth_map', 'DEPTH_AVAILABLE'),
-    'MODEL_CONFIGS': ('.depth_map', 'MODEL_CONFIGS'),
+    'MODEL_CONFIGS': ('.registry', 'MODEL_CONFIGS'),
     'download_model': ('.depth_map', 'download_model'),
     'generate_depth_map': ('.depth_map', 'generate_depth_map'),
-    'is_model_downloaded': ('.depth_map', 'is_model_downloaded'),
+    'is_model_downloaded': ('.registry', 'is_model_downloaded'),
 }
 
 # Optional imports: on ImportError these degrade to the values the previous
@@ -29,6 +29,7 @@ _OPTIONAL_FALLBACKS: dict[str, Any] = {
 # Kept reachable as attributes, matching the old eager imports.
 _LAZY_SUBMODULES: frozenset[str] = frozenset({
     'depth_map',
+    'registry',
 })
 
 

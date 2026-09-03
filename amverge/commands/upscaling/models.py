@@ -260,7 +260,10 @@ def _models_json(delete, download, depth, interpolation):
 def _depth_json_entry(key, cfg):
     from ...core.depth import is_model_downloaded
     path = _depth_model_path(key)
-    size = os.path.getsize(path) if path and os.path.exists(path) else 0
+    on_disk = os.path.getsize(path) if path and os.path.exists(path) else 0
+    # Fall back to the registry's declared size so a row can state what the
+    # download costs before it happens, not only afterwards.
+    size = on_disk or cfg.get("size_bytes", 0)
     return {
         "key": key,
         "name": f"Depth-Anything-V2-{key.upper()}",
@@ -268,6 +271,8 @@ def _depth_json_entry(key, cfg):
         "file": cfg.get("file", ""),
         "sizeBytes": size,
         "downloaded": is_model_downloaded(key),
+        "label": cfg.get("label", ""),
+        "summary": cfg.get("summary", ""),
     }
 
 
