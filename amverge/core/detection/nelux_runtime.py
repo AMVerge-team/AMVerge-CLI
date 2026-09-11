@@ -1,128 +1,57 @@
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
+"""Loading the Nelux NVDEC decoder.
 
-_NELUX_DLL_DIR_HANDLES: list = []
-_NELUX_RUNTIME_CONFIGURED = False
-_LAST_NELUX_CANDIDATE_DIRS: list[Path] = []
+Nelux wheels are self-contained: each one ships its own FFmpeg DLLs beside the
+extension module, so there is nothing to locate and nothing to configure. This
+module exists only to import Nelux in the one order it accepts, and to answer
+whether it can be used at all.
 
-_REQUIRED_FFMPEG_DLLS = (
-    "avcodec-62.dll",
-    "avformat-62.dll",
-    "avutil-60.dll",
-    "swresample-6.dll",
-    "swscale-9.dll",
-)
+Nelux is deliberately narrow about what it will load beside:
 
+* wheels are published for Python 3.13 and up only
+* each wheel is built against a single PyTorch minor version and refuses to
+  import next to any other
+* the PyTorch it wants comes from the CUDA 13 index, which supports Turing
+  (sm_75) and newer
 
-def _directory_has_required_nelux_dlls(directory: Path) -> bool:
-    return all((directory / dll).exists() for dll in _REQUIRED_FFMPEG_DLLS)
-
-
-def _iter_common_windows_ffmpeg_dirs():
-    common_roots = (
-        Path("C:/ffmpeg-shared"),
-        Path("C:/ffmpeg"),
-        Path("C:/tools/ffmpeg"),
-        Path("C:/Program Files/ffmpeg"),
-        Path("C:/Program Files (x86)/ffmpeg"),
-    )
-    for root in common_roots:
-        if not root.exists():
-            continue
-        yield root
-        yield root / "bin"
-        try:
-            for child in root.iterdir():
-                if child.is_dir():
-                    yield child
-                    yield child / "bin"
-        except PermissionError:
-            continue
-
-
-def _iter_ffmpeg_dll_candidate_dirs():
-    for env_var in ("AMVERGE_FFMPEG_BIN", "FFMPEG_BIN", "NELUX_FFMPEG_BIN"):
-        val = os.environ.get(env_var)
-        if val:
-            yield Path(val)
-
-    script_dir = Path(__file__).resolve().parent
-    search_roots = [
-        Path.cwd(),
-        script_dir,
-        script_dir.parent,
-        script_dir.parent.parent,
-        Path(sys.executable).resolve().parent,
-    ]
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        search_roots.append(Path(meipass))
-
-    seen: set[str] = set()
-    suffixes = (Path("."), Path("bin"), Path("backend/bin"), Path("ffmpeg/bin"))
-    for root in search_roots:
-        for suffix in suffixes:
-            candidate = (root / suffix).resolve()
-            key = str(candidate).lower()
-            if key not in seen:
-                seen.add(key)
-                yield candidate
-
-    if os.name == "nt":
-        for candidate in _iter_common_windows_ffmpeg_dirs():
-            key = str(candidate.resolve()).lower()
-            if key not in seen:
-                seen.add(key)
-                yield candidate.resolve()
-
-
-def _configure_nelux_windows_runtime() -> None:
-    global _NELUX_RUNTIME_CONFIGURED, _LAST_NELUX_CANDIDATE_DIRS
-    if _NELUX_RUNTIME_CONFIGURED:
-        return
-
-    if os.name != "nt" or not hasattr(os, "add_dll_directory"):
-        _NELUX_RUNTIME_CONFIGURED = True
-        return
-
-    selected_dirs: list[Path] = []
-    candidate_dirs: list[Path] = []
-    for candidate in _iter_ffmpeg_dll_candidate_dirs():
-        candidate_dirs.append(candidate)
-        if candidate.is_dir() and _directory_has_required_nelux_dlls(candidate):
-            selected_dirs.append(candidate)
-
-    _LAST_NELUX_CANDIDATE_DIRS = candidate_dirs
-
-    for directory in selected_dirs:
-        handle = os.add_dll_directory(str(directory))
-        _NELUX_DLL_DIR_HANDLES.append(handle)
-
-    if selected_dirs:
-        existing_path = os.environ.get("PATH", "")
-        prepended = os.pathsep.join(str(p) for p in selected_dirs)
-        os.environ["PATH"] = f"{prepended}{os.pathsep}{existing_path}" if existing_path else prepended
-
-    _NELUX_RUNTIME_CONFIGURED = True
+The app installs it as its own extra for exactly that reason. When any of those
+do not hold, the import raises and :func:`nelux_available` answers False, which
+sends the caller down the FFmpeg decode path instead.
+"""
 
 
 def _get_nelux_video_reader():
-    _configure_nelux_windows_runtime()
+    """Nelux's ``VideoReader`` class.
+
+    Raises:
+        ImportError: Nelux is absent, or present but unable to load.
+    """
+    # nelux refuses to import unless torch is already in sys.modules
+    try:
+        import torch  # noqa: F401
+    except ImportError as exc:
+        raise ImportError("Nelux needs PyTorch. Install it with: pip install amverge[ml]") from exc
+
+    # the exception type separates "absent" from "installed but refusing"
     try:
         from nelux import VideoReader
+    except ModuleNotFoundError as exc:
+        raise ImportError("Nelux is not installed") from exc
     except ImportError as exc:
-        searched = ", ".join(str(p) for p in _LAST_NELUX_CANDIDATE_DIRS[:8]) or "<none>"
-        raise ImportError(
-            "Failed to import nelux. Set AMVERGE_FFMPEG_BIN to the directory containing "
-            f"the required FFmpeg DLLs. Searched: {searched}"
-        ) from exc
+        # nelux's own message names the PyTorch mismatch when there is one
+        raise ImportError(f"Nelux could not be loaded: {exc}") from exc
+
     return VideoReader
 
 
 def nelux_available() -> bool:
+    """Whether NVDEC decoding through Nelux can be used in this process.
+
+    An import test only. It says nothing about whether a particular file can be
+    decoded in hardware - NVDEC turns down 10-bit H.264, for one - so callers
+    still need to handle a decode that fails on its own terms.
+    """
     try:
         _get_nelux_video_reader()
         return True

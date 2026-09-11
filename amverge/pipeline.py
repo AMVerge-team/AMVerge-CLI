@@ -295,12 +295,23 @@ def detect_scenes(
             _progress("detect", 0, "Nelux unavailable, falling back to FFmpeg decode")
             effective_decode = "ffmpeg"
 
+        # named up front, because the two backends differ enough in speed that
+        # "why is this slow" is usually answered by which one is running
+        decode_label = "Nelux" if effective_decode == "nelux" else "FFmpeg"
+
         scene_det.emit_progress = _emit_patched
         smart_cut.emit_progress = _emit_patched
         try:
-            _progress("detect", 0, "Starting TransNetV2 detection...")
+            _progress("detect", 0, f"Starting TransNetV2 detection ({decode_label} decode)...")
             if effective_decode == "nelux":
-                frames = decode_video_frames_nelux(video_path)
+                try:
+                    frames = decode_video_frames_nelux(video_path)
+                except Exception as exc:
+                    # per-file, not per-machine: NVDEC cannot do 10-bit H.264 at all
+                    _progress("detect", 0, f"NVDEC cannot decode this file, using FFmpeg ({exc})")
+                    effective_decode = "ffmpeg"
+
+            if effective_decode == "nelux":
                 scenes_secs, scenes_frames = run_model_one_pass(
                     frames, video_path, threshold=ai_threshold
                 )

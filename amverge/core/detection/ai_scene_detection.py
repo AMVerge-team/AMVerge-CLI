@@ -228,13 +228,13 @@ def decode_and_detect_scenes(
         processed += 1
         if processed % 10 == 0:
             last_progress = _emit_loop_progress(
-                processed, total_frames, 20, 30, "Decoding video...", last_progress
+                processed, total_frames, 20, 30, "Decoding video (FFmpeg)...", last_progress
             )
 
     process.stdout.close()
     process.wait()
 
-    emit_progress(50, f"Decoding video... ({processed}/{_safe_total(total_frames)})")
+    emit_progress(50, f"Decoding video (FFmpeg)... ({processed}/{_safe_total(total_frames)})")
 
     scores_arr = scorer.finish()
     scenes_frames = _scores_to_scenes(model, scores_arr, threshold)
@@ -299,13 +299,13 @@ def decode_video_frames_ffmpeg(input_video: str | Path) -> np.ndarray:
         actual_frames += 1
         if actual_frames % 10 == 0:
             last_progress = _emit_loop_progress(
-                actual_frames, total_frames, 20, 35, "Decoding video...", last_progress
+                actual_frames, total_frames, 20, 35, "Decoding video (FFmpeg)...", last_progress
             )
 
     process.stdout.close()
     process.wait()
 
-    emit_progress(55, f"Decoding video... ({actual_frames}/{_safe_total(total_frames)})")
+    emit_progress(55, f"Decoding video (FFmpeg)... ({actual_frames}/{_safe_total(total_frames)})")
 
     if not frames:
         return np.empty((0, FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS), dtype=np.uint8)
@@ -326,18 +326,24 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
         ndarray of shape ``(num_frames, 27, 48, 3)`` with dtype ``uint8``.
 
     Raises:
-        ImportError: If Nelux is not installed or FFmpeg DLLs are not found.
-            Set ``AMVERGE_FFMPEG_BIN`` to the directory containing the DLLs.
+        ImportError: If Nelux is not installed, or is installed beside a
+            PyTorch version it will not load with.
+        RuntimeError: If NVDEC cannot decode this particular file. 10-bit H.264
+            is the common case, and the hardware simply does not support it, so
+            callers should fall back to :func:`decode_video_frames_ffmpeg`.
 
     Example:
         >>> frames = decode_video_frames_nelux("episode.mp4")
         >>> print(frames.shape)  # (378, 27, 48, 3)
     """
 
-    log("Running nelux video decode...")
     import torch
     VideoReader = _get_nelux_video_reader()
+    # labelled separately because Nelux silently drops to CPU without CUDA
     decode_accelerator = "nvdec" if torch.cuda.is_available() else "cpu"
+    label = "Nelux NVDEC" if decode_accelerator == "nvdec" else "Nelux CPU"
+
+    log(f"Running {label} video decode...")
     reader = VideoReader(
         str(input_video),
         decode_accelerator=decode_accelerator,
@@ -379,13 +385,13 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
         actual_frames += 1
         if actual_frames % 10 == 0:
             last_progress = _emit_loop_progress(
-                actual_frames, total_frames, 20, 35, "Decoding video...", last_progress
+                actual_frames, total_frames, 20, 35, f"Decoding video ({label})...", last_progress
             )
 
     if actual_frames < total_frames:
         frames = frames[:actual_frames]
 
-    emit_progress(55, f"Decoding video... ({actual_frames}/{_safe_total(total_frames)})")
+    emit_progress(55, f"Decoding video ({label})... ({actual_frames}/{_safe_total(total_frames)})")
     return frames
 
 

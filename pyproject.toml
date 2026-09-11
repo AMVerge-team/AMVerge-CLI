@@ -61,7 +61,13 @@ interpolation = ["torch>=2.0", "opencv-python-headless>=4.9", "scipy>=1.10"]
 flowframes    = []
 depth         = ["depth-anything-v2>=0.1", "opencv-python-headless>=4.9"]
 deadframes    = ["opencv-python-headless>=4.9"]
-all           = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0", "opencv-python-headless>=4.9", "pypresence>=4.3", "spandrel>=0.3", "onnxruntime>=1.16", "scipy>=1.10", "depth-anything-v2>=0.1"]
+# Scene Scout: SigLIP 2 embeddings. transformers pulls the model, pillow encodes
+# the scene thumbnails stored in the database
+scout         = ["torch>=2.0", "transformers>=4.35", "pillow>=10.0", "numpy>=1.24"]
+# NVDEC decode. own extra, out of `all`: needs Python 3.13+, torch pinned to
+# 2.13.*, and the CUDA 13 index, which drops every GPU before Turing
+nelux         = ["nelux>=0.18"]
+all           = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0", "opencv-python-headless>=4.9", "pypresence>=4.3", "spandrel>=0.3", "onnxruntime>=1.16", "scipy>=1.10", "depth-anything-v2>=0.1", "transformers>=4.35", "pillow>=10.0"]
 dev           = ["pyinstaller>=6"]
 
 [tool.hatch.version]
