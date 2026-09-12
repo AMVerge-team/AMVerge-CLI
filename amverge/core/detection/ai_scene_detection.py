@@ -42,6 +42,10 @@ except ImportError:
 
 DEFAULT_THRESHOLD = 0.5
 
+# 8-bit 4:2:0 only. Nelux's NVDEC path decodes anything deeper into frames that
+# are the right shape and the wrong pixels, which detection cannot notice
+NVDEC_SAFE_PIX_FMTS = {"yuv420p", "yuvj420p", "nv12"}
+
 
 def _safe_total(total_frames: int) -> int:
     return max(1, int(total_frames) if total_frames else 1)
@@ -338,6 +342,20 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
     """
 
     import torch
+
+    # NVDEC through Nelux returns frames of the right shape but the wrong pixels
+    # for anything deeper than 8-bit, so detection degrades silently instead of
+    # failing. Measured on one 10-bit HEVC source: 23x the inter-frame noise of
+    # the FFmpeg path, and a fraction of the real cuts. 8-bit H.264 and 8-bit
+    # HEVC both match FFmpeg closely, so the gate is bit depth, not codec.
+    from ..preview.proxy import probe_video
+
+    pix_fmt = (probe_video(input_video).get("pix_fmt") or "").lower()
+    if pix_fmt and pix_fmt not in NVDEC_SAFE_PIX_FMTS:
+        raise RuntimeError(
+            f"NVDEC decoding is unreliable for {pix_fmt}; use the FFmpeg decoder"
+        )
+
     VideoReader = _get_nelux_video_reader()
     # labelled separately because Nelux silently drops to CPU without CUDA
     decode_accelerator = "nvdec" if torch.cuda.is_available() else "cpu"
