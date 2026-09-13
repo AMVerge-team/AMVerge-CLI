@@ -27,6 +27,8 @@ from .commands.sidecar.rpc_server import rpc_server
 from .commands.depth.depth_map import depth_map
 from .commands.deadframes.deadframes import deadframes
 from .commands.pipeline.pipeline import pipeline
+from .commands.preview.proxy import preview_proxy
+from .commands.scenescout.scout import scout
 
 app = typer.Typer(
     name="amverge",
@@ -70,7 +72,12 @@ app.command(name="depth-map")(depth_map)
 app.command()(deadframes)
 
 # Pipeline
+app.command(name="preview-proxy")(preview_proxy)
 app.command()(pipeline)
+
+# Scene Scout: a sub-app rather than a command, since its verbs share one
+# storage root and are namespaced under `amverge scout ...`
+app.add_typer(scout)
 
 # Info
 app.command()(usage)

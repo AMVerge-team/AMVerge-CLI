@@ -288,14 +288,14 @@ def check_environment() -> EnvironmentCheck:
         _get_nelux_video_reader()
         result.checks.append(CheckResult("nelux", True, "available"))
     except ImportError as e:
-        if "Failed to import nelux" in str(e):
-            result.checks.append(CheckResult("nelux", False, "DLLs not found",
-                "set AMVERGE_FFMPEG_BIN env var"))
+        # installed but refusing to load, and its own message says why
+        if "could not be loaded" in str(e):
+            result.checks.append(CheckResult("nelux", False, "unusable", str(e)))
         else:
             result.checks.append(CheckResult("nelux", False, "not installed",
-                "optional - Windows native decoder"))
+                "optional - GPU decode for AI scene detection"))
     except Exception:
         result.checks.append(CheckResult("nelux", False, "not installed",
-            "optional - Windows native decoder"))
+            "optional - GPU decode for AI scene detection"))
 
     return result

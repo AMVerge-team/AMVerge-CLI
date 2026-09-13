@@ -19,6 +19,22 @@ _STAGE_LABELS = {
 }
 
 
+def _notice(ipc: bool, message: str) -> None:
+    """A non-fatal warning that is safe to emit in either mode.
+
+    `warn` prints to stdout, and under ``--ipc`` stdout carries nothing but the
+    final JSON document. A warning written there lands in the middle of the
+    payload and the caller's parse fails on it, so IPC callers get it on stderr
+    with the rest of the event stream instead.
+    """
+    if ipc:
+        from ...core.infra.ipc import log
+
+        log(message)
+    else:
+        warn(message)
+
+
 def detect(
     video: Path = typer.Argument(..., help="Input video file", exists=True),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
@@ -52,18 +68,18 @@ def detect(
         fail("--threshold must be between 0 (exclusive) and 1")
         raise typer.Exit(1)
     if threshold != 0.5 and method != "transnetv2":
-        warn("--threshold only applies to --method transnetv2; ignoring")
+        _notice(ipc, "--threshold only applies to --method transnetv2; ignoring")
     if decode_method != "ffmpeg" and method != "transnetv2":
-        warn("--decode-method only applies to --method transnetv2; ignoring")
+        _notice(ipc, "--decode-method only applies to --method transnetv2; ignoring")
         decode_method = "ffmpeg"
     if method == "transnetv2" and decode_method == "nelux":
         from ...core.detection.nelux_runtime import nelux_available
         if not nelux_available():
-            warn("Nelux unavailable, falling back to FFmpeg parallel decode")
+            _notice(ipc, "Nelux unavailable, falling back to FFmpeg parallel decode")
             decode_method = "ffmpeg"
 
     if ipc:
-        _detect_ipc(video, output, method, min_duration, workers, similarity_threshold, edge_threshold, edge_radius, threshold)
+        _detect_ipc(video, output, method, min_duration, workers, similarity_threshold, edge_threshold, edge_radius, threshold, decode_method)
         return
 
     banner("detect")
@@ -150,6 +166,23 @@ def detect(
     dim(f"scenes.json saved to {result.scenes_json}")
 
 
+def _write_scenes_json(output_dir: str, scenes: list) -> None:
+    """Leave the scene list beside the clips so a run can be reopened later.
+
+    The IPC caller gets this same list on stdout, but that is gone once the
+    process is. Without a copy on disk, reopening an output directory means
+    guessing scene boundaries from filenames and losing every timing.
+    """
+    try:
+        target = os.path.join(output_dir, "scenes.json")
+        with open(target, "w", encoding="utf-8") as handle:
+            json.dump(scenes, handle)
+    except OSError as exc:
+        # not fatal: the caller already has the scenes, this only costs reopening
+        from ...core.infra.ipc import log
+        log(f"Could not write scenes.json: {exc}")
+
+
 def _detect_ipc(
     video: Path,
     output: Optional[Path],
@@ -160,9 +193,10 @@ def _detect_ipc(
     edge_threshold: float,
     edge_radius: float,
     ai_threshold: float = 0.5,
+    decode_method: str = "ffmpeg",
 ) -> None:
     import sys
-    from ...core.infra.ipc import emit_progress, emit_event
+    from ...core.infra.ipc import emit_progress, emit_event, log
     from ...core.detection.keyframe import detect_cuts_by_keyframe
     from ...core.detection.edge import detect_cuts_by_edge
     from ...core.cutting.segmenter import run_ffmpeg_segment, collect_scenes
@@ -190,15 +224,40 @@ def _detect_ipc(
             fail("transnetv2_pytorch not installed. Run: pip install amverge[ml]")
             raise typer.Exit(1)
 
+        from concurrent.futures import ThreadPoolExecutor
+
         import torch
-        from ...core.detection.ai_scene_detection import decode_and_detect_scenes
+        from ...core.detection.ai_scene_detection import (
+            decode_and_detect_scenes,
+            decode_video_frames_nelux,
+            run_model_one_pass,
+        )
         from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
         from ...core.codec.codec_utils import check_if_hevc
         from ...core.video.scene_utils import scenes_to_objects
         from ...core.cutting.smart_cut import cut_all_scenes
+        from ...core.thumbnails import make_thumbnail
 
-        emit_progress(0, "Starting TransNetV2 detection...")
-        scenes_secs, scenes_frames = decode_and_detect_scenes(video_path, threshold=ai_threshold)
+        # `decode_method` has already been downgraded to ffmpeg by the caller if
+        # Nelux is not importable, so reaching here with "nelux" means it loaded
+        decode_label = "Nelux" if decode_method == "nelux" else "FFmpeg"
+        emit_progress(0, f"Starting TransNetV2 detection ({decode_label} decode)...")
+
+        scenes_secs = scenes_frames = None
+        if decode_method == "nelux":
+            try:
+                frames = decode_video_frames_nelux(video_path)
+                scenes_secs, scenes_frames = run_model_one_pass(
+                    frames, video_path, threshold=ai_threshold
+                )
+            except Exception as exc:
+                # NVDEC turns down files it cannot handle in hardware, 10-bit
+                # H.264 above all. a property of this file, not the machine
+                log(f"NVDEC cannot decode this file ({exc}), using FFmpeg")
+                emit_progress(0, "Starting TransNetV2 detection (FFmpeg decode)...")
+
+        if scenes_secs is None:
+            scenes_secs, scenes_frames = decode_and_detect_scenes(video_path, threshold=ai_threshold)
 
         emit_progress(80, "Extracting keyframe timestamps...")
         keyframes = get_keyframe_timestamps_pyav(video_path)
@@ -218,10 +277,44 @@ def _detect_ipc(
         phase1_scenes = [s for s in raw_scenes if s["scene_index"] in copy_idx]
         phase2_scenes = [s for s in raw_scenes if s["scene_index"] not in copy_idx]
 
+        def _thumb_path(scene_index: int) -> str:
+            return os.path.join(output_dir, f"{video_stem}_{scene_index:04d}.jpg")
+
+        # lets a viewer lay out its grid before any clip is cut; filled in later
+        emit_event("INITIAL_CLIPS_READY|" + json.dumps([
+            {
+                "scene_index": s["scene_index"],
+                "start": s["start_sec"],
+                "end": s["end_sec"],
+                "duration": s["duration_sec"],
+                "path": "",
+                "thumbnail": _thumb_path(s["scene_index"]),
+                "thumbnail_ready": False,
+                "original_file": video.name,
+            }
+            for s in raw_scenes
+        ]))
+
         cut_by_idx: dict[int, dict] = {}
 
+        # per clip as it lands: one pass at the end leaves the grid posterless
+        thumb_pool = ThreadPoolExecutor(max_workers=4)
+        thumb_futures: list = []
+
+        def _gen_thumb(scene_index: int, clip_path: str, is_copy: bool) -> None:
+            if make_thumbnail(clip_path, _thumb_path(scene_index), first_keyframe=is_copy):
+                emit_event(f"THUMBNAIL_READY|{scene_index}")
+
         def _on_clip_ready(result: dict) -> None:
-            cut_by_idx[result["scene_index"]] = result
+            scene_index = result["scene_index"]
+            cut_by_idx[scene_index] = result
+            clip_path = result.get("clip_path") or ""
+            clip_mode = result.get("clip_mode") or "failed"
+            emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
+            if clip_path and os.path.exists(clip_path):
+                thumb_futures.append(
+                    thumb_pool.submit(_gen_thumb, scene_index, clip_path, clip_mode == "copy")
+                )
 
         emit_progress(82, f"Cutting {len(phase1_scenes)} scenes (lossless copy)...")
         cut_all_scenes(
@@ -235,8 +328,21 @@ def _detect_ipc(
             on_ready=_on_clip_ready,
         )
 
-        if phase2_scenes:
-            emit_progress(90, f"Cutting {len(phase2_scenes)} scenes (re-encode)...")
+        emit_event("PHASE1_COMPLETE")
+
+        phase2_total = len(phase2_scenes)
+        phase2_done = 0
+
+        if phase2_total:
+            emit_event(f"REENCODE_PROGRESS|0|{phase2_total}")
+
+            def _on_reencode_ready(result: dict) -> None:
+                nonlocal phase2_done
+                _on_clip_ready(result)
+                phase2_done += 1
+                emit_event(f"REENCODE_PROGRESS|{phase2_done}|{phase2_total}")
+
+            emit_progress(90, f"Cutting {phase2_total} scenes (re-encode)...")
             cut_all_scenes(
                 input_file=video,
                 scenes=phase2_scenes,
@@ -245,18 +351,14 @@ def _detect_ipc(
                 use_cuda=(device == "cuda"),
                 is_hevc=is_hevc,
                 max_workers=2,
-                on_ready=_on_clip_ready,
+                on_ready=_on_reencode_ready,
                 emit_progress_updates=False,
             )
 
-        emit_progress(95, "Generating thumbnails...")
-        from ...core.thumbnails import make_thumbnail
-        for scene in raw_scenes:
-            idx = scene["scene_index"]
-            thumb_path = os.path.join(output_dir, f"{video_stem}_{idx:04d}.jpg")
-            clip_path = cut_by_idx.get(idx, {}).get("clip_path", "")
-            if clip_path and os.path.exists(clip_path):
-                make_thumbnail(clip_path, thumb_path)
+        emit_progress(95, "Finishing thumbnails...")
+        for future in thumb_futures:
+            future.result()
+        thumb_pool.shutdown(wait=True)
 
         scenes = []
         for s in raw_scenes:
@@ -268,10 +370,11 @@ def _detect_ipc(
                 "end": s["end_sec"],
                 "duration": s["duration_sec"],
                 "path": cut.get("clip_path", ""),
-                "thumbnail": os.path.join(output_dir, f"{video_stem}_{idx:04d}.jpg"),
+                "thumbnail": _thumb_path(idx),
                 "original_file": video.name,
             })
 
+        _write_scenes_json(output_dir, scenes)
         emit_progress(100, "Done")
         print(json.dumps(scenes), flush=True)
         return
@@ -301,5 +404,6 @@ def _detect_ipc(
 
     generate_thumbnails_streaming(output_dir, scenes, video_stem)
 
+    _write_scenes_json(output_dir, scenes)
     emit_progress(100, "Done")
     print(json.dumps(scenes), flush=True)

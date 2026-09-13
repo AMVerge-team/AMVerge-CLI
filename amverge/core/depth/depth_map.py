@@ -12,6 +12,14 @@ from typing import Callable, Optional
 
 from ..infra.config import get_amverge_config_dir
 from ..infra.binaries import get_ffmpeg, get_ffprobe
+# Re-exported: the registry is kept torch-free so listing models does not pay
+# for importing the ML stack.
+from .registry import (  # noqa: F401
+    MODEL_CONFIGS,
+    _get_depth_models_dir,
+    _get_model_path,
+    is_model_downloaded,
+)
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -27,30 +35,6 @@ try:
 except ImportError:
     pass
 
-MODEL_CONFIGS: dict[str, dict] = {
-    "vits": {
-        "encoder": "vits",
-        "features": 64,
-        "out_channels": [48, 96, 192, 384],
-        "url": "https://github.com/moongetsu/AniSmooth-Models/releases/download/depth/depth_anything_v2_vits.pth",
-        "file": "depth_anything_v2_vits.pth",
-    },
-    "vitb": {
-        "encoder": "vitb",
-        "features": 128,
-        "out_channels": [96, 192, 384, 768],
-        "url": "https://github.com/moongetsu/AniSmooth-Models/releases/download/depth/depth_anything_v2_vitb.pth",
-        "file": "depth_anything_v2_vitb.pth",
-    },
-    "vitl": {
-        "encoder": "vitl",
-        "features": 256,
-        "out_channels": [256, 512, 1024, 1024],
-        "url": "https://github.com/moongetsu/AniSmooth-Models/releases/download/depth/depth_anything_v2_vitl.pth",
-        "file": "depth_anything_v2_vitl.pth",
-    },
-}
-
 COLMAPS: dict[str, int] = {}
 if DEPTH_AVAILABLE:
     for _name in [
@@ -60,22 +44,6 @@ if DEPTH_AVAILABLE:
         _attr = f"COLORMAP_{_name.upper()}"
         if hasattr(cv2, _attr):
             COLMAPS[_name] = getattr(cv2, _attr)
-
-
-def _get_depth_models_dir() -> str:
-    return os.path.join(get_amverge_config_dir(), "models", "depth")
-
-
-def _get_model_path(encoder: str) -> str:
-    config = MODEL_CONFIGS.get(encoder)
-    if not config:
-        raise ValueError(f"Unknown encoder: {encoder}")
-    return os.path.join(_get_depth_models_dir(), config["file"])
-
-
-def is_model_downloaded(encoder: str) -> bool:
-    path = _get_model_path(encoder)
-    return os.path.exists(path) and os.path.getsize(path) > 0
 
 
 def download_model(

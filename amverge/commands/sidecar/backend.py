@@ -76,7 +76,8 @@ def backend(
         detector_name = "run_model_one_pass"
 
         from ...core.detection.nelux_runtime import nelux_available
-        use_nelux = nelux_available()
+        # nelux exists for NVDEC; without CUDA it is no better than the ffmpeg path
+        use_nelux = use_cuda and nelux_available()
         if device == "cuda":
             _gpu_name = torch.cuda.get_device_name(0)
         elif device == "mps":
@@ -151,11 +152,16 @@ def backend(
             else:
                 emit_progress(20, "Decoding frames for TransNetV2...")
                 _t_decode = _time.perf_counter()
-                frames = (
-                    decode_video_frames_nelux(input_video)
-                    if use_nelux
-                    else decode_video_frames_ffmpeg(input_video)
-                )
+                frames = None
+                if use_nelux:
+                    try:
+                        frames = decode_video_frames_nelux(input_video)
+                    except Exception as exc:
+                        # per-file, not per-machine: NVDEC cannot do 10-bit H.264 at all
+                        log(f"NVDEC decode unavailable for this file ({exc}), using FFmpeg")
+                        emit_progress(20, "Decoding frames for TransNetV2 (FFmpeg)...")
+                if frames is None:
+                    frames = decode_video_frames_ffmpeg(input_video)
                 log(
                     f"[diag] decode done: {len(frames)} frames in "
                     f"{_time.perf_counter() - _t_decode:.2f}s (device={device})"
@@ -177,10 +183,7 @@ def backend(
         input_video_fps = probe_video_fps(input_video)
         input_video_width, input_video_height = probe_video_dimensions(input_video)
         scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
-        # A scene of a couple of frames cannot be stream-copied cleanly - the copy
-        # carries a whole GOP under a fraction-of-a-second duration, which plays
-        # far too fast and whose first frame will not decode for a poster. Fold
-        # those into whichever neighbour they look closest to.
+        # a few-frame scene stream-copies to a whole GOP, so it plays far too fast
         before_merge = len(scenes)
         scenes = merge_short_scenes(scenes, str(input_video))
         if len(scenes) != before_merge:

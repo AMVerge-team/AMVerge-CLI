@@ -62,12 +62,13 @@ def gpu() -> None:
         _get_nelux_video_reader()
         t2.add_row("nelux",              "[accent]available[/]")
     except ImportError as e:
-        if "Failed to import nelux" in str(e):
-            t2.add_row("nelux",          "[warn]DLLs not found[/]  set AMVERGE_FFMPEG_BIN")
+        # installed but refusing, usually a PyTorch version mismatch. worth printing
+        if "could not be loaded" in str(e):
+            t2.add_row("nelux",          f"[warn]unusable[/]  {e}")
         else:
-            t2.add_row("nelux",          "[muted]not installed[/]  (optional, Windows only)")
+            t2.add_row("nelux",          "[muted]not installed[/]  (optional, GPU decode)")
     except Exception:
-        t2.add_row("nelux",              "[muted]not installed[/]  (optional, Windows only)")
+        t2.add_row("nelux",              "[muted]not installed[/]  (optional, GPU decode)")
 
     console.print(t2)
 
