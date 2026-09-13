@@ -344,48 +344,51 @@ def cut_scene(
         _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)
         return str(out_path), "reencode"
 
-    if _start_is_on_keyframe(start_sec, keyframes):
-        _lossless_copy(input_file, start_sec, end_sec, out_path)
-        _trim_trailing_partial_gop(out_path, duration)
-        return str(out_path), "copy"
+    try:
+        if _start_is_on_keyframe(start_sec, keyframes):
+            _lossless_copy(input_file, start_sec, end_sec, out_path)
+            _trim_trailing_partial_gop(out_path, duration)
+            return str(out_path), "copy"
 
-    k_next = _find_next_keyframe_after(keyframes, start_sec)
-    head_fraction = (k_next - start_sec) / duration if k_next is not None else 1.0
+        k_next = _find_next_keyframe_after(keyframes, start_sec)
+        head_fraction = (k_next - start_sec) / duration if k_next is not None else 1.0
 
-    if is_hevc and not use_cuda:
-        i = bisect_right(keyframes, start_sec)
-        snap_kf = None
-        best_diff = float("inf")
-        for ci in (i - 1, i):
-            if 0 <= ci < len(keyframes):
-                diff = abs(keyframes[ci] - start_sec)
-                if diff < best_diff:
-                    best_diff = diff
-                    snap_kf = keyframes[ci]
-        if snap_kf is not None and best_diff <= HEVC_SNAP_MAX and snap_kf < end_sec:
-            _lossless_copy(input_file, snap_kf, end_sec, out_path)
-            _trim_trailing_partial_gop(out_path, end_sec - snap_kf)
-            return str(out_path), "snapped_copy"
+        if is_hevc and not use_cuda:
+            i = bisect_right(keyframes, start_sec)
+            snap_kf = None
+            best_diff = float("inf")
+            for ci in (i - 1, i):
+                if 0 <= ci < len(keyframes):
+                    diff = abs(keyframes[ci] - start_sec)
+                    if diff < best_diff:
+                        best_diff = diff
+                        snap_kf = keyframes[ci]
+            if snap_kf is not None and best_diff <= HEVC_SNAP_MAX and snap_kf < end_sec:
+                _lossless_copy(input_file, snap_kf, end_sec, out_path)
+                _trim_trailing_partial_gop(out_path, end_sec - snap_kf)
+                return str(out_path), "snapped_copy"
 
-    can_smartcut = (
-        not is_hevc
-        and k_next is not None
-        and k_next < end_sec
-        and head_fraction < 0.9
-    )
+        can_smartcut = (
+            not is_hevc
+            and k_next is not None
+            and k_next < end_sec
+            and head_fraction < 0.9
+        )
 
-    if can_smartcut:
-        head_path = out_dir / f"_head_{scene_idx:04d}.mp4"
-        tail_path = out_dir / f"_tail_{scene_idx:04d}.mp4"
-        try:
-            _encode_segment(input_file, start_sec, k_next, head_path, use_cuda)
-            _lossless_copy(input_file, k_next, end_sec, tail_path, aac_audio=True)
-            _concat_two(head_path, tail_path, out_path, out_dir, scene_idx)
-        finally:
-            head_path.unlink(missing_ok=True)
-            tail_path.unlink(missing_ok=True)
-        _trim_trailing_partial_gop(out_path, duration)
-        return str(out_path), "smartcut"
+        if can_smartcut:
+            head_path = out_dir / f"_head_{scene_idx:04d}.mp4"
+            tail_path = out_dir / f"_tail_{scene_idx:04d}.mp4"
+            try:
+                _encode_segment(input_file, start_sec, k_next, head_path, use_cuda)
+                _lossless_copy(input_file, k_next, end_sec, tail_path, aac_audio=True)
+                _concat_two(head_path, tail_path, out_path, out_dir, scene_idx)
+            finally:
+                head_path.unlink(missing_ok=True)
+                tail_path.unlink(missing_ok=True)
+            _trim_trailing_partial_gop(out_path, duration)
+            return str(out_path), "smartcut"
+    except Exception as exc:
+        log(f"Scene {scene_idx}: fast copy failed ({exc}), re-encoding instead")
 
     _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)
     return str(out_path), "reencode"
