@@ -13,6 +13,7 @@ from ...core.infra.binaries import get_ffmpeg, get_ffprobe
 from ...core.infra.ipc import emit_progress, emit_event, log
 from ...core.codec.codec_utils import (
     VALID_CODECS, VALID_AUDIO, VALID_CONTAINERS, VALID_HARDWARE, CODEC_ALIASES,
+    NO_EDIT_LIST_CONTAINERS,
 )
 from ...core.export import export_scenes, ExportJob, ExportSettings
 from ...core.export import params as xparams
@@ -68,7 +69,7 @@ def export(
     merge: bool = typer.Option(False, "--merge", help="Merge selected clips into one file"),
     codec: str = typer.Option("copy", "--codec", help="copy · h264_* · h265_* · av1_main · prores_*"),
     audio: str = typer.Option("copy", "--audio", help="copy · aac · aac_320 · pcm16 · pcm24 · flac · alac · opus · mp3 · none"),
-    container: str = typer.Option("mp4", "--container", help="mp4 · mkv · mov"),
+    container: str = typer.Option("mp4", "--container", help="mp4 · mov"),
     hardware: str = typer.Option("auto", "--hardware", help="auto · gpu · cpu"),
     workers: int = typer.Option(1, "--workers", help="Parallel clip exports"),
     audio_track: int = typer.Option(-1, "--audio-track", help="0-based audio index to hoist to first (preview language); -1 = keep order"),
@@ -81,6 +82,14 @@ def export(
         raise typer.Exit(1)
     if audio not in VALID_AUDIO:
         fail(f"Unknown audio '{audio}'. Valid: {', '.join(sorted(VALID_AUDIO))}")
+        raise typer.Exit(1)
+    if container in NO_EDIT_LIST_CONTAINERS:
+        fail(
+            f"Container '{container}' isn't supported: the 'copy' export path relies on "
+            f"MP4/MOV edit lists to hide keyframe-misaligned cut padding, and "
+            f"'{container}' has no equivalent, so cuts can bleed extra frames. "
+            f"Use 'mp4' or 'mov'."
+        )
         raise typer.Exit(1)
     if container not in VALID_CONTAINERS:
         fail(f"Unknown container '{container}'. Valid: {', '.join(sorted(VALID_CONTAINERS))}")

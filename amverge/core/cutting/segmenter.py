@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..infra.binaries import get_ffmpeg
+from ..video.probe_utils import probe_video_duration
+from .smart_cut import _trim_trailing_partial_gop
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -19,6 +21,28 @@ _SILENCED = [
 
 CHUNK_SIZE = 1500
 SEGMENT_TIME_EPSILON = 0.001
+
+
+def _segment_boundaries(cut_points: list[float], total_duration: float) -> list[float]:
+    """Absolute ``[start_0, start_1, ..., start_N, total_duration]`` boundaries
+    for the segments ``run_ffmpeg_segment*`` produces from ``cut_points`` --
+    same scheme :func:`collect_scenes` uses to report scene start/end."""
+    return [0.0, *cut_points, total_duration]
+
+
+def _trim_segment(path: str, duration_sec: float) -> None:
+    """Drop trailing frames a segment-muxer split dragged in from the next
+    scene (same GOP-boundary issue :func:`smart_cut.cut_scene` guards
+    against -- the segment muxer has no keyframe-alignment awareness at all,
+    so every split here is exposed to it). Best-effort: a probe/remux hiccup
+    leaves the untrimmed segment rather than failing the whole cut.
+    """
+    if duration_sec is None or duration_sec <= 0:
+        return
+    try:
+        _trim_trailing_partial_gop(Path(path), duration_sec)
+    except Exception:
+        pass
 
 
 def _fmt_ts(seconds: float) -> str:
@@ -80,30 +104,43 @@ def run_ffmpeg_segment(
     output_pattern: str,
     cut_points: list[float],
     ffmpeg: str | None = None,
+    total_duration: float | None = None,
 ) -> None:
     """Cut a video at specified timestamps using FFmpeg segment muxer.
 
     Uses stream copy (no re-encode) with AAC audio. Chunks into 1500-cut
     batches to stay under the Windows 32,767-char command line limit.
 
+    The segment muxer has no keyframe-alignment awareness -- any split that
+    doesn't land on a keyframe can drag a few trailing frames from the next
+    scene into the current one (same GOP-boundary issue smart_cut.cut_scene
+    guards against). Each produced segment is trimmed back to its intended
+    duration afterward to catch that.
+
     Args:
         video_path: Path to the source video.
         output_pattern: FFmpeg output pattern (e.g. ``"out_%04d.mp4"``).
         cut_points: Sorted list of cut timestamps in seconds.
         ffmpeg: Optional path to ffmpeg binary. Auto-detected if None.
+        total_duration: Video duration in seconds, for the last segment's
+            end boundary. Probed from ``video_path`` if not given.
     """
     ff = ffmpeg or get_ffmpeg()
 
     if len(cut_points) <= CHUNK_SIZE:
         _run_chunk(video_path, output_pattern, cut_points, 0, 0.0, None, ff)
-        return
+    else:
+        for i in range(0, len(cut_points), CHUNK_SIZE):
+            chunk = cut_points[i: i + CHUNK_SIZE]
+            start_time = cut_points[i - 1] if i > 0 else 0.0
+            end_time = chunk[-1] if i + CHUNK_SIZE < len(cut_points) else None
+            relative = [p - start_time for p in chunk]
+            _run_chunk(video_path, output_pattern, relative, i, start_time, end_time, ff)
 
-    for i in range(0, len(cut_points), CHUNK_SIZE):
-        chunk = cut_points[i: i + CHUNK_SIZE]
-        start_time = cut_points[i - 1] if i > 0 else 0.0
-        end_time = chunk[-1] if i + CHUNK_SIZE < len(cut_points) else None
-        relative = [p - start_time for p in chunk]
-        _run_chunk(video_path, output_pattern, relative, i, start_time, end_time, ff)
+    duration = total_duration if total_duration is not None else probe_video_duration(video_path)
+    boundaries = _segment_boundaries(cut_points, duration)
+    for idx in range(len(boundaries) - 1):
+        _trim_segment(output_pattern % idx, boundaries[idx + 1] - boundaries[idx])
 
 
 _OPENING_RE = re.compile(r"Opening '(?P<path>.+?)' for writing")
@@ -200,15 +237,25 @@ def run_ffmpeg_segment_streaming(
 
     ``on_segment(index, path)`` fires as each segment finishes (detected from
     the muxer opening the next output file, plus a final flush at process
-    exit). ``on_progress(fraction)`` fires from ffmpeg's ``-progress`` stream
-    when ``total_duration`` is given. Identical ffmpeg arguments and output
-    to the non-streaming variant.
+    exit) -- each segment is trimmed back to its intended duration (see
+    :func:`run_ffmpeg_segment`) before this fires, so callers always see the
+    corrected file. ``on_progress(fraction)`` fires from ffmpeg's
+    ``-progress`` stream. Identical ffmpeg arguments and output to the
+    non-streaming variant.
     """
     ff = ffmpeg or get_ffmpeg()
+    duration = total_duration if total_duration is not None else probe_video_duration(video_path)
+    boundaries = _segment_boundaries(cut_points, duration)
+
+    def _on_segment(idx: int, path: str) -> None:
+        if 0 <= idx < len(boundaries) - 1:
+            _trim_segment(path, boundaries[idx + 1] - boundaries[idx])
+        if on_segment:
+            on_segment(idx, path)
 
     if len(cut_points) <= CHUNK_SIZE:
         _run_chunk_streaming(video_path, output_pattern, cut_points, 0, 0.0,
-                             None, ff, on_segment, on_progress, total_duration)
+                             None, ff, _on_segment, on_progress, duration)
         return
 
     for i in range(0, len(cut_points), CHUNK_SIZE):
@@ -217,7 +264,7 @@ def run_ffmpeg_segment_streaming(
         end_time = chunk[-1] if i + CHUNK_SIZE < len(cut_points) else None
         relative = [p - start_time for p in chunk]
         _run_chunk_streaming(video_path, output_pattern, relative, i, start_time,
-                             end_time, ff, on_segment, on_progress, total_duration)
+                             end_time, ff, _on_segment, on_progress, duration)
 
 
 def collect_scenes(
