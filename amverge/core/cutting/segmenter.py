@@ -9,10 +9,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..infra.binaries import get_ffmpeg
+from ..infra.ipc import log
 from ..video.probe_utils import probe_video_duration
 from .smart_cut import _trim_trailing_partial_gop
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+_COPY_VIDEO_ARGS = ["-c:v", "copy"]
+_REENCODE_VIDEO_ARGS = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16", "-pix_fmt", "yuv420p"]
 
 _SILENCED = [
     re.compile(r"track\s+\d+:\s+codec frame size is not set", re.IGNORECASE),
@@ -68,6 +72,7 @@ def _run_chunk(
     start_time: float,
     end_time: float | None,
     ffmpeg: str,
+    video_args: list[str],
 ) -> None:
     cmd = [ffmpeg, "-y"]
 
@@ -80,7 +85,7 @@ def _run_chunk(
         "-i", video_path,
         "-map", "0:v:0",
         "-map", "0:a?",
-        "-c:v", "copy",
+        *video_args,
         "-c:a", "aac",
         "-b:a", "160k",
         "-ac", "2",
@@ -108,8 +113,10 @@ def run_ffmpeg_segment(
 ) -> None:
     """Cut a video at specified timestamps using FFmpeg segment muxer.
 
-    Uses stream copy (no re-encode) with AAC audio. Chunks into 1500-cut
-    batches to stay under the Windows 32,767-char command line limit.
+    Uses stream copy (no re-encode) with AAC audio, falling back to a full
+    re-encode if the copy fails (a codec the container has no tag for, e.g.
+    ProRes or HuffYUV stream-copied into MP4). Chunks into 1500-cut batches
+    to stay under the Windows 32,767-char command line limit.
 
     The segment muxer has no keyframe-alignment awareness -- any split that
     doesn't land on a keyframe can drag a few trailing frames from the next
@@ -127,15 +134,22 @@ def run_ffmpeg_segment(
     """
     ff = ffmpeg or get_ffmpeg()
 
-    if len(cut_points) <= CHUNK_SIZE:
-        _run_chunk(video_path, output_pattern, cut_points, 0, 0.0, None, ff)
-    else:
-        for i in range(0, len(cut_points), CHUNK_SIZE):
-            chunk = cut_points[i: i + CHUNK_SIZE]
-            start_time = cut_points[i - 1] if i > 0 else 0.0
-            end_time = chunk[-1] if i + CHUNK_SIZE < len(cut_points) else None
-            relative = [p - start_time for p in chunk]
-            _run_chunk(video_path, output_pattern, relative, i, start_time, end_time, ff)
+    def _run_all(video_args: list[str]) -> None:
+        if len(cut_points) <= CHUNK_SIZE:
+            _run_chunk(video_path, output_pattern, cut_points, 0, 0.0, None, ff, video_args)
+        else:
+            for i in range(0, len(cut_points), CHUNK_SIZE):
+                chunk = cut_points[i: i + CHUNK_SIZE]
+                start_time = cut_points[i - 1] if i > 0 else 0.0
+                end_time = chunk[-1] if i + CHUNK_SIZE < len(cut_points) else None
+                relative = [p - start_time for p in chunk]
+                _run_chunk(video_path, output_pattern, relative, i, start_time, end_time, ff, video_args)
+
+    try:
+        _run_all(_COPY_VIDEO_ARGS)
+    except RuntimeError as exc:
+        log(f"Stream copy failed ({exc}), re-encoding instead")
+        _run_all(_REENCODE_VIDEO_ARGS)
 
     duration = total_duration if total_duration is not None else probe_video_duration(video_path)
     boundaries = _segment_boundaries(cut_points, duration)
@@ -159,6 +173,7 @@ def _run_chunk_streaming(
     on_segment: Callable[[int, str], None] | None,
     on_progress: Callable[[float], None] | None,
     total_duration: float | None,
+    video_args: list[str],
 ) -> None:
     cmd = [ffmpeg, "-y", "-nostats"]
 
@@ -171,7 +186,7 @@ def _run_chunk_streaming(
         "-i", video_path,
         "-map", "0:v:0",
         "-map", "0:a?",
-        "-c:v", "copy",
+        *video_args,
         "-c:a", "aac",
         "-b:a", "160k",
         "-ac", "2",
@@ -241,7 +256,7 @@ def run_ffmpeg_segment_streaming(
     :func:`run_ffmpeg_segment`) before this fires, so callers always see the
     corrected file. ``on_progress(fraction)`` fires from ffmpeg's
     ``-progress`` stream. Identical ffmpeg arguments and output to the
-    non-streaming variant.
+    non-streaming variant, including the stream-copy-then-reencode fallback.
     """
     ff = ffmpeg or get_ffmpeg()
     duration = total_duration if total_duration is not None else probe_video_duration(video_path)
@@ -253,18 +268,25 @@ def run_ffmpeg_segment_streaming(
         if on_segment:
             on_segment(idx, path)
 
-    if len(cut_points) <= CHUNK_SIZE:
-        _run_chunk_streaming(video_path, output_pattern, cut_points, 0, 0.0,
-                             None, ff, _on_segment, on_progress, duration)
-        return
+    def _run_all(video_args: list[str]) -> None:
+        if len(cut_points) <= CHUNK_SIZE:
+            _run_chunk_streaming(video_path, output_pattern, cut_points, 0, 0.0,
+                                 None, ff, _on_segment, on_progress, duration, video_args)
+            return
 
-    for i in range(0, len(cut_points), CHUNK_SIZE):
-        chunk = cut_points[i: i + CHUNK_SIZE]
-        start_time = cut_points[i - 1] if i > 0 else 0.0
-        end_time = chunk[-1] if i + CHUNK_SIZE < len(cut_points) else None
-        relative = [p - start_time for p in chunk]
-        _run_chunk_streaming(video_path, output_pattern, relative, i, start_time,
-                             end_time, ff, _on_segment, on_progress, duration)
+        for i in range(0, len(cut_points), CHUNK_SIZE):
+            chunk = cut_points[i: i + CHUNK_SIZE]
+            start_time = cut_points[i - 1] if i > 0 else 0.0
+            end_time = chunk[-1] if i + CHUNK_SIZE < len(cut_points) else None
+            relative = [p - start_time for p in chunk]
+            _run_chunk_streaming(video_path, output_pattern, relative, i, start_time,
+                                 end_time, ff, _on_segment, on_progress, duration, video_args)
+
+    try:
+        _run_all(_COPY_VIDEO_ARGS)
+    except RuntimeError as exc:
+        log(f"Stream copy failed ({exc}), re-encoding instead")
+        _run_all(_REENCODE_VIDEO_ARGS)
 
 
 def collect_scenes(
