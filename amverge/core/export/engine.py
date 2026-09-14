@@ -94,6 +94,19 @@ def probe_video_codec(ffprobe: str, path: str) -> Optional[str]:
     return _probe_stream(ffprobe, path, "v")
 
 
+def probe_is_10bit(ffprobe: str, path: str) -> bool:
+    try:
+        r = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=pix_fmt", "-of", "default=nk=1:nw=1", path],
+            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+        )
+        pix_fmt = (r.stdout or "").strip().lower()
+        return pix_fmt.endswith(("10le", "10be", "12le", "12be", "14le", "14be", "16le", "16be"))
+    except Exception:
+        return False
+
+
 def probe_audio_codec(ffprobe: str, path: str) -> Optional[str]:
     return _probe_stream(ffprobe, path, "a")
 
@@ -276,6 +289,7 @@ def _export_one(
     ffmpeg: str,
     use_gpu: bool,
     source_video_codec: Optional[str],
+    source_is_10bit: bool,
     total_ms: Optional[int],
     on_frac: Optional[Callable[[float], None]],
     abort: threading.Event,
@@ -311,7 +325,8 @@ def _export_one(
             raise
         except ExportError:
             # Stream copy failed (mismatched params / non-copy-safe) → re-encode.
-            return _reencode_with_fallback(job, out_path, "h264_high", settings, ffmpeg,
+            fallback_codec = "h264_high10" if source_is_10bit else "h264_high"
+            return _reencode_with_fallback(job, out_path, fallback_codec, settings, ffmpeg,
                                            use_gpu, total_ms, on_frac, abort, active, reencode_args)
     else:
         return _reencode_with_fallback(job, out_path, settings.codec, settings, ffmpeg,
@@ -405,6 +420,7 @@ def export_scenes(
         jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), use_cuda)
 
     source_video_codec = probe_video_codec(ffprobe, jobs[0].input) if jobs else None
+    source_is_10bit = probe_is_10bit(ffprobe, jobs[0].input) if jobs else False
     audio_count = (
         probe_audio_stream_count(ffprobe, jobs[0].input)
         if settings.audio_track and jobs else None
@@ -413,12 +429,13 @@ def export_scenes(
     try:
         if settings.merge:
             out = _merge(jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-                         source_video_codec, progress, event, abort, active, audio_count)
+                         source_video_codec, source_is_10bit, progress, event, abort, active, audio_count)
             progress(100, "Export complete")
             return [out]
 
         return _individual(jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-                           source_video_codec, progress, event, abort, active, audio_count)
+                           source_video_codec, source_is_10bit,
+                           progress, event, abort, active, audio_count)
     finally:
         if smartcut_tmp is not None:
             smartcut_tmp.cleanup()
@@ -434,7 +451,7 @@ def _out_name(out_dir: str, file_stem: str, scene_index: int, container: str) ->
 
 def _individual(
     jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-    source_video_codec, progress, event, abort, active, audio_count=None,
+    source_video_codec, source_is_10bit, progress, event, abort, active, audio_count=None,
 ) -> list[str]:
     total = len(jobs)
     workers = max(1, min(settings.workers, total))
@@ -449,7 +466,7 @@ def _individual(
         out_path = _out_name(out_dir, file_stem, job.scene_index, settings.container)
         total_ms = job.dur_ms or probe_duration_ms(ffprobe, job.input)
         langs = probe_audio_languages(ffprobe, job.input) if settings.audio_language else None
-        mode = _export_one(job, out_path, settings, ffmpeg, use_gpu, source_video_codec,
+        mode = _export_one(job, out_path, settings, ffmpeg, use_gpu, source_video_codec, source_is_10bit,
                            total_ms, None, abort, active, audio_count, langs)
         with done_lock:
             done += 1
@@ -471,7 +488,7 @@ def _individual(
 
 def _merge(
     jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-    source_video_codec, progress, event, abort, active, audio_count=None,
+    source_video_codec, source_is_10bit, progress, event, abort, active, audio_count=None,
 ) -> str:
     ext = settings.container
     merged_stem = file_stem.replace("_####", "").replace("####", "").strip("_") or "merged"
@@ -510,7 +527,8 @@ def _merge(
             force_reencode = True
 
     seg_copy = settings.codec == "copy" and not force_reencode
-    seg_codec = "copy" if seg_copy else (settings.codec if settings.codec != "copy" else "h264_high")
+    fallback_codec = "h264_high10" if source_is_10bit else "h264_high"
+    seg_codec = "copy" if seg_copy else (settings.codec if settings.codec != "copy" else fallback_codec)
     # Copied audio keeps its original timestamps while the re-encoded video is
     # rebased to 0, so the two drift apart from the first join onward. Encoding
     # the audio lets asetpts/aresample rebase it the same way. Only for segments
@@ -545,7 +563,7 @@ def _merge(
             total_ms = job.dur_ms or probe_duration_ms(ffprobe, job.input)
             _export_one(job, seg, seg_settings, ffmpeg,
                         resolve_use_gpu(seg_settings, detect_gpu_encoders(ffmpeg)),
-                        source_video_codec, total_ms, None, abort, active,
+                        source_video_codec, source_is_10bit, total_ms, None, abort, active,
                         seg_audio_count, seg_languages[i] if seg_languages else None)
             segments.append(seg)
             progress(30 + int((i + 1) / total * 55), f"{verb} {i + 1}/{total} segments")
