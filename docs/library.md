@@ -371,7 +371,7 @@ else:
 from amverge import cut_scene, cut_all_scenes, run_ffmpeg_segment, collect_scenes
 from pathlib import Path
 
-# Smart cut (V2 pipeline - handles copy/smartcut/reencode)
+# Smart cut (V2 pipeline - lossless copy, edit-list trimmed, or reencode)
 results = cut_all_scenes(
     input_file=Path("video.mp4"),
     scenes=[{"scene_index": 0, "start_sec": 0.0, "end_sec": 5.0}],

@@ -301,8 +301,8 @@ def _detect_ipc(
         thumb_pool = ThreadPoolExecutor(max_workers=4)
         thumb_futures: list = []
 
-        def _gen_thumb(scene_index: int, clip_path: str, is_copy: bool) -> None:
-            if make_thumbnail(clip_path, _thumb_path(scene_index), first_keyframe=is_copy):
+        def _gen_thumb(scene_index: int, clip_path: str) -> None:
+            if make_thumbnail(clip_path, _thumb_path(scene_index)):
                 emit_event(f"THUMBNAIL_READY|{scene_index}")
 
         def _on_clip_ready(result: dict) -> None:
@@ -312,9 +312,7 @@ def _detect_ipc(
             clip_mode = result.get("clip_mode") or "failed"
             emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
             if clip_path and os.path.exists(clip_path):
-                thumb_futures.append(
-                    thumb_pool.submit(_gen_thumb, scene_index, clip_path, clip_mode == "copy")
-                )
+                thumb_futures.append(thumb_pool.submit(_gen_thumb, scene_index, clip_path))
 
         emit_progress(82, f"Cutting {len(phase1_scenes)} scenes (lossless copy)...")
         cut_all_scenes(

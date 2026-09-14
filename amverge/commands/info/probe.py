@@ -81,10 +81,7 @@ def probe(
         )
         t2.add_row("Count",    f"{kf_count:,}")
         t2.add_row("Avg. gap", avg_gap_str)
-        if is_hevc:
-            t2.add_row("Cut mode", "[warn]snapped_copy[/] (CPU) / [accent]reencode[/] (HEVC+CUDA)")
-        else:
-            t2.add_row("Cut mode", "[accent]smartcut[/] (H.264) or [accent]copy[/]")
+        t2.add_row("Cut mode", "[accent]copy[/] (edit-list trimmed) near a keyframe, [accent]reencode[/] otherwise")
         console.print(t2)
 
     search_dir = cache_dir.resolve() if cache_dir else video.parent

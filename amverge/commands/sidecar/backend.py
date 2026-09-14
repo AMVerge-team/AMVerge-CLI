@@ -242,8 +242,8 @@ def backend(
             thumb_pool = _futures.ThreadPoolExecutor(max_workers=4)
             thumb_futures: list = []
 
-            def _gen_thumb(scene_index: int, clip_path: str, is_copy: bool) -> None:
-                if make_thumbnail(clip_path, str(_poster_path(scene_index)), first_keyframe=is_copy):
+            def _gen_thumb(scene_index: int, clip_path: str) -> None:
+                if make_thumbnail(clip_path, str(_poster_path(scene_index))):
                     emit_event(f"THUMBNAIL_READY|{scene_index}")
                 else:
                     log(f"Thumbnail produced no frame for scene {scene_index}")
@@ -255,9 +255,7 @@ def backend(
                 clip_mode = result.get("clip_mode") or "failed"
                 emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
                 if clip_path and Path(clip_path).exists():
-                    thumb_futures.append(
-                        thumb_pool.submit(_gen_thumb, scene_index, clip_path, clip_mode == "copy")
-                    )
+                    thumb_futures.append(thumb_pool.submit(_gen_thumb, scene_index, clip_path))
 
             use_segmenter = (
                 not phase2_scenes

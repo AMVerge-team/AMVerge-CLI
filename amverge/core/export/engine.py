@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..infra.binaries import get_ffmpeg, get_ffprobe
+from ..cutting.editlist import patch_trailing_duration
 from . import params
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -320,6 +321,17 @@ def _export_one(
     if settings.codec == "copy":
         try:
             _run_ffmpeg(ffmpeg, copy_args(), total_ms, on_frac, abort, active)
+            # A plain `-c copy` remux -- which is exactly what this just ran --
+            # doesn't preserve an existing edit list verbatim: it re-derives
+            # its own from the packets it reads, discarding whatever duration
+            # cutting.smart_cut/materialize_clips originally patched in and
+            # reverting to the raw (possibly overshot) content length. Bake
+            # the intended duration back in so this output is edit-list-exact
+            # regardless of what its input already was. Best-effort: an
+            # unrecognized box shape leaves this output exactly as ffmpeg made
+            # it, same as any other container this doesn't apply to.
+            if total_ms:
+                patch_trailing_duration(Path(out_path), total_ms / 1000.0)
             return "copy"
         except ExportAborted:
             raise
@@ -526,7 +538,14 @@ def _merge(
             progress(25, "Re-encoding for a clean join...")
             force_reencode = True
 
-    seg_copy = settings.codec == "copy" and not force_reencode
+    # Ranged segments can come back from `_export_one` edit-list-trimmed
+    # (see cutting.smart_cut / editlist) when their range doesn't land on a
+    # keyframe; the concat below is a raw `-c copy` join that, like any such
+    # join, doesn't consult edit lists (same reason smart_cut stopped relying
+    # on the mp4 concat demuxer for its own cuts). Segments built straight
+    # from whole pre-cut clips never carry that risk, so only ranged jobs
+    # need to give up the copy shortcut here.
+    seg_copy = settings.codec == "copy" and not force_reencode and not has_ranges
     fallback_codec = "h264_high10" if source_is_10bit else "h264_high"
     seg_codec = "copy" if seg_copy else (settings.codec if settings.codec != "copy" else fallback_codec)
     # Copied audio keeps its original timestamps while the re-encoded video is

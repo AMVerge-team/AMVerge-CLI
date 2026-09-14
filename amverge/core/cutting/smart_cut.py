@@ -1,33 +1,60 @@
 from __future__ import annotations
 
-"""Smart scene cutting with lossless copy, smartcut, and re-encode fallback."""
+"""Smart scene cutting: lossless copy backed by the container's own edit
+list, re-encode as the fallback.
+
+ffmpeg's own mp4/mov muxer already does almost everything this module needs
+whenever it stream-copies an off-keyframe range: given ``-ss start -i src -c
+copy``, it backward-snaps to the real preceding keyframe (the only place a
+stream copy can start), flags everything before the true start as
+decode-only (`discard`), and writes an edit list (`elst`) that tells any
+compliant reader to hide that pre-roll and begin display exactly at
+``start``. Verified directly against real playback in After Effects, and
+identically for H.264 and HEVC, mp4 and mov, with and without audio -- this
+is a general ISOBMFF/mov-muxer behavior, not a codec-specific trick.
+
+What it does *not* do is the same thing for the tail: asking for ``-t
+duration`` past a keyframe stream-copies a little further than requested (as
+far as decode dependencies require, typically a couple of frames -- never
+all the way to the next real keyframe, however far that is) and simply
+reports the wrong, overshot duration. `editlist.patch_trailing_duration`
+closes that gap by rewriting the edit list's own duration field in place, no
+different in kind from what ffmpeg already wrote for the head.
+
+Together these mean a scene can be cut losslessly -- no re-encoded frames,
+no concatenation, none of the decode/display-order splice hazards that come
+with re-encoding a head and stitching it to a copied tail -- for any
+off-keyframe boundary, provided the real preceding keyframe isn't so far
+back that copying (and hiding) all the frames in between stops being worth
+it. That is a size/seek-latency trade-off (`MAX_PRE_ROLL`), not a
+correctness one: past it, re-encoding is simply cheaper, not more correct.
+"""
 
 import os
 import subprocess
-from bisect import bisect_left, bisect_right
+from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
 from ..infra.binaries import get_ffmpeg, get_ffprobe
 from ..infra.ipc import emit_progress, log
+from .editlist import patch_trailing_duration
 
-KEYFRAME_SNAP_THRESHOLD = 0.2
-# ffmpeg's stream-copy `-ss` seek only ever snaps *backward*. A keyframe up
-# to KEYFRAME_SNAP_THRESHOLD *after* start_sec is not somewhere the seek can
-# land -- it's only safe when start_sec already coincides with it. This is
-# the tolerance for "coincides", loose enough to absorb float noise from
-# probing/frame-index math, tight enough to never mistake a merely-nearby
-# keyframe for the one actually at start_sec.
-EXACT_KEYFRAME_EPSILON = 0.001
 PRE_SEEK_OFFSET = 10.0
-HEVC_SNAP_MAX = 5.0
-TRAILING_GOP_MAX_PACKETS = 5
-# Scenes shorter than this always re-encode. A stream copy can only start on a
-# keyframe, so a sub-second scene ends up carrying a whole GOP: the extra frames
-# arrive flagged discard, decoders skip them, and the clip plays at the wrong
-# speed with no extractable poster frame. Re-encoding rebuilds timestamps from
-# zero, and at a few frames long it costs nothing.
+
+# How far back the real preceding keyframe may sit before a lossless copy
+# stops being worth it. Past this, a compliant player has to decode that
+# many seconds of hidden, never-displayed pre-roll before it can show or
+# seek to the scene's first visible frame, and the file carries those bytes
+# for no visible benefit. Re-encoding avoids both at a cost that no longer
+# looks large by comparison. Tunable; not a correctness boundary.
+MAX_PRE_ROLL = 5.0
+
+# Scenes shorter than this always re-encode. Nothing below is incorrect --
+# the discard/edit-list mechanism doesn't care how short the visible slice
+# is -- but at a few frames long, re-encoding is instant, and it avoids a
+# clip that's almost entirely hidden pre-roll for a sliver of real content.
 MIN_COPY_DURATION = 0.5
 
 
@@ -47,23 +74,17 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         raise RuntimeError(f"ffmpeg failed (exit {p.returncode}): {p.stderr[-600:]}")
 
 
-def _lossless_copy(
-    input_file: Path,
-    start: float,
-    end: float,
-    out_path: Path,
-    *,
-    aac_audio: bool = False,
-) -> None:
-    audio_args = ["-c:a", "aac", "-b:a", "128k"] if aac_audio else ["-c:a", "copy"]
+def _lossless_copy(input_file: Path, start: float, end: float, out_path: Path) -> None:
+    """Stream-copy ``[start, end)``. See module docstring for why this is
+    trusted to be frame-accurate without any further re-encoding or trimming
+    of the video/audio bitstreams themselves."""
     _run_ffmpeg([
         get_ffmpeg(), "-y",
         "-ss", f"{start:.3f}",
         "-i", str(input_file),
         "-t", f"{end - start:.3f}",
         "-map", "0:v:0", "-map", "0:a?",
-        "-c:v", "copy",
-        *audio_args,
+        "-c:v", "copy", "-c:a", "copy",
         "-movflags", "+faststart",
         str(out_path),
     ])
@@ -84,151 +105,16 @@ def _is_10bit(path: Path) -> bool:
     return pix_fmt.endswith(("10le", "10be", "12le", "12be", "14le", "14be", "16le", "16be"))
 
 
-def _video_keyframe_layout(path: Path) -> tuple[int, list[int]]:
-    """Return ``(packet_count, keyframe_packet_indexes)`` for the video stream."""
-    import json
+def _preceding_keyframe(keyframes: list[float], start_sec: float) -> float | None:
+    """The real keyframe a backward-snapping ``-ss`` will land on.
 
-    try:
-        out = subprocess.run(
-            [
-                get_ffprobe(), "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "packet=flags", "-of", "json", str(path),
-            ],
-            capture_output=True, text=True, **_background_kwargs(),
-        ).stdout
-        packets = json.loads(out).get("packets", []) if out.strip() else []
-    except Exception:
-        return 0, []
-    keys = [i for i, p in enumerate(packets) if "K" in (p.get("flags") or "")]
-    return len(packets), keys
-
-
-def _video_packet_pts(path: Path) -> list[float]:
-    """Video packet presentation times (seconds), in decode/bitstream order.
-
-    NaN marks a packet ffprobe couldn't give a pts for.
+    None only if ``start_sec`` is before every known keyframe -- shouldn't
+    happen in practice, since frame 0 of any file is always a keyframe, but
+    an empty or malformed ``keyframes`` list is handled the same as a
+    genuine miss: fall through to re-encode rather than guess.
     """
-    import json
-
-    try:
-        out = subprocess.run(
-            [
-                get_ffprobe(), "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "packet=pts_time", "-of", "json", str(path),
-            ],
-            capture_output=True, text=True, **_background_kwargs(),
-        ).stdout
-        packets = json.loads(out).get("packets", []) if out.strip() else []
-    except Exception:
-        return []
-    result = []
-    for p in packets:
-        try:
-            result.append(float(p.get("pts_time")))
-        except (TypeError, ValueError):
-            result.append(float("nan"))
-    return result
-
-
-def _overrun_cutoff(out_path: Path, duration_sec: float) -> int | None:
-    """Decode-order packet index where display content first runs past
-    ``duration_sec``, or ``None`` if nothing overruns it.
-
-    Stream-copied cuts truncate by decode order (ffmpeg's ``-t`` with
-    ``-c:v copy``), not by presentation order. Any GOP with B-frames has
-    packets whose decode timestamp lands inside the requested duration while
-    their *display* timestamp -- and therefore their actual pixel content --
-    is from after it. This catches that regardless of whether a full keyframe
-    got dragged in along with the orphan frames.
-
-    Truncating to a prefix of decode-order packets is always safe: nothing
-    kept ever depends on anything dropped, since dependencies only point
-    backward in decode order.
-    """
-    pts = _video_packet_pts(out_path)
-    valid = [p for p in pts if p == p]  # drop NaNs
-    if not valid:
-        return None
-    # ffmpeg's `-ss X -c:v copy` always numbers output pts relative to the
-    # requested X, so 0.0 *is* the intended clip start -- even when a
-    # separate keyframe-misalignment bug on the head end has dragged in
-    # earlier content with negative pts. Anchoring on min(valid) instead
-    # would measure duration from that bled-in content and over-trim the
-    # tail by however much extra sits at the head.
-    base = 0.0
-    ordered = sorted(valid)
-    gaps = [b - a for a, b in zip(ordered, ordered[1:]) if b > a]
-    frame_period = (sum(gaps) / len(gaps)) if gaps else 0.0
-    limit = duration_sec + frame_period * 0.5  # half-frame slack for float noise
-    return next(
-        (i for i, p in enumerate(pts) if p == p and (p - base) >= limit),
-        None,
-    )
-
-
-def _trim_trailing_partial_gop(out_path: Path, duration_sec: float | None = None) -> bool:
-    """Drop trailing packets whose display content falls outside the clip.
-
-    Two related failure modes land here. Open-GOP sources interleave the next
-    GOP's keyframe with the current GOP's trailing B-frames, so a stream copy
-    ending on a scene boundary drags in that keyframe plus a frame or two --
-    when such clips are concatenated the orphan packets carry picture order
-    counts that collide with the following clip, decoding as "Duplicate POC
-    in a sequence" corruption in strict players (VLC tolerates it). And any
-    GOP with B-frames, open or closed, can leak a few *keyframe-less* trailing
-    packets the same way whenever the cut's end lands mid-GOP -- ffmpeg's
-    stream-copy ``-t`` truncates by decode order, so packets whose decode
-    time is in range but whose display content is from the next scene still
-    get copied through.
-
-    Both checks run independently and whichever wants to cut earlier wins --
-    they catch different concerns (display-time overrun vs. a duplicate GOP
-    that's concat-unsafe even if its content happens to still fall in range)
-    and neither substitutes for the other.
-
-    Returns True when the clip was trimmed.
-    """
-    count, keys = _video_keyframe_layout(out_path)
-    if count <= 0:
-        return False
-
-    candidates = []
-    if duration_sec is not None and duration_sec > 0:
-        overrun = _overrun_cutoff(out_path, duration_sec)
-        if overrun is not None:
-            candidates.append(overrun)
-    if len(keys) >= 2:
-        last_key = keys[-1]
-        if last_key > 0 and (count - last_key) <= TRAILING_GOP_MAX_PACKETS:
-            candidates.append(last_key)
-
-    if not candidates:
-        return False
-    cutoff = min(candidates)
-    if cutoff <= 0 or cutoff >= count:
-        return False
-
-    trimmed = out_path.with_name(out_path.stem + "_trim" + out_path.suffix)
-    try:
-        _run_ffmpeg([
-            get_ffmpeg(), "-y",
-            "-i", str(out_path),
-            "-map", "0:v:0", "-map", "0:a?",
-            "-c", "copy",
-            "-frames:v", str(cutoff),
-            "-movflags", "+faststart",
-            str(trimmed),
-        ])
-    except Exception:
-        trimmed.unlink(missing_ok=True)
-        return False
-
-    if not trimmed.exists() or trimmed.stat().st_size == 0:
-        trimmed.unlink(missing_ok=True)
-        return False
-
-    os.replace(str(trimmed), str(out_path))
-    return True
+    i = bisect_right(keyframes, start_sec)
+    return keyframes[i - 1] if i > 0 else None
 
 
 def _encode_segment(
@@ -266,57 +152,6 @@ def _encode_segment(
     _run_ffmpeg(_build_cmd(gpu=False))
 
 
-def _concat_two(
-    head_path: Path, tail_path: Path, out_path: Path, tmp_dir: Path, scene_idx: int
-) -> None:
-    list_file = tmp_dir / f"_concat_{scene_idx:04d}.txt"
-    list_file.write_text(
-        f"file '{head_path.as_posix()}'\nfile '{tail_path.as_posix()}'\n",
-        encoding="utf-8",
-    )
-    try:
-        _run_ffmpeg([
-            get_ffmpeg(), "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", str(list_file),
-            "-c", "copy",
-            "-movflags", "+faststart",
-            str(out_path),
-        ])
-    finally:
-        list_file.unlink(missing_ok=True)
-
-
-def _start_is_on_keyframe(start_sec: float, keyframes: list[float]) -> bool:
-    """Whether a plain ``-ss start_sec -c:v copy`` will actually land on
-    (or acceptably close to) a keyframe.
-
-    ffmpeg's stream-copy seek only ever snaps *backward* to the nearest
-    keyframe at or before the target -- it can never decode-and-discard
-    forward to honor a keyframe that comes later. So a keyframe up to
-    ``KEYFRAME_SNAP_THRESHOLD`` *before* ``start_sec`` is genuinely where the
-    seek will land: an accepted, bounded trim. A keyframe *after*
-    ``start_sec`` only counts when ``start_sec`` already coincides with it
-    (within ``EXACT_KEYFRAME_EPSILON``) -- the seek doesn't need to move
-    forward for anything. Anything further off falls through to
-    smartcut/snapped_copy, which snap the start explicitly rather than
-    assuming this raw seek will do it for them; treating it as copy-safe
-    here would silently drag in whatever earlier content the backward seek
-    actually lands on, e.g. the previous scene.
-    """
-    i = bisect_left(keyframes, start_sec)
-    if 0 <= i - 1 < len(keyframes) and abs(keyframes[i - 1] - start_sec) <= KEYFRAME_SNAP_THRESHOLD:
-        return True
-    if 0 <= i < len(keyframes) and abs(keyframes[i] - start_sec) <= EXACT_KEYFRAME_EPSILON:
-        return True
-    return False
-
-
-def _find_next_keyframe_after(keyframes: list[float], after: float) -> float | None:
-    i = bisect_right(keyframes, after)
-    return keyframes[i] if i < len(keyframes) else None
-
-
 def cut_scene(
     input_file: Path,
     start_sec: float,
@@ -330,10 +165,13 @@ def cut_scene(
     """Cut a single scene using the best available method.
 
     Chooses cut mode automatically:
-    - ``copy`` if start aligns with a keyframe (within 0.2s).
-    - ``snapped_copy`` for HEVC on CPU if a keyframe exists within 5s.
-    - ``smartcut`` for H.264 when next keyframe is within 90% of the scene.
-    - ``reencode`` as fallback.
+    - ``copy`` when a preceding keyframe exists within ``MAX_PRE_ROLL``
+      seconds of ``start_sec``: a single lossless stream copy, frame-accurate
+      on both ends via the container's own edit list (see module docstring).
+    - ``reencode`` otherwise -- no keyframe close enough behind ``start_sec``
+      to make a lossless copy worthwhile, the scene is shorter than
+      ``MIN_COPY_DURATION``, or (rare) the copy's own edit list didn't come
+      out in a shape ``editlist.patch_trailing_duration`` can patch.
 
     Args:
         input_file: Source video file.
@@ -344,11 +182,14 @@ def cut_scene(
         keyframes: Sorted list of keyframe timestamps.
         use_cuda: If True, use NVENC for re-encode (GPU). CPU fallback if
             encoder not available.
-        is_hevc: Whether the source video is HEVC-encoded.
+        is_hevc: Accepted for API compatibility with existing callers;
+            no longer changes behavior -- the edit-list mechanism this module
+            relies on works identically for HEVC and H.264 (verified), so
+            there's no separate HEVC path to select any more.
 
     Returns:
-        Tuple of ``(clip_path, mode)`` where ``mode`` is one of
-        ``"copy"``, ``"snapped_copy"``, ``"smartcut"``, or ``"reencode"``.
+        Tuple of ``(clip_path, mode)`` where ``mode`` is ``"copy"`` or
+        ``"reencode"``.
 
     Raises:
         ValueError: If ``start_sec >= end_sec`` (non-positive duration).
@@ -359,55 +200,16 @@ def cut_scene(
     if duration <= 0:
         raise ValueError(f"Non-positive duration for scene {scene_idx}: {duration:.3f}s")
 
-    if duration < MIN_COPY_DURATION:
-        _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)
-        return str(out_path), "reencode"
-
-    try:
-        if _start_is_on_keyframe(start_sec, keyframes):
-            _lossless_copy(input_file, start_sec, end_sec, out_path)
-            _trim_trailing_partial_gop(out_path, duration)
-            return str(out_path), "copy"
-
-        k_next = _find_next_keyframe_after(keyframes, start_sec)
-        head_fraction = (k_next - start_sec) / duration if k_next is not None else 1.0
-
-        if is_hevc and not use_cuda:
-            i = bisect_right(keyframes, start_sec)
-            snap_kf = None
-            best_diff = float("inf")
-            for ci in (i - 1, i):
-                if 0 <= ci < len(keyframes):
-                    diff = abs(keyframes[ci] - start_sec)
-                    if diff < best_diff:
-                        best_diff = diff
-                        snap_kf = keyframes[ci]
-            if snap_kf is not None and best_diff <= HEVC_SNAP_MAX and snap_kf < end_sec:
-                _lossless_copy(input_file, snap_kf, end_sec, out_path)
-                _trim_trailing_partial_gop(out_path, end_sec - snap_kf)
-                return str(out_path), "snapped_copy"
-
-        can_smartcut = (
-            not is_hevc
-            and k_next is not None
-            and k_next < end_sec
-            and head_fraction < 0.9
-        )
-
-        if can_smartcut:
-            head_path = out_dir / f"_head_{scene_idx:04d}.mp4"
-            tail_path = out_dir / f"_tail_{scene_idx:04d}.mp4"
+    if duration >= MIN_COPY_DURATION:
+        k_prev = _preceding_keyframe(keyframes, start_sec)
+        if k_prev is not None and (start_sec - k_prev) <= MAX_PRE_ROLL:
             try:
-                _encode_segment(input_file, start_sec, k_next, head_path, use_cuda)
-                _lossless_copy(input_file, k_next, end_sec, tail_path, aac_audio=True)
-                _concat_two(head_path, tail_path, out_path, out_dir, scene_idx)
-            finally:
-                head_path.unlink(missing_ok=True)
-                tail_path.unlink(missing_ok=True)
-            _trim_trailing_partial_gop(out_path, duration)
-            return str(out_path), "smartcut"
-    except Exception as exc:
-        log(f"Scene {scene_idx}: fast copy failed ({exc}), re-encoding instead")
+                _lossless_copy(input_file, start_sec, end_sec, out_path)
+                if not patch_trailing_duration(out_path, duration):
+                    raise RuntimeError("copy's edit list wasn't in a patchable shape")
+                return str(out_path), "copy"
+            except Exception as exc:
+                log(f"Scene {scene_idx}: fast copy failed ({exc}), re-encoding instead")
 
     _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)
     return str(out_path), "reencode"
@@ -438,7 +240,7 @@ def cut_all_scenes(
             :func:`~amverge.core.keyframe_align.get_keyframe_timestamps_pyav`.
         out_dir: Directory for output clips.
         use_cuda: Enable NVENC GPU encode for re-encode fallback.
-        is_hevc: Source video codec. Enables HEVC snapped-copy path.
+        is_hevc: Accepted for API compatibility; see :func:`cut_scene`.
         max_workers: Thread pool size. Phase 1 uses 8, Phase 2 uses 2.
         on_ready: Called per completed scene with
             ``{"scene_index": int, "clip_path": str, "clip_mode": str}``.

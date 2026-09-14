@@ -13,29 +13,34 @@ THUMB_WIDTH = 960
 THUMB_QUALITY = 95
 
 
-def make_thumbnail(clip_path: str, thumb_path: str, first_keyframe: bool = True) -> bool:
+def make_thumbnail(clip_path: str, thumb_path: str) -> bool:
     """Generate a JPEG thumbnail from a video clip.
 
-    Decodes one frame, resizes to ``THUMB_WIDTH`` (960px) preserving aspect
-    ratio, and saves as a progressive JPEG.
+    Decodes the clip's first displayed frame, resizes to ``THUMB_WIDTH``
+    (960px) preserving aspect ratio, and saves as a progressive JPEG.
+
+    Always a plain decode from the start -- no keyframe-skipping fast path.
+    A *copy* clip's on-disk frame 0 is frequently hidden pre-roll rather than
+    the scene's true first frame (see ``cutting.smart_cut``'s module docs);
+    skipping straight to a keyframe would grab a frame from that hidden
+    region -- often the *previous* scene's content -- instead of the poster
+    the clip is actually supposed to show. A plain decode is edit-list-aware
+    (verified: PyAV's default demux correctly reports the first *displayed*
+    frame as index 0, already skipping any discard-flagged pre-roll), so it
+    gets the right frame for both copy and re-encoded clips alike, and it
+    costs nothing extra here since only one frame is ever decoded before
+    returning.
 
     Args:
         clip_path: Path to the source video clip (any FFmpeg-supported format).
         thumb_path: Output path for the thumbnail JPEG.
-        first_keyframe: When True (lossless *copy* clips, which can start
-            mid-GOP), skip to the first keyframe — fast, and avoids decoding a
-            long run of predicted frames. When False (*re-encoded* clips, whose
-            frame 0 is already an IDR at the exact scene start), decode the first
-            frame so the poster is the true opening frame of the scene.
 
     Returns:
         True if a thumbnail was written, False otherwise (no video stream,
         decode error, etc.).
 
     Example:
-        >>> make_thumbnail("scene_0001.mp4", "scene_0001.jpg")  # copy clip
-        True
-        >>> make_thumbnail("scene_0004.mp4", "scene_0004.jpg", first_keyframe=False)
+        >>> make_thumbnail("scene_0001.mp4", "scene_0001.jpg")
         True
     """
     def _save(image) -> None:
@@ -47,28 +52,13 @@ def make_thumbnail(clip_path: str, thumb_path: str, first_keyframe: bool = True)
         )
 
     try:
-        # Primary pass: keyframe-only for copy clips, full decode for re-encodes.
         with av.open(clip_path) as container:
             if not container.streams.video:
                 return False
             stream = container.streams.video[0]
-            if first_keyframe:
-                stream.codec_context.skip_frame = "NONKEY"
-
-        with av.open(clip_path) as container:
-            stream = container.streams.video[0]
             for frame in container.decode(stream):
                 _save(frame.to_image())
                 return True
-
-        # Fallback: if the keyframe-only pass decoded nothing, then decode the first frame.
-        if first_keyframe:
-            with av.open(clip_path) as container:
-                stream = container.streams.video[0]
-                for frame in container.decode(stream):
-                    _save(frame.to_image())
-                    return True
-
         return False
     except Exception:
         return False

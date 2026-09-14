@@ -148,8 +148,7 @@ class AmvergeVideo:
     ) -> tuple[str, str]:
         """Cut a time range from the video. Returns ``(path, mode)``.
 
-        Mode is one of ``"copy"``, ``"snapped_copy"``, ``"smartcut"``,
-        or ``"reencode"``.
+        Mode is ``"copy"`` (lossless, edit-list trimmed) or ``"reencode"``.
 
         Args:
             start: Start time in seconds.

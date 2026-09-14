@@ -36,7 +36,7 @@ def _materialize_one(
                 shutil.copy2(existing_thumb, dest_thumb)
                 thumb_ok = True
             else:
-                thumb_ok = make_thumbnail(str(dest_clip), str(dest_thumb), first_keyframe=True)
+                thumb_ok = make_thumbnail(str(dest_clip), str(dest_thumb))
 
             return {
                 "index": batch_index,
@@ -49,7 +49,7 @@ def _materialize_one(
         start_sec = float(item["start_sec"])
         end_sec = float(item["end_sec"])
 
-        cut_path, mode = cut_scene(
+        cut_path, _mode = cut_scene(
             Path(source_path),
             start_sec,
             end_sec,
@@ -61,9 +61,7 @@ def _materialize_one(
         )
         Path(cut_path).replace(dest_clip)
 
-        thumb_ok = make_thumbnail(
-            str(dest_clip), str(dest_thumb), first_keyframe=(mode in ("copy", "snapped_copy"))
-        )
+        thumb_ok = make_thumbnail(str(dest_clip), str(dest_thumb))
 
         return {
             "index": batch_index,

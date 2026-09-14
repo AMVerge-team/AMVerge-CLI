@@ -85,17 +85,15 @@ classify scenes by keyframe alignment
       ↓
 Phase 1: lossless copy (keyframe-aligned scenes, max_workers=8)
       ↓
-Phase 2: smartcut or re-encode (non-aligned scenes, max_workers=2)
+Phase 2: copy or re-encode (non-aligned scenes, max_workers=2)
 ```
 
 **Cut modes:**
 
 | mode | when | method |
 |------|------|--------|
-| `copy` | scene starts on a keyframe | lossless stream copy |
-| `smartcut` | H.264, next keyframe within 90% of scene | encode tiny head + lossless tail, concat |
-| `snapped_copy` | HEVC CPU, nearest keyframe within 5s | lossless copy from snapped keyframe |
-| `reencode` | fallback | full re-encode with NVENC (GPU) or libx264/libx265 (CPU) |
+| `copy` | a keyframe within `MAX_PRE_ROLL` seconds precedes the scene start | lossless stream copy, backward-snapped to that keyframe; the container's own edit list hides the pre-roll and trims the tail -- see `cutting.smart_cut`/`cutting.editlist`. Same path for H.264 and HEVC. |
+| `reencode` | no keyframe close enough behind the start (or the scene is under `MIN_COPY_DURATION`) | full re-encode with NVENC (GPU) or libx264/libx265 (CPU) |
 
 **Pros:**
 

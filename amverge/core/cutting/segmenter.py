@@ -11,7 +11,7 @@ from typing import Any, Callable
 from ..infra.binaries import get_ffmpeg
 from ..infra.ipc import log
 from ..video.probe_utils import probe_video_duration
-from .smart_cut import _trim_trailing_partial_gop
+from .editlist import patch_trailing_duration
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -35,16 +35,20 @@ def _segment_boundaries(cut_points: list[float], total_duration: float) -> list[
 
 
 def _trim_segment(path: str, duration_sec: float) -> None:
-    """Drop trailing frames a segment-muxer split dragged in from the next
-    scene (same GOP-boundary issue :func:`smart_cut.cut_scene` guards
-    against -- the segment muxer has no keyframe-alignment awareness at all,
-    so every split here is exposed to it). Best-effort: a probe/remux hiccup
-    leaves the untrimmed segment rather than failing the whole cut.
+    """Hide trailing content a segment-muxer split dragged in from the next
+    scene (the segment muxer has no keyframe-alignment awareness at all, so
+    every split overshoots to wherever it can next stop cleanly -- same
+    reason :func:`smart_cut.cut_scene` needs this for its own copies).
+    Rewrites the segment's own edit list rather than dropping packets, so
+    it's exposed to none of the decode/display-order hazards a raw
+    packet-count truncation would be (see :func:`editlist.patch_trailing_duration`).
+    Best-effort: an unrecognized box shape leaves the segment as ffmpeg
+    produced it rather than failing the whole cut.
     """
     if duration_sec is None or duration_sec <= 0:
         return
     try:
-        _trim_trailing_partial_gop(Path(path), duration_sec)
+        patch_trailing_duration(Path(path), duration_sec)
     except Exception:
         pass
 
