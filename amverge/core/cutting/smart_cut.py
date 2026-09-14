@@ -91,6 +91,8 @@ def _lossless_copy(input_file: Path, start: float, end: float, out_path: Path) -
 
 
 def _is_10bit(path: Path) -> bool:
+    """Whether the video stream's pixel format carries more than 8 bits per
+    channel (ProRes, HEVC Main10, most lossless/intermediate codecs)."""
     try:
         out = subprocess.run(
             [

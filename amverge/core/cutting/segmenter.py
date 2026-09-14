@@ -117,8 +117,10 @@ def run_ffmpeg_segment(
 ) -> None:
     """Cut a video at specified timestamps using FFmpeg segment muxer.
 
-    Uses stream copy (no re-encode) with AAC audio. Chunks into 1500-cut
-    batches to stay under the Windows 32,767-char command line limit.
+    Uses stream copy (no re-encode) with AAC audio, falling back to a full
+    re-encode if the copy fails (a codec the container has no tag for, e.g.
+    ProRes or HuffYUV stream-copied into MP4). Chunks into 1500-cut batches
+    to stay under the Windows 32,767-char command line limit.
 
     The segment muxer has no keyframe-alignment awareness -- any split that
     doesn't land on a keyframe can drag a few trailing frames from the next
@@ -258,7 +260,7 @@ def run_ffmpeg_segment_streaming(
     :func:`run_ffmpeg_segment`) before this fires, so callers always see the
     corrected file. ``on_progress(fraction)`` fires from ffmpeg's
     ``-progress`` stream. Identical ffmpeg arguments and output to the
-    non-streaming variant.
+    non-streaming variant, including the stream-copy-then-reencode fallback.
     """
     ff = ffmpeg or get_ffmpeg()
     duration = total_duration if total_duration is not None else probe_video_duration(video_path)
