@@ -69,6 +69,23 @@ def _lossless_copy(
     ])
 
 
+def _is_10bit(path: Path) -> bool:
+    """Whether the video stream's pixel format carries more than 8 bits per
+    channel (ProRes, HEVC Main10, most lossless/intermediate codecs)."""
+    try:
+        out = subprocess.run(
+            [
+                get_ffprobe(), "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=pix_fmt", "-of", "default=nk=1:nw=1", str(path),
+            ],
+            capture_output=True, text=True, **_background_kwargs(),
+        ).stdout
+    except Exception:
+        return False
+    pix_fmt = (out or "").strip().lower()
+    return pix_fmt.endswith(("10le", "10be", "12le", "12be", "14le", "14be", "16le", "16be"))
+
+
 def _video_keyframe_layout(path: Path) -> tuple[int, list[int]]:
     """Return ``(packet_count, keyframe_packet_indexes)`` for the video stream."""
     import json
@@ -222,23 +239,27 @@ def _encode_segment(
     pre_seek = max(0.0, start - PRE_SEEK_OFFSET)
     post_seek = start - pre_seek
     duration = end - start
+    ten_bit = _is_10bit(input_file)
 
     def _build_cmd(gpu: bool) -> list[str]:
         if gpu:
             enc = ["-c:v", "h264_nvenc", "-preset", "p1", "-rc", "vbr", "-cq", "16", "-b:v", "0"]
+        elif ten_bit:
+            enc = ["-c:v", "libx264", "-profile:v", "high10", "-preset", "ultrafast", "-crf", "16"]
         else:
             enc = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16"]
+        pix_fmt = "yuv420p10le" if (ten_bit and not gpu) else "yuv420p"
         c = [get_ffmpeg(), "-y"]
         if pre_seek > 0.0:
             c += ["-ss", f"{pre_seek:.3f}"]
         c += ["-i", str(input_file)]
         c += ["-ss", f"{post_seek:.3f}", "-t", f"{duration:.3f}"]
-        c += ["-map", "0:v:0", "-map", "0:a?", "-pix_fmt", "yuv420p"]
+        c += ["-map", "0:v:0", "-map", "0:a?", "-pix_fmt", pix_fmt]
         c += enc
         c += ["-c:a", "aac", "-b:a", "128k", str(out_path)]
         return c
 
-    if use_cuda:
+    if use_cuda and not ten_bit:
         try:
             _run_ffmpeg(_build_cmd(gpu=True))
             return
