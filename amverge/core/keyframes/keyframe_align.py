@@ -6,6 +6,19 @@ Extracts keyframe timestamps via PyAV packet demux (no frame decode) and
 classifies scenes by whether their boundaries align with a keyframe. This
 determines which scenes can use lossless copy vs. need re-encoding.
 
+.. warning::
+    Do not set ``stream.discard`` on the demuxed stream, however tempting the
+    "skip non-key packets" framing looks. On B-frame streams it corrupts the
+    ``pts`` PyAV reports for the packets it does keep -- confirmed against
+    ffprobe ground truth off by whole frames in either direction (a keyframe
+    at the true 2.100s came back as 2.07, one at 1.500s as 1.57). Downstream,
+    ``smart_cut.cut_scene`` trusts this list to name the exact keyframe a
+    stream-copy tail seek should land on; an undercut value sends ffmpeg's
+    backward-snapping ``-ss`` to the *previous* real keyframe instead,
+    silently dragging the prior scene's frames into the cut. See the
+    ``02_forward_match_bleed_BUG`` / ``06_head_forward_match_bleed_BUG``
+    fixtures in ``examples/cutting/synthetic/fixtures``.
+
 Usage:
     >>> from amverge.core.keyframes.keyframe_align import (
     ...     get_keyframe_timestamps_pyav,
@@ -25,12 +38,16 @@ import av
 def get_keyframe_timestamps_pyav(video_path: str) -> list[float]:
     """Extract keyframe timestamps using PyAV packet demux.
 
-    Uses ``stream.discard = nonkey`` to skip non-keyframe packets at the
-    demux level - no frame decoding occurs. Returns deduplicated, sorted
-    timestamps in seconds rounded to 2 decimal places.
+    Demuxes every packet (no frame decode occurs either way -- decode only
+    happens on ``.decode()``, never on plain iteration) and keeps the ones
+    flagged as keyframes. Returns deduplicated, sorted timestamps in seconds
+    rounded to 2 decimal places.
 
-    Uses ``av.Discard.nonkey`` enum (PyAV 17.x) with fallback to older
-    ``"NONKEY"`` string for backward compatibility.
+    Deliberately does NOT set ``stream.discard`` to skip non-key packets:
+    that corrupts the ``pts`` PyAV reports for the packets it keeps on
+    B-frame streams (see the module warning above). Demuxing everything is
+    still cheap -- it is header/index parsing, not decoding -- and it is the
+    only way to get timestamps that agree with ffprobe.
 
     Args:
         video_path: Path to the source video file.
@@ -45,10 +62,6 @@ def get_keyframe_timestamps_pyav(video_path: str) -> list[float]:
     keyframe_times: list[float] = []
     with av.open(video_path) as container:
         stream = container.streams.video[0]
-        try:
-            stream.discard = type(stream.discard).nonkey
-        except (AttributeError, KeyError):
-            pass
         for packet in container.demux(stream):
             if not packet.is_keyframe:
                 continue
