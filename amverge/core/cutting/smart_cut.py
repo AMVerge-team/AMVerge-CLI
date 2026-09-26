@@ -33,6 +33,7 @@ import os
 import subprocess
 from bisect import bisect_left, bisect_right
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from fractions import Fraction
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -63,7 +64,8 @@ def _run_ffmpeg(cmd: list[str]) -> None:
 
 
 def snap_range_to_keyframes(
-    keyframes: list[float], start_sec: float, end_sec: float, tolerance: float = 1e-6
+    keyframes: list[float], start_sec: float, end_sec: float, tolerance: float = 1e-6,
+    rate: Fraction | None = None,
 ) -> tuple[float, float | None]:
     """Widen ``[start_sec, end_sec)`` outward to its enclosing keyframes.
 
@@ -81,8 +83,16 @@ def snap_range_to_keyframes(
     A keyframe within ``tolerance`` seconds of a boundary counts as that
     boundary, so float noise between a frame time computed as
     ``frame / fps`` and one read as ``pts * time_base`` cannot push the
-    snap out to the next keyframe.
+    snap out to the next keyframe. Pass the source's ``rate`` to widen that
+    to half a frame: containers that store pts on a coarse timescale (1/1000
+    is common after an MKV remux) keep a 24000/1001 keyframe up to 0.5 ms off
+    its ideal frame time, and a 1 us tolerance then snapped a scene that
+    starts exactly on a keyframe back to the previous one. No two frames are
+    closer than one frame apart, so a keyframe within half a frame of a
+    boundary can only be the boundary frame itself.
     """
+    if rate:
+        tolerance = max(tolerance, float(Fraction(1, 2) / rate))
     if not keyframes:
         raise ValueError("Cannot stream-copy a scene without keyframe timestamps")
 
@@ -268,6 +278,42 @@ def _lossless_copy(input_file: Path, start: float, end: float | None, out_path: 
         raise
 
 
+def copy_range(
+    input_file: Path,
+    start_sec: float,
+    end_sec: float,
+    out_path: Path,
+    keyframes: list[float],
+    rate: Fraction | None = None,
+) -> float:
+    """Stream-copy ``[start_sec, end_sec)`` widened outward to its enclosing
+    keyframes. The only copy-mode cut: :func:`cut_scene` and
+    ``export.engine._smartcut_ranges`` both go through it, so a boundary
+    fix lands in both at once.
+
+    The range is first mapped onto the source's frame grid (recovering the
+    intended frame from millisecond-rounded export times), then snapped to
+    keyframes with a half-frame tolerance, then remuxed by
+    :func:`_lossless_copy`. ``rate`` is probed when not given; pass it when
+    cutting many ranges from one source.
+
+    Returns how far into the clip the requested start sits, in whole frames
+    when the rate is known -- 0.0 when the range already started on a
+    keyframe.
+    """
+    if rate is None:
+        rate = probe_video_rate(input_file)
+    frames = frame_grid_range(start_sec, end_sec, rate)
+    if frames:
+        start_sec, end_sec = float(frames[0] / rate), float(frames[1] / rate)
+    clip_start, clip_end = snap_range_to_keyframes(keyframes, start_sec, end_sec, rate=rate)
+    _lossless_copy(Path(input_file), clip_start, clip_end, Path(out_path))
+    offset = start_sec - clip_start
+    if rate:
+        offset = float(round(offset * rate) / rate)
+    return offset
+
+
 def _is_10bit(path: Path) -> bool:
     """Whether the video stream's pixel format carries more than 8 bits per
     channel (ProRes, HEVC Main10, most lossless/intermediate codecs)."""
@@ -383,9 +429,8 @@ def cut_scene(
 
     if mode == "copy":
         out_path = out_path.with_suffix(copy_container_suffix(input_file))
-        clip_start, clip_end = snap_range_to_keyframes(keyframes, start_sec, end_sec)
-        _lossless_copy(input_file, clip_start, clip_end, out_path)
-        return str(out_path), "copy", start_sec - clip_start
+        offset = copy_range(input_file, start_sec, end_sec, out_path, keyframes)
+        return str(out_path), "copy", offset
     elif mode == "reencode":
         _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)
         return str(out_path), "reencode", 0.0

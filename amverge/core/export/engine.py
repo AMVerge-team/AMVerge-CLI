@@ -410,11 +410,12 @@ def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool) -> list
     together. Independent (non-merge) exports leave it unset -- each scene
     is meant to stand alone, bleed and all.
     """
-    from ..cutting.smart_cut import copy_container_suffix, snap_range_to_keyframes, _lossless_copy
+    from ..cutting.smart_cut import copy_container_suffix, copy_range
     from ..keyframes.keyframe_align import get_keyframe_timestamps_pyav
 
     kf_cache: dict = {}
     suffix_cache: dict = {}
+    rate_cache: dict = {}
     out: list[ExportJob] = []
     groups = _contiguous_range_groups(jobs) if dedupe else [[job] for job in jobs]
     for group in groups:
@@ -426,16 +427,12 @@ def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool) -> list
         if src not in kf_cache:
             kf_cache[src] = get_keyframe_timestamps_pyav(src)
             suffix_cache[src] = copy_container_suffix(Path(src))
+            rate_cache[src] = probe_video_rate(src)
         last = group[-1]
         start = job.seek_ms / 1000.0
         end = (last.seek_ms + (last.dur_ms or 0)) / 1000.0
-        rate = probe_video_rate(src)
-        frames = params.frame_grid_range(start, end, rate)
-        if frames:
-            start, end = float(frames[0] / rate), float(frames[1] / rate)
-        clip_start, clip_end = snap_range_to_keyframes(kf_cache[src], start, end)
         out_path = tmp_dir / f"range_{job.scene_index}{suffix_cache[src]}"
-        _lossless_copy(Path(src), clip_start, clip_end, out_path)
+        copy_range(Path(src), start, end, out_path, kf_cache[src], rate=rate_cache[src])
         out.append(ExportJob(scene_index=job.scene_index, input=str(out_path)))
     return out
 

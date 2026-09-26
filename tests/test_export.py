@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from amverge.core.cutting.smart_cut import cut_scene
+from amverge.core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
 from amverge.core.export import ExportJob, ExportSettings, export_scenes
 from amverge.core.export import params
 from tests.fixtures import BY_NAME, media_params
@@ -207,6 +208,34 @@ class TestCopyExport:
             assert numbers(out) == list(spec.copy_frames(*spec.scene_frames[idx])), f"scene {idx}"
             assert video_stream(out)["codec_name"] == source_codec
         assert all(e.endswith("|copy") for e in run_export.events)
+
+
+class TestCutAndExportParity:
+    """A single-scene cut and a one-scene export of the same range must give
+    the same frames. They share `smart_cut.copy_range` (copy) and the same
+    frame-cut args (reencode); this catches either path drifting off again."""
+
+    @pytest.mark.parametrize("spec", media_params())
+    def test_copy(self, media_files, tmp_path, spec):
+        path = media_files[spec.name]
+        keyframes = get_keyframe_timestamps_pyav(str(path))
+        for i, (start, end) in enumerate(spec.scene_secs):
+            clip, _, _ = cut_scene(path, start, end, i, tmp_path, keyframes, "copy")
+            (exported,) = run_export(
+                tmp_path / f"export_{i}", range_jobs(spec, path, [i]),
+                codec="copy", container=spec.container,
+            )
+            assert numbers(exported) == numbers(clip), f"scene {i}"
+
+    @pytest.mark.parametrize("spec", media_params("h264_24_cuts", "h264_2997_gop", "h264_23976_ms_pts"))
+    def test_reencode(self, media_files, tmp_path, spec):
+        path = media_files[spec.name]
+        for i, (start, end) in enumerate(spec.scene_secs):
+            clip, _, _ = cut_scene(path, start, end, i, tmp_path, [], "reencode")
+            (exported,) = run_export(
+                tmp_path / f"export_{i}", range_jobs(spec, path, [i]), codec="h264_high",
+            )
+            assert numbers(exported) == numbers(clip) == list(range(*spec.scene_frames[i])), f"scene {i}"
 
 
 class TestMerge:

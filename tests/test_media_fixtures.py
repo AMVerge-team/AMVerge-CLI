@@ -28,7 +28,10 @@ def test_stream_properties(media_files, spec):
     v = video_stream(path)
     assert v["codec_name"] == CODEC_NAMES[spec.codec]
     assert (v["width"], v["height"]) == (spec.width, spec.height)
-    assert Fraction(v["avg_frame_rate"]) == spec.rate
+    if spec.track_timescale:
+        assert float(Fraction(v["avg_frame_rate"])) == pytest.approx(float(spec.rate), rel=1e-3)
+    else:
+        assert Fraction(v["avg_frame_rate"]) == spec.rate
     assert int(v["nb_frames"]) == spec.total_frames
 
     audio = audio_streams(path)
@@ -43,7 +46,7 @@ def test_stream_properties(media_files, spec):
 
 @pytest.mark.parametrize("spec", media_params())
 def test_keyframe_layout(media_files, spec):
-    assert keyframe_times(media_files[spec.name]) == pytest.approx(spec.keyframe_secs, abs=1e-4)
+    assert keyframe_times(media_files[spec.name]) == pytest.approx(spec.keyframe_secs, abs=spec.pts_tolerance)
 
 
 @pytest.mark.parametrize("spec", media_params())

@@ -35,10 +35,18 @@ class MediaSpec:
     pix_fmt: str = "yuv420p"
     profile: str | None = None
     audio: tuple[AudioTrack, ...] = field(default_factory=tuple)
+    track_timescale: int | None = None
 
     @property
     def rate(self) -> Fraction:
         return Fraction(self.fps)
+
+    @property
+    def pts_tolerance(self) -> float:
+        """How far a stored timestamp can sit from its ideal frame time:
+        float noise normally, half a tick when the track's timescale rounds
+        pts (a 1/1000 timescale stores 24000/1001 frames up to 0.5 ms off)."""
+        return 0.5 / self.track_timescale + 1e-6 if self.track_timescale else 1e-4
 
     @property
     def total_frames(self) -> int:
@@ -126,6 +134,14 @@ FIXTURES: tuple[MediaSpec, ...] = (
         segments=(45, 90, 20, 75, 60),
         keyframes="gop", gop=30, bframes=3,
         audio=(AudioTrack("aac", channels=1, sample_rate=44100),),
+    ),
+    MediaSpec(
+        name="h264_23976_ms_pts",
+        codec="h264", width=640, height=360, fps="24000/1001",
+        segments=(40, 36, 80, 40),
+        keyframes="cuts", bframes=2,
+        audio=(STEREO_AAC,),
+        track_timescale=1000,
     ),
     MediaSpec(
         name="h264_25_sparse",

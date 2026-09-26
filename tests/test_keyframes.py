@@ -16,13 +16,13 @@ def test_pyav_keyframes_match_ffprobe(media_files, spec):
     path = str(media_files[spec.name])
     got = get_keyframe_timestamps_pyav(path)
     assert got == pytest.approx(keyframe_times(path), abs=1e-6)
-    assert got == pytest.approx(spec.keyframe_secs, abs=1e-4)
+    assert got == pytest.approx(spec.keyframe_secs, abs=spec.pts_tolerance)
 
 
 @pytest.mark.parametrize("spec", media_params())
 def test_generate_keyframes_matches_layout(media_files, spec):
     got = generate_keyframes(str(media_files[spec.name]))
-    assert got == pytest.approx(spec.keyframe_secs, abs=1e-4)
+    assert got == pytest.approx(spec.keyframe_secs, abs=spec.pts_tolerance)
 
 
 @pytest.mark.parametrize("spec", media_params())
@@ -32,7 +32,7 @@ def test_keyframe_cuts_respect_min_duration(media_files, spec, min_duration):
     kf = spec.keyframe_secs
     assert cuts == sorted(cuts)
     for c in cuts:
-        assert min(abs(c - k) for k in kf) < 1e-4
+        assert min(abs(c - k) for k in kf) < spec.pts_tolerance
     bounds = [0.0, *cuts]
     for a, b in zip(bounds, bounds[1:]):
         assert b - a >= min_duration - 1e-6

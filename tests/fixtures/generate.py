@@ -123,6 +123,8 @@ def build_command(spec: MediaSpec, out: Path, timecode: bool = True) -> list[str
     cmd += _video_encoder(spec) + _audio_encoder(spec)
     if spec.container == "mp4":
         cmd += ["-movflags", "+faststart"]
+    if spec.track_timescale:
+        cmd += ["-video_track_timescale", str(spec.track_timescale)]
     cmd.append(str(out))
     return cmd
 
