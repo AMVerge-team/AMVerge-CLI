@@ -38,24 +38,39 @@ def _parse_select(select: Optional[str], max_idx: int) -> set[int]:
 
 
 def _build_jobs(scenes: list[dict], video: Path) -> list[ExportJob]:
-    """Resolve each scene's export input: the pre-cut clip file when present,
-    else a [start, end] range cut from the source episode (webp mode)."""
+    """Resolve each scene's export input: the true [start, end] range against
+    the source episode whenever the manifest has one, else the pre-cut clip
+    file (a Scenepack's materialized clip, which carries no range of its
+    own).
+
+    Always preferring the source range, not just the pre-cut clip, keeps
+    export mode independent of how the preview was cut (see
+    ``cutting.smart_cut``): ``codec="copy"`` keyframe-snaps that range fresh
+    (``engine._smartcut_ranges``, deduplicated into one continuous span per
+    contiguous run for ``--merge``), and any other codec re-encodes it to
+    the exact boundary. A preview clip cut in ``copy`` mode is independently
+    keyframe-snapped and can carry a few frames of bleed from its neighbor;
+    reusing it directly for a re-encode export would bake that bleed into an
+    output that's supposed to be exact.
+    """
     jobs: list[ExportJob] = []
     for s in scenes:
         idx = s["scene_index"]
         clip_path = s.get("clip_path")
-        if clip_path and s.get("clip_mode") != "failed" and os.path.exists(clip_path):
-            jobs.append(ExportJob(scene_index=idx, input=clip_path))
-            continue
+        clip_ok = bool(clip_path) and s.get("clip_mode") != "failed" and os.path.exists(clip_path)
+
         start = s.get("start_sec")
         end = s.get("end_sec")
-        seek_ms = int(round(start * 1000)) if isinstance(start, (int, float)) else None
-        dur_ms = (
-            int(round((end - start) * 1000))
-            if isinstance(start, (int, float)) and isinstance(end, (int, float))
-            else None
-        )
-        jobs.append(ExportJob(scene_index=idx, input=str(video), seek_ms=seek_ms, dur_ms=dur_ms))
+        range_ok = isinstance(start, (int, float)) and isinstance(end, (int, float))
+
+        if range_ok:
+            seek_ms = int(round(start * 1000))
+            dur_ms = int(round((end - start) * 1000))
+            jobs.append(ExportJob(scene_index=idx, input=str(video), seek_ms=seek_ms, dur_ms=dur_ms))
+        elif clip_ok:
+            jobs.append(ExportJob(scene_index=idx, input=clip_path))
+        else:
+            jobs.append(ExportJob(scene_index=idx, input=str(video)))
     return jobs
 
 
@@ -85,10 +100,7 @@ def export(
         raise typer.Exit(1)
     if container in NO_EDIT_LIST_CONTAINERS:
         fail(
-            f"Container '{container}' isn't supported: the 'copy' export path relies on "
-            f"MP4/MOV edit lists to hide keyframe-misaligned cut padding, and "
-            f"'{container}' has no equivalent, so cuts can bleed extra frames. "
-            f"Use 'mp4' or 'mov'."
+            f"Container '{container}' isn't supported yet. Use 'mp4' or 'mov'."
         )
         raise typer.Exit(1)
     if container not in VALID_CONTAINERS:
@@ -147,6 +159,12 @@ def export(
         for s in all_scenes:
             if "scene_index" not in s and "index" in s:
                 s["scene_index"] = s["index"]
+            if "start_sec" not in s and "start" in s:
+                s["start_sec"] = s["start"]
+            if "end_sec" not in s and "end" in s:
+                s["end_sec"] = s["end"]
+            if "clip_path" not in s and "path" in s:
+                s["clip_path"] = s["path"]
         max_idx = max(s["scene_index"] for s in all_scenes)
         wanted = _parse_select(select, max_idx)
         selected = [s for s in all_scenes if s["scene_index"] in wanted]

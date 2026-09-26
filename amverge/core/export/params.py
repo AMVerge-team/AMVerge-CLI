@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 _CODEC_ALIASES = {
@@ -169,6 +171,78 @@ def stream_copy_bsf(source_video_codec: str | None, target_container: str) -> st
     return None
 
 
+# -- frame-accurate ranges ---------------------------------------------------
+
+GRID_TOLERANCE_SEC = 0.001
+
+
+def frame_grid_range(start_sec: float, end_sec: float, rate: Fraction | None) -> tuple[int, int] | None:
+    """``[start_sec, end_sec)`` as ``(first_frame, end_frame)`` on the
+    source's constant frame grid, or None when either boundary is more than
+    ``GRID_TOLERANCE_SEC`` off it (VFR source, or times not taken from
+    frames). Recovers the intended frame from millisecond-rounded times:
+    the rounding error is at most 0.5 ms, far below half a frame."""
+    if not rate or rate <= 0:
+        return None
+    first = round(Fraction(start_sec) * rate)
+    end = round(Fraction(end_sec) * rate)
+    if end <= first:
+        return None
+    for frame, sec in ((first, start_sec), (end, end_sec)):
+        if abs(float(frame / rate) - sec) > GRID_TOLERANCE_SEC:
+            return None
+    return first, end
+
+
+@dataclass(frozen=True)
+class FrameCut:
+    """ffmpeg pieces that select exactly frames ``[first, end)``.
+
+    ``input_args`` go before ``-i`` and ``output_args`` after it.
+    ``audio_filters(chain)`` wraps a re-encoded audio filter chain.
+
+    - Start: the input seek lands half a frame before ``first``, so rounding
+      in the seek time can never cross a frame boundary.
+    - Video length: a frame count (``-frames:v``). ``-t`` is not reliable
+      for this: its cutoff sits exactly on a frame edge, and depending on
+      frame rate and seek it keeps one frame too many or drops the last one.
+      The caller must also pin the output to ``-fps_mode cfr`` at the source
+      rate: under ffmpeg's default frame-rate mode, a ``setpts`` filter makes
+      ``-frames:v n`` write ``n - 1`` frames on some sources.
+    - Audio: seeking early starts it half a frame early, so the chain first
+      trims that off, then ends it with an exact ``atrim=duration``.
+    - ``-t`` stays only as a cap, half a frame past the end, for audio that
+      is stream-copied and so cannot be filtered.
+    """
+    input_args: list[str]
+    output_args: list[str]
+    audio_head: str | None
+    audio_tail: str
+
+    def audio_filters(self, chain: str) -> str:
+        return ",".join(f for f in (self.audio_head, chain, self.audio_tail) if f)
+
+
+def frame_cut_args(first: int, end: int, rate: Fraction) -> FrameCut:
+    half = Fraction(1, 2) / rate
+    duration = (end - first) / rate
+    input_args: list[str] = []
+    audio_head = None
+    if first > 0:
+        input_args = ["-ss", _sec_str(first / rate - half)]
+        audio_head = f"atrim=start={_sec_str(half)}"
+    return FrameCut(
+        input_args=input_args,
+        output_args=["-t", _sec_str(duration + half), "-frames:v", str(end - first)],
+        audio_head=audio_head,
+        audio_tail=f"atrim=duration={_sec_str(duration)}",
+    )
+
+
+def _sec_str(value: Fraction | float) -> str:
+    return f"{float(value):.9f}".rstrip("0").rstrip(".") or "0"
+
+
 # -- arg builders ----------------------------------------------------------
 
 def _time_str(ms: int) -> str:
@@ -257,22 +331,39 @@ def build_reencode_args(
     seek_ms: int | None = None, dur_ms: int | None = None,
     audio_track: int | None = None, audio_count: int | None = None,
     audio_single: bool = False,
+    frame_rate: str | None = None,
+    frames: tuple[int, int] | None = None,
+    grid_rate: str | None = None,
 ) -> list[str]:
-    """Re-encode the whole input (pre-cut clip) or a [seek, seek+dur] range."""
+    """Re-encode the whole input (pre-cut clip) or a [seek, seek+dur] range.
+
+    ``frames`` (see :func:`frame_grid_range`) replaces the millisecond range
+    with an exact frame selection built by :func:`frame_cut_args`, on the
+    input's own frame grid ``grid_rate`` (default ``frame_rate``)."""
     ext = Path(out).suffix.lstrip(".").lower()
     args = ["-y"]
-    if seek_ms and seek_ms > 0:
+    cut = None
+    grid = grid_rate or frame_rate
+    if frames and grid:
+        cut = frame_cut_args(*frames, Fraction(grid))
+        args += cut.input_args
+    elif seek_ms and seek_ms > 0:
         args += ["-ss", _time_str(seek_ms)]
     args += ["-i", inp, "-map", "0:v:0"]
     args += audio_map_args(audio, audio_track, audio_count, audio_single)
-    if dur_ms and dur_ms > 0:
+    if cut:
+        args += cut.output_args
+    elif dur_ms and dur_ms > 0:
         args += ["-t", _time_str(dur_ms)]
     args += ["-vf", "setpts=PTS-STARTPTS"]
     if audio not in ("none", "copy"):
         # aresample pins the first sample to 0 and fills or trims to keep audio
         # against video. Without it a segment whose audio starts a fraction late
         # keeps that offset, and concatenating segments accumulates the drift.
-        args += ["-af", "asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0"]
+        chain = "asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0"
+        args += ["-af", cut.audio_filters(chain) if cut else chain]
+    if frame_rate:
+        args += ["-r:v:0", frame_rate]
     args += video_encode_args(codec, use_gpu)
     args += audio_args(audio)
     args += disposition_args(audio, audio_track, audio_count, audio_single)

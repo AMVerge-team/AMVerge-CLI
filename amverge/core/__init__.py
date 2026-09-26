@@ -59,7 +59,6 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     'emit_progress': ('.infra.ipc', 'emit_progress'),
     'log': ('.infra.ipc', 'log'),
     # .keyframes.keyframe_align
-    'classify_scenes_by_keyframe_alignment': ('.keyframes.keyframe_align', 'classify_scenes_by_keyframe_alignment'),
     'get_keyframe_timestamps_pyav': ('.keyframes.keyframe_align', 'get_keyframe_timestamps_pyav'),
     # .keyframes
     'generate_keyframes': ('.keyframes', 'generate_keyframes'),
@@ -86,6 +85,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     # .cutting.smart_cut
     'cut_all_scenes': ('.cutting.smart_cut', 'cut_all_scenes'),
     'cut_scene': ('.cutting.smart_cut', 'cut_scene'),
+    'snap_range_to_keyframes': ('.cutting.smart_cut', 'snap_range_to_keyframes'),
     # .thumbnails
     'generate_thumbnails': ('.thumbnails', 'generate_thumbnails'),
     'make_thumbnail': ('.thumbnails', 'make_thumbnail'),
@@ -177,13 +177,13 @@ __all__ = [
     'check_if_hevc',
     'check_if_path_exists',
     'check_pair_similar',
-    'classify_scenes_by_keyframe_alignment',
     'codec',
     'collect_scenes',
     'convert_scenes_to_timestamps',
     'crop_image',
     'cut_all_scenes',
     'cut_scene',
+    'snap_range_to_keyframes',
     'cutting',
     'decode_and_detect_scenes',
     'decode_video_frames_nelux',

@@ -25,10 +25,10 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 - **Depth Maps** - per-frame monocular depth estimation via Depth-Anything-V2 (GPU/CPU)
 - **Deadframe Removal** - optical flow + ORB homography + motion-area analysis (OpenCV)
 - **Pipeline** - chain deadframes + upscale + interpolate, save/load presets, interactive or TUI
-- **Smart cut** - automatic lossless copy / smartcut / re-encode per scene
+- **Smart cut** - copy (true stream copy, snapped to keyframes) or full re-encode, your choice
 - **15 codec profiles** - H.264, HEVC, AV1, ProRes with hardware (NVENC) support
 - **10 audio codecs** - AAC, FLAC, Opus, PCM, MP3, pass-through
-- **3 container formats** - MP4, MKV, MOV (ProRes auto-enforces MOV)
+- **2 container formats** - MP4, MOV (ProRes auto-enforces MOV)
 - Auto-generated scene thumbnails (progressive JPEG)
 - Duplicate / similar scene detection (cosine similarity)
 - Scene export with full codec + audio + hardware selection
@@ -37,7 +37,7 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 - TransNetV2 scene cache (.npy) - skip re-detection on re-open
 - Discord Rich Presence (same app ID as AMVerge desktop)
 - Interactive wizard mode (`amverge` with no args)
-- Fully usable as a Python library - 52 names from `import amverge`
+- Fully usable as a Python library - 129 names from `import amverge`
 
 ---
 
@@ -102,9 +102,11 @@ amverge CLI  /  Python library
 Edge mode decodes frames and compares Canny edge maps.
 TransNetV2 runs a deep CNN on 48x27 RGB frames (GPU auto-detected, CPU fallback).
 
-**Cutting:** Scenes aligned to keyframes get lossless stream copy.
-Non-aligned scenes get smartcut (encode head + copy tail) or full re-encode.
-HEVC on CPU uses snapped-copy (nearest keyframe within 5s) to avoid slow re-encode.
+**Cutting:** One mode for the whole batch. `copy` is a true stream copy, widened
+outward to the nearest keyframe on each side - a clip can carry a little of the
+neighboring scene at its edges, but every frame is a real, unmodified copy of the
+source. `reencode` cuts the exact boundary at the cost of a real encode. Same path
+for H.264 and HEVC.
 
 **Upscaling:** Three methods. ML mode runs ShuffleCUGAN U-Net via PyTorch/spandrel. Anime4K applies GLSL shaders via FFmpeg libplacebo (no ML deps). ArtCNN infers ONNX models via onnxruntime. All cache weights to `%APPDATA%/amverge/`.
 
@@ -233,7 +235,7 @@ See the [examples README](examples/README.md) for the full directory map.
 | [Installation](docs/installation.md) | Requirements, FFmpeg setup, optional deps, dev install |
 | [CLI Reference](docs/cli-reference.md) | All commands, flags, and usage examples |
 | [Python Library](docs/library.md) | API reference, return types, low-level modules |
-| [Detection Methods](docs/detection-methods.md) | Keyframe vs edge vs TransNetV2, cut modes, tuning |
+| [Detection Methods](docs/detection-methods.md) | Keyframe vs edge vs TransNetV2, preview behavior, tuning |
 | [Examples](examples/) | 20 runnable Python scripts in 10 categories |
 | [Contributing](docs/contributing.md) | Project structure, guidelines, links |
 | [AI Setup](docs/ai-setup.md) | How to train AI tools to work like you, not generically |

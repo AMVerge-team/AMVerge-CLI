@@ -61,7 +61,6 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     # .core.keyframes
     'generate_keyframes': ('.core.keyframes', 'generate_keyframes'),
     # .core.keyframes.keyframe_align
-    'classify_scenes_by_keyframe_alignment': ('.core.keyframes.keyframe_align', 'classify_scenes_by_keyframe_alignment'),
     'get_keyframe_timestamps_pyav': ('.core.keyframes.keyframe_align', 'get_keyframe_timestamps_pyav'),
     # .core.detection.keyframe
     'detect_cuts_by_keyframe': ('.core.detection.keyframe', 'detect_cuts_by_keyframe'),
@@ -77,6 +76,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     # .core.cutting.smart_cut
     'cut_all_scenes': ('.core.cutting.smart_cut', 'cut_all_scenes'),
     'cut_scene': ('.core.cutting.smart_cut', 'cut_scene'),
+    'snap_range_to_keyframes': ('.core.cutting.smart_cut', 'snap_range_to_keyframes'),
     # .core.cutting.segmenter
     'collect_scenes': ('.core.cutting.segmenter', 'collect_scenes'),
     'run_ffmpeg_segment': ('.core.cutting.segmenter', 'run_ffmpeg_segment'),
@@ -277,14 +277,14 @@ __all__ = [
     "probe_video_duration", "probe_video_total_frames",
     # Keyframes
     "generate_keyframes",
-    "get_keyframe_timestamps_pyav", "classify_scenes_by_keyframe_alignment",
+    "get_keyframe_timestamps_pyav",
     # Scene detection V1
     "detect_cuts_by_keyframe", "detect_cuts_by_edge",
     # Scene detection V2
     "TRANSNET_AVAILABLE", "decode_and_detect_scenes",
     "decode_video_frames_nelux", "run_model_one_pass", "nelux_available",
     # Scene cutting
-    "cut_scene", "cut_all_scenes",
+    "cut_scene", "cut_all_scenes", "snap_range_to_keyframes",
     "run_ffmpeg_segment", "collect_scenes",
     # Scene utils
     "scenes_frames_to_seconds", "convert_scenes_to_timestamps",

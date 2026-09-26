@@ -19,7 +19,6 @@ from amverge import (
     SimilarityChecker,
     decode_and_detect_scenes,
     scenes_to_objects,
-    classify_scenes_by_keyframe_alignment,
     cut_all_scenes,
     get_gpu_info,
 )
@@ -56,18 +55,10 @@ cache = SceneCache(output_dir)
 cache.save(video.path, scenes_secs, scenes_frames)
 print(f"       cached to {output_dir}/\n")
 
-# Step 2: Classify scenes for cutting strategy
-print("[2/6] Classifying scenes by keyframe alignment...")
+# Step 2: Build scene objects
+print("[2/6] Building scene objects...")
 raw_scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
-scene_pairs = [(s["start_sec"], s["end_sec"]) for s in raw_scenes]
-copy_candidates, reencode_candidates = classify_scenes_by_keyframe_alignment(
-    scene_pairs, video.keyframes
-)
-copy_idx = {c["scene_id"] for c in copy_candidates}
-phase1 = [s for s in raw_scenes if s["scene_index"] in copy_idx]
-phase2 = [s for s in raw_scenes if s["scene_index"] not in copy_idx]
-print(f"       Phase 1 (lossless copy): {len(phase1)} scenes")
-print(f"       Phase 2 (re-encode):    {len(phase2)} scenes\n")
+print(f"       {len(raw_scenes)} scenes\n")
 
 # Step 3: Cut scenes
 print("[3/6] Cutting scenes...")
@@ -78,25 +69,14 @@ def on_clip_ready(result: dict) -> None:
     cut_by_idx[result["scene_index"]] = result
     print(f"       scene {result['scene_index']}: {result['clip_mode']}")
 
-if phase1:
-    print(f"       Phase 1: {len(phase1)} lossless copies...")
-    cut_all_scenes(
-        input_file=video.path, scenes=phase1, keyframes=video.keyframes,
-        out_dir=scenes_out_dir, use_cuda=(device == "cuda"),
-        is_hevc=video.is_hevc, max_workers=8, on_ready=on_clip_ready,
-    )
-
-if phase2:
-    print(f"       Phase 2: {len(phase2)} re-encodes...")
-    cut_all_scenes(
-        input_file=video.path, scenes=phase2, keyframes=video.keyframes,
-        out_dir=scenes_out_dir, use_cuda=(device == "cuda"),
-        is_hevc=video.is_hevc, max_workers=2, on_ready=on_clip_ready,
-        emit_progress_updates=False,
-    )
+cut_all_scenes(
+    input_file=video.path, scenes=raw_scenes, keyframes=video.keyframes,
+    out_dir=scenes_out_dir, mode="reencode", use_cuda=(device == "cuda"),
+    max_workers=2, on_ready=on_clip_ready,
+)
 print()
 
-# Step 4: Thumbnails
+# Step 4: Thumbnails - seek past any keyframe-snap bleed (copy mode only)
 print("[4/6] Generating thumbnails...")
 gen = ThumbnailGenerator(workers=4)
 scene_thumb_dicts = []
@@ -106,7 +86,7 @@ for s in raw_scenes:
     clip_path = cut.get("clip_path", "")
     thumb_path = output_dir / f"{video.stem}_{idx:04d}.jpg"
     if clip_path and Path(clip_path).exists():
-        gen.generate_one(clip_path, thumb_path)
+        gen.generate_one(clip_path, thumb_path, seek_sec=cut.get("poster_offset_sec") or 0.0)
     scene_thumb_dicts.append({
         "scene_index": idx,
         "thumbnail": str(thumb_path) if thumb_path.exists() else None,

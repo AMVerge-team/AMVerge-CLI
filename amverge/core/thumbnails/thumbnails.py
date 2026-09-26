@@ -13,27 +13,28 @@ THUMB_WIDTH = 960
 THUMB_QUALITY = 95
 
 
-def make_thumbnail(clip_path: str, thumb_path: str) -> bool:
+def make_thumbnail(clip_path: str, thumb_path: str, seek_sec: float = 0.0) -> bool:
     """Generate a JPEG thumbnail from a video clip.
 
-    Decodes the clip's first displayed frame, resizes to ``THUMB_WIDTH``
-    (960px) preserving aspect ratio, and saves as a progressive JPEG.
+    Decodes the frame at ``seek_sec`` into the clip, resizes to
+    ``THUMB_WIDTH`` (960px) preserving aspect ratio, and saves as a
+    progressive JPEG.
 
-    Always a plain decode from the start -- no keyframe-skipping fast path.
-    A *copy* clip's on-disk frame 0 is frequently hidden pre-roll rather than
-    the scene's true first frame (see ``cutting.smart_cut``'s module docs);
-    skipping straight to a keyframe would grab a frame from that hidden
-    region -- often the *previous* scene's content -- instead of the poster
-    the clip is actually supposed to show. A plain decode is edit-list-aware
-    (verified: PyAV's default demux correctly reports the first *displayed*
-    frame as index 0, already skipping any discard-flagged pre-roll), so it
-    gets the right frame for both copy and re-encoded clips alike, and it
-    costs nothing extra here since only one frame is ever decoded before
-    returning.
+    ``seek_sec`` matters because a copy-mode clip's frame 0 is not
+    necessarily the scene's true first frame: ``cutting.smart_cut`` widens
+    copy-mode cuts outward to the nearest enclosing keyframes, so the clip
+    can open with a stretch of bleed from the *previous* scene (see its
+    module docs). Callers pass ``cut_scene``'s own ``poster_offset_sec`` for
+    that clip so the poster shows the right content; 0.0 (the default) is
+    correct for re-encoded clips, which never have that bleed. When
+    ``seek_sec`` is 0, this is a plain decode from the start; otherwise it
+    seeks to the nearest keyframe at or before the target and decodes
+    forward to it, so the result is exact regardless of GOP structure.
 
     Args:
         clip_path: Path to the source video clip (any FFmpeg-supported format).
         thumb_path: Output path for the thumbnail JPEG.
+        seek_sec: How far into the clip the representative frame is.
 
     Returns:
         True if a thumbnail was written, False otherwise (no video stream,
@@ -56,7 +57,12 @@ def make_thumbnail(clip_path: str, thumb_path: str) -> bool:
             if not container.streams.video:
                 return False
             stream = container.streams.video[0]
+            if seek_sec > 0.0:
+                offset = int(seek_sec / stream.time_base)
+                container.seek(offset, stream=stream)
             for frame in container.decode(stream):
+                if seek_sec > 0.0 and frame.time is not None and frame.time < seek_sec:
+                    continue
                 _save(frame.to_image())
                 return True
         return False

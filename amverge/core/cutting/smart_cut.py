@@ -1,61 +1,49 @@
 from __future__ import annotations
 
-"""Smart scene cutting: lossless copy backed by the container's own edit
-list, re-encode as the fallback.
+"""Smart scene cutting: two modes, chosen once per job, not per scene.
 
-ffmpeg's own mp4/mov muxer already does almost everything this module needs
-whenever it stream-copies an off-keyframe range: given ``-ss start -i src -c
-copy``, it backward-snaps to the real preceding keyframe (the only place a
-stream copy can start), flags everything before the true start as
-decode-only (`discard`), and writes an edit list (`elst`) that tells any
-compliant reader to hide that pre-roll and begin display exactly at
-``start``. Verified directly against real playback in After Effects, and
-identically for H.264 and HEVC, mp4 and mov, with and without audio -- this
-is a general ISOBMFF/mov-muxer behavior, not a codec-specific trick.
+- ``copy``: a true, unmodified stream copy. AI-detected scene boundaries
+  rarely land on a keyframe (H.264/HEVC can only start decoding cleanly on
+  one), so a copy that started exactly at the detected cut would either be
+  undecodable or need something else -- an edit list, a partial-GOP
+  re-encode of the head, a concat splice -- to paper over the gap. Every one
+  of those turned out to have real, hard-to-fully-enumerate edge cases (see
+  git history: PTS corruption, B-frame-crossing trims, concat timestamp
+  splices, tail-overshoot). This mode sidesteps the problem instead of
+  solving it: it widens the copy outward to the nearest keyframe on both
+  ends -- backward at the start, forward at the end -- so the cut is never
+  anything but a plain packet remux of a keyframe-to-keyframe span (see
+  :func:`_lossless_copy`). The trade-off is visible and permanent: the clip can carry up to
+  one keyframe interval of the neighboring scene at either edge. Nothing is
+  ever dropped, mixed up, hidden behind metadata, or re-encoded -- every
+  frame in the output is a byte-exact copy of the source, playable in
+  anything that can open the source at all, including editors with no edit
+  list support.
+- ``reencode``: exact boundaries, at the cost of a real (if usually small)
+  re-encode.
 
-What it does *not* do is the same thing for the tail: asking for ``-t
-duration`` past a keyframe stream-copies a little further than requested (as
-far as decode dependencies require, typically a couple of frames -- never
-all the way to the next real keyframe, however far that is) and simply
-reports the wrong, overshot duration. `editlist.patch_trailing_duration`
-closes that gap by rewriting the edit list's own duration field in place, no
-different in kind from what ffmpeg already wrote for the head.
-
-Together these mean a scene can be cut losslessly -- no re-encoded frames,
-no concatenation, none of the decode/display-order splice hazards that come
-with re-encoding a head and stitching it to a copied tail -- for any
-off-keyframe boundary, provided the real preceding keyframe isn't so far
-back that copying (and hiding) all the frames in between stops being worth
-it. That is a size/seek-latency trade-off (`MAX_PRE_ROLL`), not a
-correctness one: past it, re-encoding is simply cheaper, not more correct.
+Which mode to use is the caller's choice, made once for the whole job --
+this module does not guess per scene. An earlier version tried to have it
+both ways (copy when cheap, re-encode when not, snapped or trimmed as
+needed) and kept surfacing new correctness edge cases as a result; two
+plain, well-understood modes replace it.
 """
 
 import os
 import subprocess
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
+from ..export.params import frame_cut_args, frame_grid_range
 from ..infra.binaries import get_ffmpeg, get_ffprobe
+from ..video.probe_utils import probe_video_rate
 from ..infra.ipc import emit_progress, log
-from .editlist import patch_trailing_duration
+
+CutMode = Literal["copy", "reencode"]
 
 PRE_SEEK_OFFSET = 10.0
-
-# How far back the real preceding keyframe may sit before a lossless copy
-# stops being worth it. Past this, a compliant player has to decode that
-# many seconds of hidden, never-displayed pre-roll before it can show or
-# seek to the scene's first visible frame, and the file carries those bytes
-# for no visible benefit. Re-encoding avoids both at a cost that no longer
-# looks large by comparison. Tunable; not a correctness boundary.
-MAX_PRE_ROLL = 5.0
-
-# Scenes shorter than this always re-encode. Nothing below is incorrect --
-# the discard/edit-list mechanism doesn't care how short the visible slice
-# is -- but at a few frames long, re-encoding is instant, and it avoids a
-# clip that's almost entirely hidden pre-roll for a sliver of real content.
-MIN_COPY_DURATION = 0.5
 
 
 def _background_kwargs() -> dict:
@@ -74,20 +62,210 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         raise RuntimeError(f"ffmpeg failed (exit {p.returncode}): {p.stderr[-600:]}")
 
 
-def _lossless_copy(input_file: Path, start: float, end: float, out_path: Path) -> None:
-    """Stream-copy ``[start, end)``. See module docstring for why this is
-    trusted to be frame-accurate without any further re-encoding or trimming
-    of the video/audio bitstreams themselves."""
-    _run_ffmpeg([
-        get_ffmpeg(), "-y",
-        "-ss", f"{start:.3f}",
-        "-i", str(input_file),
-        "-t", f"{end - start:.3f}",
-        "-map", "0:v:0", "-map", "0:a?",
-        "-c:v", "copy", "-c:a", "copy",
-        "-movflags", "+faststart",
-        str(out_path),
-    ])
+def snap_range_to_keyframes(
+    keyframes: list[float], start_sec: float, end_sec: float, tolerance: float = 1e-6
+) -> tuple[float, float | None]:
+    """Widen ``[start_sec, end_sec)`` outward to its enclosing keyframes.
+
+    ``clip_start`` is the last keyframe at or before ``start_sec``;
+    ``clip_end`` is the first keyframe at or after ``end_sec``, or ``None``
+    if ``end_sec`` is past every known keyframe (the scene runs to the end
+    of the file -- the caller should copy through EOF rather than pass an
+    explicit ``-t``).
+
+    An already-aligned boundary comes back unchanged, since the enclosing
+    keyframe in that case *is* the boundary itself -- callers don't need to
+    special-case "already on a keyframe" separately from "snap to the
+    nearest one".
+
+    A keyframe within ``tolerance`` seconds of a boundary counts as that
+    boundary, so float noise between a frame time computed as
+    ``frame / fps`` and one read as ``pts * time_base`` cannot push the
+    snap out to the next keyframe.
+    """
+    if not keyframes:
+        raise ValueError("Cannot stream-copy a scene without keyframe timestamps")
+
+    i = bisect_right(keyframes, start_sec + tolerance)
+    if i == 0:
+        raise ValueError(
+            f"No keyframe at or before scene start {start_sec:.9f}s; cannot snap outward"
+        )
+    clip_start = keyframes[i - 1]
+
+    j = bisect_left(keyframes, end_sec - tolerance)
+    clip_end = keyframes[j] if j < len(keyframes) else None
+
+    return clip_start, clip_end
+
+
+_TS_EPSILON = 1e-6
+
+
+def copy_container_suffix(input_file: Path) -> str:
+    """File suffix a copy-mode clip of ``input_file`` must use: ``".mp4"``
+    when every stream :func:`_lossless_copy` keeps can be muxed into MP4
+    as-is, ``".mov"`` otherwise (ProRes and other intermediate codecs MP4
+    has no tag for). Asks the muxer itself rather than keeping a codec list.
+    """
+    import io
+
+    import av
+
+    with av.open(str(input_file)) as src:
+        streams = [src.streams.video[0], *src.streams.audio]
+        try:
+            with av.open(io.BytesIO(), "w", format="mp4") as probe:
+                for stream in streams:
+                    probe.add_stream_from_template(stream)
+        except ValueError:
+            return ".mov"
+    return ".mp4"
+
+
+def _lossless_copy(input_file: Path, start: float, end: float | None, out_path: Path) -> None:
+    """Stream-copy the keyframe-to-keyframe span ``[start, end)`` verbatim by
+    remuxing packets with PyAV. Callers pass keyframe-aligned boundaries
+    (see :func:`snap_range_to_keyframes`); ``end=None`` copies through EOF.
+
+    The span is cut in decode (file) order, not by a duration limit. A plain
+    ``ffmpeg -t`` stream copy compares each packet's *dts* against the limit,
+    and on B-frame sources the end keyframe and the reference frames right
+    after it still have a dts under the limit -- so the clip used to end with
+    a few frames of the next scene, with the B-frames between them missing.
+    On a closed GOP everything stored before the end keyframe displays before
+    it and everything after displays after it, so stopping at that packet is
+    exact.
+
+    Open GOP (x265's default, common in anime encodes) stores *leading*
+    pictures right after the keyframe that display before it but can only be
+    decoded from it. Dropping them would lose the last frames of the scene,
+    so when they are present the end keyframe and its leading pictures are
+    kept: the clip then ends with exactly one frame of the next scene (the
+    keyframe itself), consistent with this mode's documented edge bleed. At
+    the start, leading pictures of the start keyframe are undecodable without
+    the previous GOP and display before ``start``, so they are dropped.
+
+    Stream metadata (language tags, handler names) and dispositions are
+    carried over, as ``ffmpeg -c copy`` did. Video pts/dts and audio are rebased so the start keyframe is at 0, the
+    same timeline an ``ffmpeg -ss X -c copy`` produced. Audio packets are
+    kept when they overlap ``[start, end)``, so the packet straddling the
+    start (and the AAC priming packet at the head of a file) survive with a
+    slightly negative pts, as they did under ffmpeg.
+    """
+    import av
+
+    try:
+        with av.open(str(input_file)) as src, av.open(
+            str(out_path), "w", container_options={"movflags": "+faststart"}
+        ) as dst:
+            video = src.streams.video[0]
+            audio = list(src.streams.audio)
+            out_streams = {}
+            for stream in (video, *audio):
+                out = dst.add_stream_from_template(stream)
+                out.metadata.update(stream.metadata)
+                out.disposition = stream.disposition
+                out_streams[stream.index] = out
+            dst.metadata.update({
+                k: v for k, v in src.metadata.items()
+                if k not in ("major_brand", "minor_version", "compatible_brands")
+            })
+
+            def seconds(ts: int | None, tb) -> float | None:
+                return None if ts is None else float(ts * tb)
+
+            src.seek(int(start / video.time_base), stream=video, backward=True, any_frame=False)
+
+            base: dict[int, int] = {}
+            base_sec = None
+            started = False
+            video_done = False
+            held: list = []
+            pending_audio: list = []
+            audio_done = {s.index: False for s in audio}
+
+            def write(packet) -> None:
+                offset = base[packet.stream.index]
+                if packet.pts is not None:
+                    packet.pts -= offset
+                if packet.dts is not None:
+                    packet.dts -= offset
+                packet.stream = out_streams[packet.stream.index]
+                dst.mux(packet)
+
+            def write_audio(packet) -> bool:
+                t = seconds(packet.pts if packet.pts is not None else packet.dts, packet.time_base)
+                if end is not None and t >= end - _TS_EPSILON:
+                    audio_done[packet.stream.index] = True
+                    return False
+                t_end = t + seconds(packet.duration or 0, packet.time_base)
+                if t_end >= float(base_sec) - _TS_EPSILON:
+                    write(packet)
+                return True
+
+            def set_base(key_packet) -> None:
+                nonlocal base_sec
+                base_sec = key_packet.pts * video.time_base
+                base[video.index] = key_packet.pts
+                for s in audio:
+                    base[s.index] = round(base_sec / s.time_base)
+
+            for packet in src.demux(video, *audio):
+                if packet.dts is None and packet.pts is None:
+                    continue
+
+                if packet.stream.index == video.index:
+                    if video_done:
+                        if all(audio_done.values()):
+                            break
+                        continue
+                    t = seconds(packet.pts, video.time_base)
+                    if not started:
+                        if packet.is_keyframe and t is not None and t >= start - _TS_EPSILON:
+                            started = True
+                            set_base(packet)
+                            write(packet)
+                            for p in pending_audio:
+                                write_audio(p)
+                            pending_audio = []
+                        continue
+                    if held:
+                        if t is not None and t < end - _TS_EPSILON:
+                            held.append(packet)
+                            continue
+                        if len(held) > 1:
+                            for p in held:
+                                write(p)
+                        held = []
+                        video_done = True
+                        continue
+                    if end is not None and packet.is_keyframe and t is not None and t >= end - _TS_EPSILON:
+                        held = [packet]
+                        continue
+                    if t is not None and t < start - _TS_EPSILON:
+                        continue
+                    write(packet)
+                    continue
+
+                if not started:
+                    pending_audio.append(packet)
+                    continue
+                if not write_audio(packet) and video_done and all(audio_done.values()):
+                    break
+
+            if len(held) > 1:
+                for p in held:
+                    write(p)
+
+            if not started:
+                raise RuntimeError(f"No keyframe at or after {start:.6f}s in {input_file}")
+    except Exception:
+        try:
+            out_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _is_10bit(path: Path) -> bool:
@@ -107,24 +285,26 @@ def _is_10bit(path: Path) -> bool:
     return pix_fmt.endswith(("10le", "10be", "12le", "12be", "14le", "14be", "16le", "16be"))
 
 
-def _preceding_keyframe(keyframes: list[float], start_sec: float) -> float | None:
-    """The real keyframe a backward-snapping ``-ss`` will land on.
-
-    None only if ``start_sec`` is before every known keyframe -- shouldn't
-    happen in practice, since frame 0 of any file is always a keyframe, but
-    an empty or malformed ``keyframes`` list is handled the same as a
-    genuine miss: fall through to re-encode rather than guess.
-    """
-    i = bisect_right(keyframes, start_sec)
-    return keyframes[i - 1] if i > 0 else None
-
-
 def _encode_segment(
     input_file: Path, start: float, end: float, out_path: Path, use_cuda: bool
 ) -> None:
-    pre_seek = max(0.0, start - PRE_SEEK_OFFSET)
-    post_seek = start - pre_seek
-    duration = end - start
+    """Re-encode exactly the frames in ``[start, end)``. On a constant frame
+    grid the cut is a frame selection (see
+    :func:`~amverge.core.export.params.frame_cut_args`), immune to the float
+    rounding of ``start``/``end``; off-grid (VFR) it falls back to plain
+    time-based seeking."""
+    rate = probe_video_rate(input_file)
+    frames = frame_grid_range(start, end, rate)
+    if frames:
+        cut = frame_cut_args(*frames, rate)
+        in_args = cut.input_args
+        out_args = [*cut.output_args, "-r", f"{rate.numerator}/{rate.denominator}", "-fps_mode", "cfr"]
+        audio_chain = cut.audio_filters("asetpts=PTS-STARTPTS")
+    else:
+        pre_seek = max(0.0, start - PRE_SEEK_OFFSET)
+        in_args = ["-ss", f"{pre_seek:.9f}"] if pre_seek > 0.0 else []
+        out_args = ["-ss", f"{start - pre_seek:.9f}", "-t", f"{end - start:.9f}"]
+        audio_chain = "asetpts=PTS-STARTPTS"
     ten_bit = _is_10bit(input_file)
 
     def _build_cmd(gpu: bool) -> list[str]:
@@ -135,12 +315,9 @@ def _encode_segment(
         else:
             enc = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16"]
         pix_fmt = "yuv420p10le" if (ten_bit and not gpu) else "yuv420p"
-        c = [get_ffmpeg(), "-y"]
-        if pre_seek > 0.0:
-            c += ["-ss", f"{pre_seek:.3f}"]
-        c += ["-i", str(input_file)]
-        c += ["-ss", f"{post_seek:.3f}", "-t", f"{duration:.3f}"]
+        c = [get_ffmpeg(), "-y", *in_args, "-i", str(input_file), *out_args]
         c += ["-map", "0:v:0", "-map", "0:a?", "-pix_fmt", pix_fmt]
+        c += ["-vf", "setpts=PTS-STARTPTS", "-af", audio_chain]
         c += enc
         c += ["-c:a", "aac", "-b:a", "128k", str(out_path)]
         return c
@@ -161,60 +338,59 @@ def cut_scene(
     scene_idx: int,
     out_dir: Path,
     keyframes: list[float],
-    use_cuda: bool,
-    is_hevc: bool,
-) -> tuple[str, str]:
-    """Cut a single scene using the best available method.
-
-    Chooses cut mode automatically:
-    - ``copy`` when a preceding keyframe exists within ``MAX_PRE_ROLL``
-      seconds of ``start_sec``: a single lossless stream copy, frame-accurate
-      on both ends via the container's own edit list (see module docstring).
-    - ``reencode`` otherwise -- no keyframe close enough behind ``start_sec``
-      to make a lossless copy worthwhile, the scene is shorter than
-      ``MIN_COPY_DURATION``, or (rare) the copy's own edit list didn't come
-      out in a shape ``editlist.patch_trailing_duration`` can patch.
+    mode: CutMode,
+    use_cuda: bool = False,
+) -> tuple[str, str, float]:
+    """Cut a single scene using the job's chosen mode.
 
     Args:
         input_file: Source video file.
-        start_sec: Scene start time in seconds.
+        start_sec: Scene start time in seconds (the AI-detected cut).
         end_sec: Scene end time in seconds.
-        scene_idx: Scene number, used for output filename ``scene_{idx:04d}.mp4``.
+        scene_idx: Scene number, used for output filename ``scene_{idx:04d}.mp4``
+            (``.mov`` for a copy-mode clip whose source MP4 cannot hold, see
+            :func:`copy_container_suffix`).
         out_dir: Directory for output clips.
         keyframes: Sorted list of keyframe timestamps.
-        use_cuda: If True, use NVENC for re-encode (GPU). CPU fallback if
-            encoder not available.
-        is_hevc: Accepted for API compatibility with existing callers;
-            no longer changes behavior -- the edit-list mechanism this module
-            relies on works identically for HEVC and H.264 (verified), so
-            there's no separate HEVC path to select any more.
+        mode: ``"copy"`` widens the range outward to the enclosing keyframes
+            and does one plain stream copy (see module docstring for why
+            and what it costs); ``"reencode"`` re-encodes the exact
+            ``[start_sec, end_sec)`` range with no widening.
+        use_cuda: If True and ``mode == "reencode"``, use NVENC (GPU), with
+            CPU fallback if the encoder isn't available. Unused in copy mode.
 
     Returns:
-        Tuple of ``(clip_path, mode)`` where ``mode`` is ``"copy"`` or
-        ``"reencode"``.
+        ``(clip_path, mode, poster_offset_sec)``. ``poster_offset_sec`` is
+        how far into the clip the scene's true first frame actually sits --
+        always 0.0 for ``reencode`` (exact boundary, nothing to skip), and
+        ``start_sec - clip_start`` for ``copy`` (also 0.0 when the scene
+        already started on a keyframe). A caller generating a poster
+        thumbnail should seek this far into the clip first, or it will grab
+        a frame of bleed from the previous scene instead.
 
     Raises:
-        ValueError: If ``start_sec >= end_sec`` (non-positive duration).
+        ValueError: If ``start_sec >= end_sec``, or ``mode`` isn't recognized.
+        RuntimeError: If the underlying ffmpeg invocation fails. Copy mode
+            never silently falls back to re-encoding -- a mode of ``"copy"``
+            means every frame of the output is a real stream copy, or the
+            scene fails outright and the caller finds out.
     """
-    out_path = out_dir / f"scene_{scene_idx:04d}.mp4"
     duration = end_sec - start_sec
-
     if duration <= 0:
         raise ValueError(f"Non-positive duration for scene {scene_idx}: {duration:.3f}s")
 
-    if duration >= MIN_COPY_DURATION:
-        k_prev = _preceding_keyframe(keyframes, start_sec)
-        if k_prev is not None and (start_sec - k_prev) <= MAX_PRE_ROLL:
-            try:
-                _lossless_copy(input_file, start_sec, end_sec, out_path)
-                if not patch_trailing_duration(out_path, duration):
-                    raise RuntimeError("copy's edit list wasn't in a patchable shape")
-                return str(out_path), "copy"
-            except Exception as exc:
-                log(f"Scene {scene_idx}: fast copy failed ({exc}), re-encoding instead")
+    out_path = out_dir / f"scene_{scene_idx:04d}.mp4"
 
-    _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)
-    return str(out_path), "reencode"
+    if mode == "copy":
+        out_path = out_path.with_suffix(copy_container_suffix(input_file))
+        clip_start, clip_end = snap_range_to_keyframes(keyframes, start_sec, end_sec)
+        _lossless_copy(input_file, clip_start, clip_end, out_path)
+        return str(out_path), "copy", start_sec - clip_start
+    elif mode == "reencode":
+        _encode_segment(input_file, start_sec, end_sec, out_path, use_cuda)
+        return str(out_path), "reencode", 0.0
+    else:
+        raise ValueError(f"Unknown cut mode: {mode!r} (expected 'copy' or 'reencode')")
 
 
 def cut_all_scenes(
@@ -222,8 +398,8 @@ def cut_all_scenes(
     scenes: list[dict],
     keyframes: list[float],
     out_dir: Path,
-    use_cuda: bool,
-    is_hevc: bool,
+    mode: CutMode,
+    use_cuda: bool = False,
     max_workers: int = 4,
     on_ready: Callable[[dict], None] | None = None,
     progress_range: tuple[int, int] = (82, 97),
@@ -232,7 +408,9 @@ def cut_all_scenes(
     """Cut multiple scenes in parallel using a thread pool.
 
     Each scene dict must have ``"scene_index"``, ``"start_sec"``,
-    and ``"end_sec"`` keys. Cutting happens via :func:`cut_scene`.
+    and ``"end_sec"`` keys. Cutting happens via :func:`cut_scene`, in the
+    same ``mode`` for every scene in the batch -- see its docstring for what
+    each mode means and guarantees.
 
     Args:
         input_file: Source video file.
@@ -241,18 +419,19 @@ def cut_all_scenes(
         keyframes: Sorted keyframe timestamps from
             :func:`~amverge.core.keyframe_align.get_keyframe_timestamps_pyav`.
         out_dir: Directory for output clips.
-        use_cuda: Enable NVENC GPU encode for re-encode fallback.
-        is_hevc: Accepted for API compatibility; see :func:`cut_scene`.
-        max_workers: Thread pool size. Phase 1 uses 8, Phase 2 uses 2.
-        on_ready: Called per completed scene with
-            ``{"scene_index": int, "clip_path": str, "clip_mode": str}``.
+        mode: ``"copy"`` or ``"reencode"``, applied uniformly to every scene
+            in this batch.
+        use_cuda: Enable NVENC GPU encode when ``mode == "reencode"``.
+        max_workers: Thread pool size.
+        on_ready: Called per completed scene with ``{"scene_index": int,
+            "clip_path": str | None, "clip_mode": str, "poster_offset_sec":
+            float}``.
         progress_range: ``(start, end)`` tuple for IPC progress percentage
             during cutting.
         emit_progress_updates: If True, emit ``PROGRESS|pct|msg`` IPC events.
 
     Returns:
-        List of result dicts, each containing ``scene_index``,
-        ``clip_path``, and ``clip_mode``.
+        List of result dicts, same shape as passed to ``on_ready``.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     total = len(scenes)
@@ -263,21 +442,27 @@ def cut_all_scenes(
     def _cut_one(scene: dict) -> dict:
         idx = scene["scene_index"]
         try:
-            clip_path, clip_mode = cut_scene(
+            clip_path, clip_mode, poster_offset = cut_scene(
                 input_file,
                 float(scene["start_sec"]),
                 float(scene["end_sec"]),
                 idx,
                 out_dir,
                 keyframes,
+                mode,
                 use_cuda,
-                is_hevc,
             )
             log(f"Scene {idx}: {clip_mode} -> {Path(clip_path).name}")
-            return {"scene_index": idx, "clip_path": clip_path, "clip_mode": clip_mode}
+            return {
+                "scene_index": idx, "clip_path": clip_path,
+                "clip_mode": clip_mode, "poster_offset_sec": poster_offset,
+            }
         except Exception as exc:
             log(f"Warning: scene {idx} failed: {exc}")
-            return {"scene_index": idx, "clip_path": None, "clip_mode": "failed"}
+            return {
+                "scene_index": idx, "clip_path": None,
+                "clip_mode": "failed", "poster_offset_sec": 0.0,
+            }
 
     workers = min(max_workers, max(1, total))
     completed = 0

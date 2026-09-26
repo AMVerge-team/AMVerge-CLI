@@ -13,6 +13,8 @@ Example:
 
 import subprocess
 import sys
+from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path
 
 from ..infra.binaries import get_ffprobe
@@ -99,3 +101,18 @@ def probe_video_total_frames(input_video: str | Path, video_fps: float, video_du
         Estimated frame count as ``int(fps * duration)``.
     """
     return int(video_fps * video_duration)
+
+
+@lru_cache(maxsize=64)
+def probe_video_rate(input_video: str | Path) -> Fraction | None:
+    """Average frame rate of the first video stream as an exact fraction
+    (``30000/1001``, not ``29.97``), or None if it cannot be read. Frame-exact
+    cutting needs the exact value: a float rate drifts off the frame grid.
+    """
+    try:
+        import av
+        with av.open(str(input_video)) as container:
+            rate = container.streams.video[0].average_rate
+        return Fraction(rate) if rate else None
+    except Exception:
+        return None

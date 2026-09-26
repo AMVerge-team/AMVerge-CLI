@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..infra.binaries import get_ffmpeg, get_ffprobe
-from ..cutting.editlist import patch_trailing_duration
+from ..video.probe_utils import probe_video_rate
 from . import params
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -93,6 +93,32 @@ def resolve_use_gpu(settings: ExportSettings, gpu_encoders: set[str]) -> bool:
 
 def probe_video_codec(ffprobe: str, path: str) -> Optional[str]:
     return _probe_stream(ffprobe, path, "v")
+
+
+def probe_video_frame_rate(ffprobe: str, path: str) -> Optional[str]:
+    try:
+        r = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+             "-of", "default=nk=1:nw=1", path],
+            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+        )
+        for value in (r.stdout or "").splitlines():
+            numerator, separator, denominator = value.strip().partition("/")
+            if separator and numerator.isdigit() and denominator.isdigit() and int(denominator) > 0 and int(numerator) > 0:
+                return f"{numerator}/{denominator}"
+    except Exception:
+        pass
+    return None
+
+
+def job_frames(job: "ExportJob") -> Optional[tuple[int, int]]:
+    """The job's range as exact ``(first_frame, end_frame)`` on its input's
+    frame grid, or None for whole-file jobs and off-grid (VFR) ranges."""
+    if job.seek_ms is None or not job.dur_ms:
+        return None
+    start = job.seek_ms / 1000.0
+    return params.frame_grid_range(start, start + job.dur_ms / 1000.0, probe_video_rate(job.input))
 
 
 def probe_is_10bit(ffprobe: str, path: str) -> bool:
@@ -291,6 +317,7 @@ def _export_one(
     use_gpu: bool,
     source_video_codec: Optional[str],
     source_is_10bit: bool,
+    source_frame_rate: Optional[str],
     total_ms: Optional[int],
     on_frac: Optional[Callable[[float], None]],
     abort: threading.Event,
@@ -299,7 +326,7 @@ def _export_one(
     audio_languages: Optional[list[str]] = None,
 ) -> str:
     """Export one scene to ``out_path``, returning the mode used ("copy" or
-    "reencode"). Ladder: copy → re-encode → CPU re-encode."""
+    "reencode"). Copy remains a copy; re-encode may fall back from GPU to CPU."""
     ext = Path(out_path).suffix.lstrip(".").lower()
     track = settings.audio_track
     if audio_languages:
@@ -313,33 +340,18 @@ def _export_one(
         return params.build_copy_args(job.input, out_path, settings.audio, job.seek_ms, job.dur_ms, bsf,
                                       track, audio_count, settings.audio_single)
 
+    frames = job_frames(job)
+    grid_rate = str(probe_video_rate(job.input)) if frames else None
+
     def reencode_args(codec: str, gpu: bool) -> list[str]:
         return params.build_reencode_args(job.input, out_path, codec, settings.audio, gpu,
                                           job.seek_ms, job.dur_ms, track, audio_count,
-                                          settings.audio_single)
+                                          settings.audio_single, source_frame_rate,
+                                          frames, grid_rate)
 
     if settings.codec == "copy":
-        try:
-            _run_ffmpeg(ffmpeg, copy_args(), total_ms, on_frac, abort, active)
-            # A plain `-c copy` remux -- which is exactly what this just ran --
-            # doesn't preserve an existing edit list verbatim: it re-derives
-            # its own from the packets it reads, discarding whatever duration
-            # cutting.smart_cut/materialize_clips originally patched in and
-            # reverting to the raw (possibly overshot) content length. Bake
-            # the intended duration back in so this output is edit-list-exact
-            # regardless of what its input already was. Best-effort: an
-            # unrecognized box shape leaves this output exactly as ffmpeg made
-            # it, same as any other container this doesn't apply to.
-            if total_ms:
-                patch_trailing_duration(Path(out_path), total_ms / 1000.0)
-            return "copy"
-        except ExportAborted:
-            raise
-        except ExportError:
-            # Stream copy failed (mismatched params / non-copy-safe) → re-encode.
-            fallback_codec = "h264_high10" if source_is_10bit else "h264_high"
-            return _reencode_with_fallback(job, out_path, fallback_codec, settings, ffmpeg,
-                                           use_gpu, total_ms, on_frac, abort, active, reencode_args)
+        _run_ffmpeg(ffmpeg, copy_args(), total_ms, on_frac, abort, active)
+        return "copy"
     else:
         return _reencode_with_fallback(job, out_path, settings.codec, settings, ffmpeg,
                                        use_gpu, total_ms, on_frac, abort, active, reencode_args)
@@ -360,32 +372,71 @@ def _reencode_with_fallback(
         raise
 
 
-def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, use_cuda: bool) -> list[ExportJob]:
-    """For remux (copy) exports, cut each source range with smart_cut — stream-copy
-    the keyframe-aligned GOPs and re-encode only the leading/trailing edges — so
-    boundaries are frame-accurate and mostly lossless. Whole-file jobs pass through.
-    Returns jobs rewritten to point at the cut temp clips (no range)."""
-    from ..cutting.smart_cut import cut_scene
+def _contiguous_range_groups(jobs: list[ExportJob], eps: float = 0.05) -> list[list[ExportJob]]:
+    """Group consecutive range jobs that are back-to-back in the same source
+    (job[i]'s end lands within ``eps`` seconds of job[i+1]'s start) so a
+    merge can cut each run as one continuous span instead of independently
+    keyframe-snapped, overlapping pieces -- see ``_smartcut_ranges``."""
+    groups: list[list[ExportJob]] = []
+    for job in jobs:
+        if (
+            job.seek_ms is not None
+            and groups
+            and groups[-1][-1].seek_ms is not None
+            and groups[-1][-1].input == job.input
+        ):
+            prev = groups[-1][-1]
+            prev_end = (prev.seek_ms + (prev.dur_ms or 0)) / 1000.0
+            cur_start = job.seek_ms / 1000.0
+            if abs(cur_start - prev_end) <= eps:
+                groups[-1].append(job)
+                continue
+        groups.append([job])
+    return groups
+
+
+def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool) -> list[ExportJob]:
+    """For remux (copy) exports, cut each source range as a true,
+    keyframe-snapped stream copy (see ``cutting.smart_cut``) so every
+    boundary is guaranteed decodable. Whole-file jobs (already a pre-cut
+    clip, no range) pass through untouched. Returns jobs rewritten to point
+    at the cut temp clips (no range).
+
+    ``dedupe`` groups consecutive ranges from the same source into one
+    continuous span before snapping, instead of snapping each independently.
+    Set it for merge jobs (see ``_merge``): two adjacent AI scenes whose
+    shared cut isn't on a keyframe would otherwise each widen outward across
+    it on their own, duplicating that whole span once concatenated back
+    together. Independent (non-merge) exports leave it unset -- each scene
+    is meant to stand alone, bleed and all.
+    """
+    from ..cutting.smart_cut import copy_container_suffix, snap_range_to_keyframes, _lossless_copy
     from ..keyframes.keyframe_align import get_keyframe_timestamps_pyav
-    from ..codec.codec_utils import check_if_hevc
 
     kf_cache: dict = {}
-    hevc_cache: dict = {}
+    suffix_cache: dict = {}
     out: list[ExportJob] = []
-    for job in jobs:
+    groups = _contiguous_range_groups(jobs) if dedupe else [[job] for job in jobs]
+    for group in groups:
+        job = group[0]
         if job.seek_ms is None:
             out.append(job)
             continue
         src = job.input
         if src not in kf_cache:
             kf_cache[src] = get_keyframe_timestamps_pyav(src)
-            hevc_cache[src] = check_if_hevc(src)
+            suffix_cache[src] = copy_container_suffix(Path(src))
+        last = group[-1]
         start = job.seek_ms / 1000.0
-        end = start + (job.dur_ms or 0) / 1000.0
-        clip_path, _mode = cut_scene(
-            Path(src), start, end, job.scene_index, tmp_dir, kf_cache[src], use_cuda, hevc_cache[src]
-        )
-        out.append(ExportJob(scene_index=job.scene_index, input=clip_path))
+        end = (last.seek_ms + (last.dur_ms or 0)) / 1000.0
+        rate = probe_video_rate(src)
+        frames = params.frame_grid_range(start, end, rate)
+        if frames:
+            start, end = float(frames[0] / rate), float(frames[1] / rate)
+        clip_start, clip_end = snap_range_to_keyframes(kf_cache[src], start, end)
+        out_path = tmp_dir / f"range_{job.scene_index}{suffix_cache[src]}"
+        _lossless_copy(Path(src), clip_start, clip_end, out_path)
+        out.append(ExportJob(scene_index=job.scene_index, input=str(out_path)))
     return out
 
 
@@ -421,18 +472,15 @@ def export_scenes(
     gpu_encoders = detect_gpu_encoders(ffmpeg)
     use_gpu = resolve_use_gpu(settings, gpu_encoders)
 
-    # Remux (copy) of source ranges (webp mode) → smartcut each range to an
-    # accurate temp clip first, then export those as whole files. Encode
-    # workflows already cut frame-accurately via re-encode, so skip them.
     smartcut_tmp = None
     if settings.codec == "copy" and any(j.seek_ms is not None for j in jobs):
         smartcut_tmp = tempfile.TemporaryDirectory()
-        use_cuda = settings.hardware != "cpu" and "h264_nvenc" in gpu_encoders
         progress(5, "Cutting source ranges...")
-        jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), use_cuda)
+        jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), dedupe=settings.merge)
 
     source_video_codec = probe_video_codec(ffprobe, jobs[0].input) if jobs else None
     source_is_10bit = probe_is_10bit(ffprobe, jobs[0].input) if jobs else False
+    source_frame_rate = probe_video_frame_rate(ffprobe, jobs[0].input) if jobs else None
     audio_count = (
         probe_audio_stream_count(ffprobe, jobs[0].input)
         if settings.audio_track and jobs else None
@@ -441,12 +489,12 @@ def export_scenes(
     try:
         if settings.merge:
             out = _merge(jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-                         source_video_codec, source_is_10bit, progress, event, abort, active, audio_count)
+                         source_video_codec, source_is_10bit, source_frame_rate, progress, event, abort, active, audio_count)
             progress(100, "Export complete")
             return [out]
 
         return _individual(jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-                           source_video_codec, source_is_10bit,
+                           source_video_codec, source_is_10bit, source_frame_rate,
                            progress, event, abort, active, audio_count)
     finally:
         if smartcut_tmp is not None:
@@ -463,7 +511,7 @@ def _out_name(out_dir: str, file_stem: str, scene_index: int, container: str) ->
 
 def _individual(
     jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-    source_video_codec, source_is_10bit, progress, event, abort, active, audio_count=None,
+    source_video_codec, source_is_10bit, source_frame_rate, progress, event, abort, active, audio_count=None,
 ) -> list[str]:
     total = len(jobs)
     workers = max(1, min(settings.workers, total))
@@ -478,7 +526,7 @@ def _individual(
         out_path = _out_name(out_dir, file_stem, job.scene_index, settings.container)
         total_ms = job.dur_ms or probe_duration_ms(ffprobe, job.input)
         langs = probe_audio_languages(ffprobe, job.input) if settings.audio_language else None
-        mode = _export_one(job, out_path, settings, ffmpeg, use_gpu, source_video_codec, source_is_10bit,
+        mode = _export_one(job, out_path, settings, ffmpeg, use_gpu, source_video_codec, source_is_10bit, source_frame_rate,
                            total_ms, None, abort, active, audio_count, langs)
         with done_lock:
             done += 1
@@ -500,7 +548,7 @@ def _individual(
 
 def _merge(
     jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-    source_video_codec, source_is_10bit, progress, event, abort, active, audio_count=None,
+    source_video_codec, source_is_10bit, source_frame_rate, progress, event, abort, active, audio_count=None,
 ) -> str:
     ext = settings.container
     merged_stem = file_stem.replace("_####", "").replace("####", "").strip("_") or "merged"
@@ -538,13 +586,6 @@ def _merge(
             progress(25, "Re-encoding for a clean join...")
             force_reencode = True
 
-    # Ranged segments can come back from `_export_one` edit-list-trimmed
-    # (see cutting.smart_cut / editlist) when their range doesn't land on a
-    # keyframe; the concat below is a raw `-c copy` join that, like any such
-    # join, doesn't consult edit lists (same reason smart_cut stopped relying
-    # on the mp4 concat demuxer for its own cuts). Segments built straight
-    # from whole pre-cut clips never carry that risk, so only ranged jobs
-    # need to give up the copy shortcut here.
     seg_copy = settings.codec == "copy" and not force_reencode and not has_ranges
     fallback_codec = "h264_high10" if source_is_10bit else "h264_high"
     seg_codec = "copy" if seg_copy else (settings.codec if settings.codec != "copy" else fallback_codec)
@@ -582,7 +623,7 @@ def _merge(
             total_ms = job.dur_ms or probe_duration_ms(ffprobe, job.input)
             _export_one(job, seg, seg_settings, ffmpeg,
                         resolve_use_gpu(seg_settings, detect_gpu_encoders(ffmpeg)),
-                        source_video_codec, source_is_10bit, total_ms, None, abort, active,
+                        source_video_codec, source_is_10bit, source_frame_rate, total_ms, None, abort, active,
                         seg_audio_count, seg_languages[i] if seg_languages else None)
             segments.append(seg)
             progress(30 + int((i + 1) / total * 55), f"{verb} {i + 1}/{total} segments")

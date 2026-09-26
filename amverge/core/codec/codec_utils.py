@@ -35,13 +35,6 @@ VALID_CODECS = {
 }
 VALID_AUDIO = {"copy", "aac", "aac_320", "pcm16", "pcm24", "flac", "alac", "opus", "mp3", "none"}
 
-# smart_cut's plain "copy" export mode relies on the ISOBMFF edit list (elst)
-# to hide the extra GOP-boundary frames a keyframe-misaligned stream copy can
-# drag in (see cutting/smart_cut.py). Only MP4/MOV carry that box, so those
-# are the only containers where the "copy" export path is safe end-to-end.
-# Containers with no edit-list equivalent (MKV, WebM, ...) would expose that
-# padding as visible bleed -- keep them out of VALID_CONTAINERS until
-# smart_cut is made container-aware.
 VALID_CONTAINERS = {"mp4", "mov"}
 VALID_HARDWARE = {"auto", "gpu", "cpu"}
 

@@ -43,7 +43,7 @@ urls = { repository = "https://github.com/AMVerge-team/AMVerge-CLI" }
 dependencies = [
     "typer>=0.12",
     "rich>=13",
-    "av>=12",
+    "av>=14",
     "pillow>=10",
     "numpy>=1.26",
     "questionary>=2.0",
@@ -68,7 +68,15 @@ scout         = ["torch>=2.0", "transformers>=4.35", "pillow>=10.0", "numpy>=1.2
 # 2.13.*, and the CUDA 13 index, which drops every GPU before Turing
 nelux         = ["nelux>=0.18"]
 all           = ["torch>=2.0", "transnetv2-pytorch", "tqdm>=4.0", "opencv-python-headless>=4.9", "pypresence>=4.3", "spandrel>=0.3", "onnxruntime>=1.16", "scipy>=1.10", "depth-anything-v2>=0.1", "transformers>=4.35", "pillow>=10.0"]
-dev           = ["pyinstaller>=6"]
+dev           = ["pyinstaller>=6", "pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "media: needs ffmpeg and the generated video fixtures",
+    "ml: needs torch + transnetv2_pytorch (pip install amverge[ml])",
+    "slow: long-running encode or inference test",
+]
 
 [tool.hatch.version]
 path = "amverge/__version__.py"

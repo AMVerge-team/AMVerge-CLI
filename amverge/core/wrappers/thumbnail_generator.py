@@ -18,8 +18,11 @@ from typing import Any
 class ThumbnailGenerator:
     """Generate JPEG thumbnails from clip files in parallel.
 
-    Extracts the first keyframe from each clip, resizes to 960px wide,
-    and saves as progressive JPEG at 95% quality.
+    Decodes the frame at ``seek_sec`` into each clip (the start, by
+    default), resizes to 960px wide, and saves as progressive JPEG at 95%
+    quality. Pass ``cut_scene``'s own ``poster_offset_sec`` for a clip cut
+    in ``"copy"`` mode (see ``cutting.smart_cut``) - its frame 0 can be
+    bleed from the previous scene rather than the true start.
 
     Args:
         workers: Number of parallel threads (capped at CPU count).
@@ -35,18 +38,19 @@ class ThumbnailGenerator:
     def __init__(self, workers: int = 4) -> None:
         self._workers = workers
 
-    def generate_one(self, clip_path: str | Path, thumb_path: str | Path) -> bool:
+    def generate_one(self, clip_path: str | Path, thumb_path: str | Path, seek_sec: float = 0.0) -> bool:
         """Generate a single thumbnail from a clip.
 
         Args:
             clip_path: Path to the source video clip.
             thumb_path: Output path for the JPEG thumbnail.
+            seek_sec: How far into the clip the representative frame is.
 
         Returns:
             True on success, False on failure.
         """
         from ..thumbnails.thumbnails import make_thumbnail
-        return make_thumbnail(str(clip_path), str(thumb_path))
+        return make_thumbnail(str(clip_path), str(thumb_path), seek_sec=seek_sec)
 
     def generate(
         self,
@@ -57,8 +61,10 @@ class ThumbnailGenerator:
     ) -> list[str]:
         """Generate thumbnails for all scenes in parallel.
 
-        Scenes dicts must have a ``"scene_index"`` key. Output files
-        are named ``{file_name}_{index:04d}.jpg``.
+        Scenes dicts must have a ``"scene_index"`` key, and may carry a
+        ``"poster_offset_sec"`` key (as returned by ``cut_all_scenes``) to
+        seek past any keyframe-snap bleed before grabbing the frame.
+        Output files are named ``{file_name}_{index:04d}.jpg``.
 
         Args:
             scenes: List of scene dicts with ``"scene_index"`` key.
@@ -79,7 +85,7 @@ class ThumbnailGenerator:
             clip_path = scene.get("path", os.path.join(str(out_dir), f"{file_name}_{idx:04d}.mp4"))
             thumb_path = out_dir / f"{file_name}_{idx:04d}.jpg"
             if os.path.exists(clip_path):
-                self.generate_one(clip_path, thumb_path)
+                self.generate_one(clip_path, thumb_path, seek_sec=scene.get("poster_offset_sec") or 0.0)
             return str(thumb_path) if thumb_path.exists() else None
 
         max_w = min(self._workers, total, (os.cpu_count() or 4))

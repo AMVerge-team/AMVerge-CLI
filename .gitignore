@@ -17,3 +17,5 @@ venv/
 skills-lock.json
 test_videos
 *.code-workspace
+tests/fixtures/.media/
+.claude/

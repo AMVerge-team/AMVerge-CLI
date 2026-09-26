@@ -38,7 +38,7 @@ amverge detect episode.mp4 --min-duration 0.5 --workers 8
 | `--edge-radius` | `0.6` | Keyframe window radius (edge method) |
 | `--no-rpc` | false | Disable Discord RPC |
 
-**Output:** scene clips (`.mp4`), thumbnails (`.jpg`), and a `scenes.json` index.
+**Output:** scene clips (`.mp4`), thumbnails (`.jpg`), and a `scenes.json` index. Keyframe detection uses stream copy; TransNetV2 scene previews are re-encoded at the detected boundaries.
 
 **Detection methods:**
 

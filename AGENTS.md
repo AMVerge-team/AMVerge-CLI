@@ -12,6 +12,25 @@ AMVerge features as a CLI tool and Python library. Ports the AMVerge desktop app
 - **No em dashes:** never use `—` in any prose, docs, README, or commit messages. Use a comma, colon, parentheses, or plain hyphen `-` instead.
 - **Rich style= params:** theme names (`accent`, `muted`, etc.) only resolve inside markup strings `[accent]text[/]`. They do NOT work in `style=`, `header_style=`, or `title_style=` kwargs - use literal hex `#22c55e bold` there instead.
 
+## Cross-Repo Contracts
+
+Sibling repos sit next to this one: `../AMVerge` (Tauri desktop app) and `../AMVerge-Extension` (After Effects CEP panel). Each repo has its own agent, and this agent owns this repo only.
+
+- **Reading** sibling repos needs no prompt. **Editing** them asks the user every time (`.claude/hooks/sibling_edit_guard.py`, PreToolUse, reads `siblings` from `contracts.json`). The hook covers the file-editing tools, not shell commands, so never change a sibling repo through Bash. Path-based `Edit(../...)` permission rules were tried and do not work: they cannot match outside the project root. Only do it for trivial fixes the user approves (typo, a one-line string rename). Anything else goes through `/handoff`.
+- `.claude/contracts.json` lists the files here that other repos depend on, and the files there that consume them. Keep it current when a contract moves or a new consumer appears.
+- `.claude/hooks/contract_guard.py` (PostToolUse) reminds you, once per session per contract, when you edit one of those files.
+- If an edit changes anything consumers rely on (command or flag names, defaults, IPC event names or field order, JSON fields, extras), run `/handoff <repo>` before finishing. It writes a brief to `.claude/handoffs/` (gitignored), runs that repo's agent headless in its own checkout (accept-edits, cannot edit other repos, does not commit), and relays its report.
+- This repo is upstream: AMVerge and AMVerge-Extension adapt to it. Prefer additive changes (a new flag or event) over renames so already-shipped app and extension builds keep working.
+
+| Contract | Here | Consumed by |
+|---|---|---|
+| IPC events on stderr | `core/infra/ipc.py`, `core/infra/preview.py`, `core/thumbnails/thumbnails_streaming.py` | AMVerge `commands/scenes.rs`, `export.rs`, `scenepacks.rs`; Extension `js/utils/amvergeHandler.js`, `exportHandler.js` |
+| Sidecar commands + backend JSON schema | `commands/sidecar/*`, `core/video/scene_utils.py` | AMVerge `commands/scenes.rs`, `scenepacks.rs` |
+| `detect` flags + stdout JSON | `commands/detection/detect.py`, `pipeline.py` | Extension `js/utils/amvergeHandler.js` |
+| `export`/`merge` flags, `--inputs-json`, codecs | `commands/export/*`, `core/export/*`, `core/codec/codec_utils.py` | AMVerge `commands/export*`, `src/features/export/*`; Extension `js/utils/exportHandler.js` |
+| `--ipc` post passes, `models --json` | `commands/depth/*`, `deadframes/*`, `interpolation/*`, `upscaling/models.py` | AMVerge `commands/export.rs`, `models.rs` |
+| Command names, extras, Python version | `cli.py`, `pyproject.toml` | AMVerge `commands/deps/*`; Extension `js/utils/amvergeRuntime.js`, `js/components/toolsSetup.js` |
+
 ## Build & Run
 
 ```bash
@@ -49,7 +68,7 @@ twine upload dist/*
 | Video decode (ML) | Nelux (Windows native, optional) or FFmpeg pipe |
 | Video process | FFmpeg / FFprobe (subprocess) |
 | Scene detection | TransNetV2 via `transnetv2_pytorch` (optional, `[ml]` extra) |
-| Scene cutting | Smart cut: lossless copy + re-encode tail, or full re-encode (HEVC/fallback) |
+| Scene cutting | Imports: keyframe detection stream-copies and TransNetV2 re-encodes exact boundaries. Exports choose `copy` (stream copy snapped outward to keyframes) or `reencode` (exact boundary). |
 | Image | Pillow |
 | Numerics | NumPy |
 | GPU | PyTorch (CUDA auto-detected, CPU fallback) |
@@ -112,7 +131,7 @@ AMVerge-CLI/
 │       │   └── codec_utils.py   check_if_hevc(), is_hevc(), CODEC_PROFILES, AUDIO_FFMPEG, CODEC_ALIASES, PRORES_CODECS, resolve_gpu()
 │       ├── cutting/
 │       │   ├── segmenter.py     run_ffmpeg_segment() - 1500-cut Windows chunking (V1)
-│       │   └── smart_cut.py     cut_scene(), cut_all_scenes() - lossless copy / smartcut / reencode
+│       │   └── smart_cut.py     cut_scene(), cut_all_scenes(), snap_range_to_keyframes() - copy (keyframe-snapped stream copy) or reencode (exact); export selects the mode
 │       ├── detection/
 │       │   ├── edge.py          detect_cuts_by_edge() - guarded cv2 import (V1)
 │       │   ├── keyframe.py      detect_cuts_by_keyframe() (V1)
@@ -128,7 +147,7 @@ AMVerge-CLI/
 │       │   ├── ipc.py           emit_progress(), emit_event(), log(), check_if_path_exists(), build_video_cache_prefix()
 │       │   └── preview.py        PreviewEmitter + ipc_callbacks() - throttled JPEG snapshots, emits PREVIEW_FRAME|tag|path|seq (ping-pongs 2 files/tag)
 │       ├── keyframes/
-│       │   ├── keyframe_align.py    get_keyframe_timestamps_pyav(), classify_scenes_by_keyframe_alignment()
+│       │   ├── keyframe_align.py    get_keyframe_timestamps_pyav()
 │       │   └── keyframes.py         generate_keyframes() - PyAV packet demux (V1 detect command)
 │       ├── similarity/
 │       │   └── similarity.py    find_similar_pairs() - cosine similarity on pixel arrays
@@ -177,6 +196,13 @@ AMVerge-CLI/
 │           ├── thumbnail_generator.py   ThumbnailGenerator - unified class wrapping thumbnail generation
 │           └── transnet_config.py   TransNetConfig - frozen dataclass wrapping TransNetV2 constants
 │
+├── .claude/
+│   ├── settings.json        sibling read access, registers both hooks
+│   ├── contracts.json       cross-repo contracts (see Cross-Repo Contracts)
+│   ├── hooks/sibling_edit_guard.py   PreToolUse: ask before editing a sibling repo
+│   ├── hooks/contract_guard.py   PostToolUse reminder to /handoff
+│   └── skills/handoff/      /handoff skill: brief + headless sibling agent
+│
 ├── docs/
 │   ├── installation.md
 │   ├── cli-reference.md
@@ -207,13 +233,7 @@ run_model_one_pass() (TransNetV2, GPU/CPU)
         ↓ (scenes_secs, scenes_frames ndarray - cached as .npy)
 scenes_to_objects()
         ↓ emit INITIAL_CLIPS_READY|[json]
-get_keyframe_timestamps_pyav() + check_if_hevc()
-        ↓
-classify_scenes_by_keyframe_alignment()
-        ↓
-Phase 1: cut_all_scenes() lossless copy (max_workers=8)  -> emit CLIP_READY per scene
-        ↓ emit PHASE1_COMPLETE
-Phase 2: cut_all_scenes() re-encode (max_workers=2)      -> emit REENCODE_PROGRESS + CLIP_READY
+cut_all_scenes() mode="reencode" (max_workers=2) -> emit CLIP_READY per scene
 ```
 
 ### V1 detection pipeline (keyframe, no ML)
@@ -242,6 +262,22 @@ for scene in result.scenes:
 
 `core/` has no CLI dependencies. Import anything from it without pulling in Rich or Typer.
 
+## Testing
+
+```bash
+pip install -e ".[dev,ml,edge]"
+pytest                       # everything (~3 min, generates fixtures on first run)
+pytest -m "not ml"           # skip TransNetV2 inference
+pytest -m "not media"        # pure unit tests only, no ffmpeg needed
+python -m tests.fixtures.generate   # pre-build the fixture videos
+```
+
+- **Fixture videos** are generated with ffmpeg, never committed. `tests/fixtures/specs.py` declares them (`MediaSpec`: codec, resolution, fps, per-scene frame counts, keyframe layout, audio tracks); `generate.py` renders each into `tests/fixtures/.media/` (override with `AMVERGE_TEST_MEDIA`), cached by a hash of the spec. Change a spec or bump `GENERATOR_VERSION` and it re-renders.
+- **Content:** alternating solid blue / red scenes (blue first), a burnt-in timecode, and a 12-bit frame-number barcode strip along the bottom. `tests/fixtures/media.py` `read_frames()` decodes every frame back to `(number, color)`, so tests assert exact source frame numbers (catches dropped, duplicated, or bled frames), not just durations.
+- **Matrix:** h264 / h265 (8-bit and main10) / ProRes 422 HQ and 4444; 23.976, 24, 25, 29.97, 30, 50, 60 fps; 270p to 1080p; keyframes forced at scene cuts, fixed GOP off the cuts (closed and open GOP), a single keyframe, or all-intra; no audio, mono, stereo, PCM, and two language-tagged tracks.
+- **Known bugs** are `xfail(strict=True)` with the cause as the reason, all in `tests/fixtures/known_bugs.py`. When a fix lands the test XPASSes and fails the run, so delete the marker in the same commit.
+- `conftest.py` sets `PYTORCH_ENABLE_MPS_FALLBACK=1` so TransNetV2 tests run on Apple Silicon regardless of import order.
+
 ## Code Conventions
 
 - **Python:** snake_case vars/fns, PascalCase dataclasses, type hints on all public APIs
@@ -254,25 +290,25 @@ for scene in result.scenes:
 
 | File | Role |
 |---|---|
-| `core/cutting/segmenter.py` | Windows 32,767-char command line limit. If video has >1500 cut points, chunks into multiple ffmpeg passes. Do not remove this chunking. |
+| `core/cutting/segmenter.py` | Windows 32,767-char command line limit. If video has >1500 cut points, chunks into multiple ffmpeg passes. Do not remove this chunking. A stream-copy split off a keyframe pushes forward to the next real one (same trade-off as `smart_cut`'s `copy` mode); the overshoot is left as visible content, not hidden or trimmed - `editlist.py` was retired for this reason (see `core/cutting/smart_cut.py` entry). |
 | `core/keyframes/keyframes.py` | Fast path reads packet metadata only (no frame decode). Falls back to full decode for pathological encodes. Deduplicates I-frames within short windows. |
 | `core/detection/edge.py` | `import cv2` is inside the function body, not at module level. Raises clear `ImportError` pointing to `pip install amverge[edge]` if OpenCV missing. Keep it this way - edge is an optional dep. |
 | `wizard.py` | `_credits_table()` is imported from `commands/about/credits.py` to avoid duplication. `_wizard_export()` imports `CODEC_PROFILES`, `AUDIO_FFMPEG`, `CODEC_ALIASES`, `PRORES_CODECS`, `resolve_gpu` from `core/codec/codec_utils.py` - single source of truth for codec mappings. |
 | `ui.py` | `err` console (stderr) used for all interactive/wizard output. `console` (stdout) for command results. Do not mix them. `ok()`/`warn()`/`fail()` use ASCII-safe marker `>` - Python `●`/`→` crash on CP1252 Windows terminals. |
 | `core/similarity/similarity.py` | `find_similar_pairs()` accepts both `scene_index` and `index` keys for V1 (collect_scenes) / V2 (Scene.to_dict()) compat. |
-| `commands/export/export.py` | `CODEC_PROFILES`/`AUDIO_FFMPEG`/`CODEC_ALIASES`/`PRORES_CODECS`/`_resolve_gpu` imported from `core/codec/codec_utils.py`. |
-| `commands/sidecar/backend.py` cutting | `video_files` imports where every scene is keyframe-aligned (no re-encode candidates, contiguous indexes) cut with `run_ffmpeg_segment_streaming()` - the V1/main prod pipeline ported 1:1: one contiguous segment-muxer pass, `-c:v copy`, audio re-encoded `aac 160k stereo 48k`, `-reset_timestamps 1`. Produces single-GOP clips that concat-merge cleanly (open-GOP sources corrupt with per-scene `-ss/-t` copies). CLIP_READY streams live per segment (parsed from the muxer's `Opening ... for writing` lines) and PROGRESS ticks from `-progress pipe:2`. Falls back to `cut_all_scenes` for mixed/re-encode scene sets (TransNetV2). |
-| `core/cutting/segmenter.py` | `run_ffmpeg_segment_streaming()` = same ffmpeg args/output as `run_ffmpeg_segment()` plus `on_segment(index, path)` / `on_progress(fraction)` callbacks. |
+| `commands/export/export.py` | `CODEC_PROFILES`/`AUDIO_FFMPEG`/`CODEC_ALIASES`/`PRORES_CODECS`/`_resolve_gpu` imported from `core/codec/codec_utils.py`. `_build_jobs()` always prefers the manifest's `[start_sec, end_sec)` range over a pre-cut clip file, falling back to the clip only when no range is given (a Scenepack's materialized clip). Keeps export mode independent of how the preview was cut: `codec="copy"` keyframe-snaps that range fresh, any other codec re-encodes it exactly - either way a `copy`-mode preview's own bleed (see `cutting.smart_cut`) never bleeds into the export. |
+| `commands/sidecar/backend.py` cutting | Imports have no user-selected cut mode. `use_keyframe` scenes use `run_ffmpeg_segment_streaming()` for fast stream copy because their boundaries are keyframes. TransNetV2 scenes always use `cut_all_scenes(mode="reencode")` so previews begin at the detected frame. |
+| `core/cutting/segmenter.py` | The stream-copy-then-re-encode fallback (taken for sources MP4 cannot hold, e.g. ProRes) passes `-force_key_frames` at the same epsilon-adjusted cut times as `-segment_times`: the segment muxer only splits on keyframes, so without them the fallback wrote the whole video as one segment. `run_ffmpeg_segment_streaming()` = same ffmpeg args/output as `run_ffmpeg_segment()` plus `on_segment(index, path)` / `on_progress(fraction)` callbacks. `_output_args()` skips the segment muxer entirely when `cut_points` is empty (single-GOP source, or a detector that found nothing) and writes one plain file at `output_pattern % start_num` instead - `-f segment -segment_times ""` is invalid and ffmpeg rejects it outright, which used to crash `detect_scenes` on any such source. |
 | `core/infra/ffmpeg_bootstrap.py` | Downloads a PINNED release-branch build (`ffmpeg-n8.1-latest-win64-gpl-8.1.zip`), never `ffmpeg-master-latest`. The master nightly (observed on N-125515, 2026-07-10) has a segment-muxer regression: on long multi-segment runs with re-encoded audio, later segments get a single audio packet with a large negative pts, which merges into files that start at a nonzero timestamp, mute instantly, and crash players on seek. Release 8.x builds are unaffected. Existing installs are not auto-refreshed (`is_portable_ffmpeg_installed` only checks existence) - a machine that already fetched the nightly must delete `%APPDATA%/com.amverge.cli/ffmpeg` and re-run so it re-downloads the pinned build. |
-| `core/cutting/smart_cut.py` | Stream-copy cuts run `_trim_trailing_partial_gop()` afterwards. Open-GOP sources (HEVC anime) interleave the next GOP's keyframe with the current GOP's trailing B-frames, so a copy ending on a scene boundary drags in that keyframe plus 1-2 packets. Those orphan packets collide on picture order count when clips are concatenated, decoding as "Duplicate POC in a sequence" corruption in strict players (VLC tolerates it). Trimming them also cuts the per-clip audio deficit from ~0.24s to ~0.01s. Guarded by `TRAILING_GOP_MAX_PACKETS`, so mid-clip keyframes in long scenes are never trimmed. |
-| `pipeline.py` | `DetectionMethod` is `Literal["keyframe", "edge", "transnetv2"]`. `DecodeMethod` is `Literal["ffmpeg", "nelux"]` (transnetv2 only; default `ffmpeg`). TransNetV2 path: `ffmpeg` uses `decode_and_detect_scenes()`, `nelux` uses `decode_video_frames_nelux()` + `run_model_one_pass()`, then `cut_all_scenes()` (V2 pipeline). `nelux` runs `nelux_available()` smoke test first and falls back to `ffmpeg` if missing. Monkey-patches `emit_progress` on `ai_scene_detection`/`smart_cut` module-local refs (not `ipc` module) to route IPC progress to Rich callback. |
+| `core/cutting/smart_cut.py` | Two cut modes, one per job (`cut_all_scenes(mode=...)`), never a per-scene decision - an earlier version guessed per scene (copy when cheap, re-encode/trim otherwise) and kept surfacing new correctness edge cases, replaced entirely. `copy`: `snap_range_to_keyframes()` widens `[start, end)` outward to the enclosing keyframes (a no-op when already aligned) then `_lossless_copy()` remuxes that span with PyAV (not `ffmpeg -t`, which compares each packet's dts against the limit and so leaked the end keyframe plus a few reordered frames of the next scene, with holes, on every B-frame source) - always a true stream copy, no silent fallback to re-encode on failure. It stops at the end keyframe in file order, which is exact on closed GOP; on open GOP it keeps the end keyframe and its leading pictures (they display before it but decode from it), so the clip ends with exactly one frame of the next scene rather than losing the last frames of its own. Leading pictures of the start keyframe are dropped. Stream metadata/dispositions are copied; audio packets overlapping the span (including the AAC priming packet) are kept. Needs PyAV >= 14 (`add_stream_from_template`). Copy clips are `.mp4` unless `copy_container_suffix()` finds a stream the MP4 muxer rejects (asks PyAV's muxer, no codec list), then `.mov` - applies to `cut_scene` copy clips and `engine._smartcut_ranges` temp files, so ProRes copy exports work with `--container mov`. Trade-off: a clip can carry up to one keyframe interval of the neighboring scene at either edge. `reencode`: exact boundary, real encode cost. `cut_scene()` returns `poster_offset_sec` (how far into the clip the true scene start sits, nonzero only for `copy`) so thumbnail generation can seek past the bleed instead of grabbing the previous scene's frame. No mp4/mov edit list involved anywhere in this module (an earlier design used one to hide the same widening this now leaves visible - retired along with `core/cutting/editlist.py`, since hiding it turned out to freeze older After Effects builds that read the edit list literally). |
+| `core/export/engine.py` | `_smartcut_ranges()` cuts range-based `ExportJob`s (`seek_ms`/`dur_ms` set) through `smart_cut.snap_range_to_keyframes` before `_merge`/`_individual` ever run, whenever `settings.codec == "copy"`. `dedupe=True` (set for `--merge` jobs; `export.py`'s `_build_jobs()` always builds source-range jobs when the manifest has a range, so every merge sees them) groups contiguous same-source ranges and cuts each group as ONE continuous span instead of independently snapping every scene - otherwise two adjacent AI scenes whose shared cut isn't on a keyframe would each widen outward across it, duplicating that span once concatenated. Re-encode exports probe and pass through the source's `avg_frame_rate` rational (for example `24000/1001`); do not leave FFmpeg to select a container or encoder default frame rate. `ExportJob` keeps integer `seek_ms`/`dur_ms`, which miss frame boundaries (every NTSC frame, 2 of 3 frames at 24 fps), so ranges are mapped back onto the input's frame grid first (`params.frame_grid_range`, exact rate from `probe_utils.probe_video_rate`; off-grid/VFR ranges keep the old time-based path). Re-encodes then cut with `params.frame_cut_args`: seek half a frame early, `-frames:v` for video length (never `-t`, whose cutoff sits on a frame edge), `atrim` start/duration for audio, and `-t` only as a half-frame-padded cap for copied audio. `-frames:v` is only exact with `-fps_mode cfr` at the source rate. Copy ranges are grid-snapped the same way before `snap_range_to_keyframes`, which also takes a 1 us tolerance. `smart_cut._encode_segment` (TransNetV2 previews) uses the same frame cut. |
+| `pipeline.py` | `DetectionMethod` is `Literal["keyframe", "edge", "transnetv2"]`. `DecodeMethod` is `Literal["ffmpeg", "nelux"]` (transnetv2 only; default `ffmpeg`). TransNetV2 path: `ffmpeg` uses `decode_and_detect_scenes()`, `nelux` uses `decode_video_frames_nelux()` + `run_model_one_pass()`, then always `cut_all_scenes(mode="reencode")` for exact previews. `nelux` runs `nelux_available()` smoke test first and falls back to `ffmpeg` if missing. Monkey-patches `emit_progress` on `ai_scene_detection`/`smart_cut` module-local refs (not `ipc` module) to route IPC progress to Rich callback. |
 | `core/infra/ipc.py` | IPC protocol for Tauri app. V2 events: `PROGRESS\|pct\|msg`, `INITIAL_CLIPS_READY\|json`, `CLIP_READY\|idx\|path\|mode`, `PHASE1_COMPLETE`, `REENCODE_PROGRESS\|done\|total`, `PREVIEW_FRAME\|tag\|path\|seq`. stdout reserved for final JSON. Never mix IPC output with Rich output. |
 | `--ipc` flag (hidden) | `depth-map`, `deadframes`, `interpolate` accept `--ipc`: bypasses the Rich `SystemMonitor`/`Live` display and instead streams `PROGRESS\|`/`PREVIEW_FRAME\|` on stderr (via `core/infra/preview.ipc_callbacks`), auto-confirms downloads. Standalone (non-`--ipc`) behavior is unchanged. The engines (`generate_depth_map`, `run_deadframes`, `interpolate_video`) take an additive `preview_cb(frame_bgr, pct)` param, default `None`. Used by the app to run post-export passes with a live progress+preview modal. |
-| `core/detection/ai_scene_detection.py` | TransNetV2 inference. Requires `[ml]` extra. `TRANSNET_AVAILABLE` flag guards import at module level - raises clear `ImportError` if missing. Do not import torch at module level in other files. |
-| `core/cutting/smart_cut.py` | Four cut modes: `copy` (start on keyframe), `snapped_copy` (HEVC CPU - snaps to nearest keyframe within 5s), `smartcut` (H.264 - encode tiny head + lossless tail), `reencode` (full fallback). Never remove the HEVC CPU path - HEVC re-encode without CUDA takes 10+ minutes. |
-| `core/codec/codec_utils.py` | `check_if_hevc()` via ffprobe. Also contains `CODEC_PROFILES` (14 codec -> ffmpeg encoder mappings), `AUDIO_FFMPEG` (10 audio choices), `CODEC_ALIASES`, `PRORES_CODECS`, `resolve_gpu()`, `is_hevc()`. Single source of truth - `commands/export/export.py` and `wizard.py` import from here. Do not duplicate these dicts. |
+| `core/detection/ai_scene_detection.py` | TransNetV2 `predictions_to_scenes` end frames are INCLUSIVE; seconds come from `scene_utils.transnet_scenes_to_seconds()` (end = `(end_frame + 1) / fps`, 6 dp), so scenes are contiguous and `scenes_frames` keeps TransNetV2's inclusive convention. `scenes_frames_to_seconds()` (2 dp, no +1) is kept for API compatibility only - do not use it for TransNetV2. The backend recomputes seconds from cached `_transnet_frames.npy` on a cache hit, so caches written before this fix are repaired. TransNetV2 inference. Requires `[ml]` extra. `TRANSNET_AVAILABLE` flag guards import at module level - raises clear `ImportError` if missing. Do not import torch at module level in other files. |
+| `core/codec/codec_utils.py` | `check_if_hevc()` via ffprobe. Also contains `CODEC_PROFILES` (14 codec -> ffmpeg encoder mappings), `AUDIO_FFMPEG` (10 audio choices), `CODEC_ALIASES`, `PRORES_CODECS`, `resolve_gpu()`, `is_hevc()`, `VALID_CONTAINERS` (`mp4`/`mov` only - `smart_cut`'s `copy` mode no longer needs an edit list so this restriction could likely be lifted for MKV/WebM, just not yet re-evaluated). Single source of truth - `commands/export/export.py` and `wizard.py` import from here. Do not duplicate these dicts. |
 | `core/detection/nelux_runtime.py` | Windows DLL setup for Nelux video reader. Set `AMVERGE_FFMPEG_BIN` env var to FFmpeg shared DLL directory. Idempotent - safe to call multiple times. `nelux_available()` is the quick smoke test (tries `_get_nelux_video_reader()`, returns bool, no decode) used by `detect`/`pipeline` to decide the transnetv2 decode backend. |
-| `core/keyframes/keyframe_align.py` | `get_keyframe_timestamps_pyav` uses PyAV demux with `type(stream.discard).nonkey` enum (PyAV 17.x; was `"NONKEY"` string in older PyAV). `classify_scenes_by_keyframe_alignment` partitions scenes for Phase 1 vs Phase 2 cutting. |
+| `core/keyframes/keyframe_align.py` | `get_keyframe_timestamps_pyav` must never set `stream.discard` (any value) - doing so corrupts the PTS PyAV reports for the packets it does keep, off by whole frames on B-frame sources. Demux every packet and filter by `packet.is_keyframe` instead; no decode happens either way, so there is no real perf cost. Preserve packet timestamp precision: the copy export snapper passes these values directly to FFmpeg. |
 | `core/thumbnails/thumbnails_streaming.py` | V1 backend mode only. Emits events as each thumbnail completes. Not used in V2 backend. |
 | `core/discord/discord_rpc.py` | Uses same CLIENT_ID as AMVerge app (`1497922104065134823`). Silently no-ops if pypresence not installed. `--no-rpc` flag on detect/export/merge to disable. Methods: idle/detecting/selecting/navigating/exporting/merging/complete/error. |
 | `core/upscaling/engine.py` | `upscale_model(key, ...)` - unified dispatch. Reads model from registry, routes ml → `_upscale_ml()` (spandrel, in-file), shader → `anime4k.upscale_video_anime4k()`, onnx → `artcnn.upscale_video_artcnn()`. Engine owns the ml path only; shader/onnx live in their own modules. |
@@ -281,7 +317,7 @@ for scene in result.scenes:
 | `core/upscaling/weight_loader.py` | Downloads ml `.pth` weights to `models/upscale/<key>/<file>`. Resume support (HTTP Range), SHA-256 integrity verification, 3 retries. ml-only; ONNX downloads live in `artcnn.py`. |
 | `core/upscaling/anime4k.py` | `upscale_video_anime4k()` - REAL Anime4K. Downloads v4.0.1 GLSL shaders (`models/upscale/anime4k/`), concatenates the mode's shader chain into `_chain_<mode>_<scale>x.glsl`, applies via FFmpeg `libplacebo=custom_shader_path`. Auto-detects libplacebo (`ffmpeg -filters`); falls back to lanczos+unsharp if absent. Modes light/medium/strong = Upscale_CNN_x2_{S,M,VL} (+ Restore_CNN for medium/strong); scale=4 adds a 2nd upscale pass. **Two FFmpeg gotchas (do not reintroduce):** (1) NEVER pass global `-init_hw_device vulkan` - it breaks libplacebo output negotiation (EINVAL); libplacebo self-inits its Vulkan device. (2) `custom_shader_path` cannot take an absolute Windows path (drive colon = filtergraph option separator, no escaping survives). The chain is staged into the OUTPUT file's dir, ffmpeg runs with `cwd=that dir`, path passed as bare basename, file deleted after. |
 | `core/upscaling/artcnn.py` | `upscale_video_artcnn()` - ArtCNN ONNX (luma-only 2x doublers). Downloads to `models/upscale/artcnn/<file>` (single dir - was a path-mismatch bug vs weight_loader's per-key dir). Per-frame: BGR→YUV, run Y `[1,1,H,W]` → `[1,1,2H,2W]`, lanczos-upscale U/V, recombine, rawvideo pipe. Session uses `enable_cpu_mem_arena=False` + per-frame `del`/`gc` (HD full-frame inference OOMs otherwise). **Chroma models** (entry has `chroma_file`, e.g. `R8F64_Chroma`): loads a 2nd session; chroma net takes `[1,3,H,W]` (Y_2x + bilinear-upscaled U/V) → `[1,2,H,W]` reconstructed U/V, replacing the lanczos chroma path. `download_artcnn` fetches all `_model_files(entry)`; `is_artcnn_downloaded` checks all. Input/output tensor names auto-detected. v1.6.2 assets verified. Credit: ArtCNN by Artoriuz. |
-| `core/interpolation/flowframes.py` | Flowframes 1.42.0 integration. Spawns external `Flowframes.exe` with `-a -nc -mdc` args. Strips `NoDefaultCurrentDirectoryInExePath` from child env (Flowframes' bare-name ffprobe fails otherwise). Kills existing instance before spawn. Tails `FlowframesData/logs/<session>/sessionlog.txt` for progress (`Interpolated X/Y Frames`, `%`). Locates output by newest media file in `-o` dir with size stability check. Four cut modes: `copy` (start on keyframe), `snapped_copy` (HEVC CPU - snaps to nearest keyframe within 5s), `smartcut` (H.264 - encode tiny head + lossless tail), `reencode` (full fallback). Never remove the HEVC CPU path - HEVC re-encode without CUDA takes 10+ minutes. |
+| `core/interpolation/flowframes.py` | Flowframes 1.42.0 integration. Spawns external `Flowframes.exe` with `-a -nc -mdc` args. Strips `NoDefaultCurrentDirectoryInExePath` from child env (Flowframes' bare-name ffprobe fails otherwise). Kills existing instance before spawn. Tails `FlowframesData/logs/<session>/sessionlog.txt` for progress (`Interpolated X/Y Frames`, `%`). Locates output by newest media file in `-o` dir with size stability check. |
 | `commands/sidecar/rpc_server.py` | Hidden sidecar: `amverge rpc-server`. Long-lived process; Rust spawns it once and sends JSON commands via stdin (`{"type":"update","details":"...","state":"..."}`, `{"type":"clear"}`, `{"type":"shutdown"}`). Throttles Discord updates to max 1 per 15s. Exits when stdin closes or parent dies. |
 | `core/interpolation/engine.py` | `interpolate_video()` - RIFE PyTorch CUDA/CPU inference. Pad frames to mod-32, cache encoded features per pair, loop `factor-1` inter-steps with saved feature restore (IFNet.forward overwrites `self.f0/f1`). FFmpeg rawvideo stdin pipe for output. Muxes source audio. Never import torch at module level outside engine/arch files. |
 | `core/interpolation/rife_arch.py` | RIFEModel + IFNet architecture. Light/heavy determines IFBlock channel widths (m=1 vs m=2). `cachePair()` encodes img pair for reuse across inter-steps. Grid cache (`_tenGrid`, `_tenFlowDiv`) keyed by device/size/dtype. Parameter remapping in weight_loader handles `module.` prefix mismatches. |

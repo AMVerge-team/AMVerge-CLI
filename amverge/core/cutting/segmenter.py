@@ -11,7 +11,6 @@ from typing import Any, Callable
 from ..infra.binaries import get_ffmpeg
 from ..infra.ipc import log
 from ..video.probe_utils import probe_video_duration
-from .editlist import patch_trailing_duration
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -27,32 +26,6 @@ CHUNK_SIZE = 1500
 SEGMENT_TIME_EPSILON = 0.001
 
 
-def _segment_boundaries(cut_points: list[float], total_duration: float) -> list[float]:
-    """Absolute ``[start_0, start_1, ..., start_N, total_duration]`` boundaries
-    for the segments ``run_ffmpeg_segment*`` produces from ``cut_points`` --
-    same scheme :func:`collect_scenes` uses to report scene start/end."""
-    return [0.0, *cut_points, total_duration]
-
-
-def _trim_segment(path: str, duration_sec: float) -> None:
-    """Hide trailing content a segment-muxer split dragged in from the next
-    scene (the segment muxer has no keyframe-alignment awareness at all, so
-    every split overshoots to wherever it can next stop cleanly -- same
-    reason :func:`smart_cut.cut_scene` needs this for its own copies).
-    Rewrites the segment's own edit list rather than dropping packets, so
-    it's exposed to none of the decode/display-order hazards a raw
-    packet-count truncation would be (see :func:`editlist.patch_trailing_duration`).
-    Best-effort: an unrecognized box shape leaves the segment as ffmpeg
-    produced it rather than failing the whole cut.
-    """
-    if duration_sec is None or duration_sec <= 0:
-        return
-    try:
-        patch_trailing_duration(Path(path), duration_sec)
-    except Exception:
-        pass
-
-
 def _fmt_ts(seconds: float) -> str:
     return f"{float(seconds):.6f}".rstrip("0").rstrip(".")
 
@@ -61,11 +34,73 @@ def _fmt_segment_times(cut_points: list[float]) -> str:
     return ",".join(_fmt_ts(max(0.0, p - SEGMENT_TIME_EPSILON)) for p in cut_points)
 
 
+def _video_args_for_chunk(video_args: list[str], cut_points: list[float]) -> list[str]:
+    if video_args is _COPY_VIDEO_ARGS or not cut_points:
+        return video_args
+    return [*video_args, "-force_key_frames", _fmt_segment_times(cut_points)]
+
+
 def _clean_ffmpeg_output(text: str | None) -> str:
     if not text:
         return ""
     lines = [l for l in text.splitlines() if l.strip() and not any(p.search(l.strip()) for p in _SILENCED)]
     return "\n".join(lines)
+
+
+def _has_open_gop_leading_pictures(video_path: str) -> bool:
+    """Whether any keyframe in the source is followed, in decode order, by a
+    picture that displays *before* it (open GOP, common on x265/anime
+    encodes). A stream-copy segment split can only cut on keyframes, and
+    those leading pictures decode from the keyframe that follows them --
+    keeping them decodable would mean writing that keyframe into both
+    segments, which breaks exact tiling; dropping them, which is what
+    ffmpeg's segment muxer already does today (their rebased pts goes
+    negative once `-reset_timestamps 1` zeroes the new segment at the
+    keyframe, and it silently discards them), loses real frames instead.
+    Neither is acceptable from a stream copy, so the caller re-encodes."""
+    import av
+
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        last_keyframe_pts = None
+        for packet in container.demux(stream):
+            if packet.pts is None:
+                continue
+            if packet.is_keyframe:
+                last_keyframe_pts = packet.pts
+                continue
+            if last_keyframe_pts is not None and packet.pts < last_keyframe_pts:
+                return True
+    return False
+
+
+def _output_args(
+    output_pattern: str, cut_points: list[float], start_num: int, video_args: list[str],
+    extra: list[str] | None = None,
+) -> list[str]:
+    """Trailing ffmpeg args that write the chunk's output file(s).
+
+    ``extra`` goes right before the output path, the only place ffmpeg
+    accepts more options -- nothing may follow the output URL itself.
+
+    With no cut points there is nothing to split, and the segment muxer
+    rejects an empty ``-segment_times`` outright -- write the whole chunk as
+    one plain file at ``output_pattern % start_num`` instead, same as any
+    other segment index.
+    """
+    extra = extra or []
+    if not cut_points:
+        return [*video_args, "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "48000",
+                *extra, output_pattern % start_num]
+    return [
+        *_video_args_for_chunk(video_args, cut_points),
+        "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "48000",
+        "-f", "segment",
+        "-segment_times", _fmt_segment_times(cut_points),
+        "-segment_start_number", str(start_num),
+        "-reset_timestamps", "1",
+        *extra, output_pattern,
+    ]
 
 
 def _run_chunk(
@@ -85,21 +120,8 @@ def _run_chunk(
     if end_time is not None:
         cmd += ["-to", _fmt_ts(end_time)]
 
-    cmd += [
-        "-i", video_path,
-        "-map", "0:v:0",
-        "-map", "0:a?",
-        *video_args,
-        "-c:a", "aac",
-        "-b:a", "160k",
-        "-ac", "2",
-        "-ar", "48000",
-        "-f", "segment",
-        "-segment_times", _fmt_segment_times(cut_points),
-        "-segment_start_number", str(start_num),
-        "-reset_timestamps", "1",
-        output_pattern,
-    ]
+    cmd += ["-i", video_path, "-map", "0:v:0", "-map", "0:a?"]
+    cmd += _output_args(output_pattern, cut_points, start_num, video_args)
 
     result = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
 
@@ -113,28 +135,32 @@ def run_ffmpeg_segment(
     output_pattern: str,
     cut_points: list[float],
     ffmpeg: str | None = None,
-    total_duration: float | None = None,
 ) -> None:
     """Cut a video at specified timestamps using FFmpeg segment muxer.
 
     Uses stream copy (no re-encode) with AAC audio, falling back to a full
     re-encode if the copy fails (a codec the container has no tag for, e.g.
-    ProRes or HuffYUV stream-copied into MP4). Chunks into 1500-cut batches
+    ProRes or HuffYUV stream-copied into MP4). The re-encode forces a
+    keyframe at every cut point: the segment muxer only splits on keyframes,
+    so without them the fallback wrote the whole video as one segment. Chunks into 1500-cut batches
     to stay under the Windows 32,767-char command line limit.
 
-    The segment muxer has no keyframe-alignment awareness -- any split that
-    doesn't land on a keyframe can drag a few trailing frames from the next
-    scene into the current one (same GOP-boundary issue smart_cut.cut_scene
-    guards against). Each produced segment is trimmed back to its intended
-    duration afterward to catch that.
+    A stream-copy split can only land on a keyframe, so a ``cut_points``
+    entry that isn't exactly one (the ``edge`` method's cuts rarely are)
+    pushes the actual split forward to the next real keyframe -- the
+    segment before it runs a little longer than requested, same trade-off
+    as ``cutting.smart_cut``'s ``copy`` mode. Nothing is hidden or trimmed:
+    every produced file is the plain bytes ffmpeg wrote.
+
+    An empty ``cut_points`` (nothing to split, e.g. a single-GOP source or a
+    detector that found no cuts) writes the whole video as one file at
+    ``output_pattern % 0`` instead of invoking the segment muxer at all.
 
     Args:
         video_path: Path to the source video.
         output_pattern: FFmpeg output pattern (e.g. ``"out_%04d.mp4"``).
         cut_points: Sorted list of cut timestamps in seconds.
         ffmpeg: Optional path to ffmpeg binary. Auto-detected if None.
-        total_duration: Video duration in seconds, for the last segment's
-            end boundary. Probed from ``video_path`` if not given.
     """
     ff = ffmpeg or get_ffmpeg()
 
@@ -150,15 +176,12 @@ def run_ffmpeg_segment(
                 _run_chunk(video_path, output_pattern, relative, i, start_time, end_time, ff, video_args)
 
     try:
+        if _has_open_gop_leading_pictures(video_path):
+            raise RuntimeError("source has open-GOP leading pictures a stream copy would drop")
         _run_all(_COPY_VIDEO_ARGS)
     except RuntimeError as exc:
         log(f"Stream copy failed ({exc}), re-encoding instead")
         _run_all(_REENCODE_VIDEO_ARGS)
-
-    duration = total_duration if total_duration is not None else probe_video_duration(video_path)
-    boundaries = _segment_boundaries(cut_points, duration)
-    for idx in range(len(boundaries) - 1):
-        _trim_segment(output_pattern % idx, boundaries[idx + 1] - boundaries[idx])
 
 
 _OPENING_RE = re.compile(r"Opening '(?P<path>.+?)' for writing")
@@ -186,22 +209,8 @@ def _run_chunk_streaming(
     if end_time is not None:
         cmd += ["-to", _fmt_ts(end_time)]
 
-    cmd += [
-        "-i", video_path,
-        "-map", "0:v:0",
-        "-map", "0:a?",
-        *video_args,
-        "-c:a", "aac",
-        "-b:a", "160k",
-        "-ac", "2",
-        "-ar", "48000",
-        "-f", "segment",
-        "-segment_times", _fmt_segment_times(cut_points),
-        "-segment_start_number", str(start_num),
-        "-reset_timestamps", "1",
-        "-progress", "pipe:2",
-        output_pattern,
-    ]
+    cmd += ["-i", video_path, "-map", "0:v:0", "-map", "0:a?"]
+    cmd += _output_args(output_pattern, cut_points, start_num, video_args, extra=["-progress", "pipe:2"])
 
     proc = subprocess.Popen(
         cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -209,7 +218,11 @@ def _run_chunk_streaming(
         creationflags=CREATE_NO_WINDOW,
     )
 
-    current: tuple[int, str] | None = None
+    # with no cut points there's one plain output file, not a segment-muxer
+    # stream whose "Opening ... for writing" lines name each one as it lands
+    current: tuple[int, str] | None = (
+        None if cut_points else (start_num, output_pattern % start_num)
+    )
     tail: list[str] = []
     assert proc.stderr is not None
     for line in proc.stderr:
@@ -256,26 +269,17 @@ def run_ffmpeg_segment_streaming(
 
     ``on_segment(index, path)`` fires as each segment finishes (detected from
     the muxer opening the next output file, plus a final flush at process
-    exit) -- each segment is trimmed back to its intended duration (see
-    :func:`run_ffmpeg_segment`) before this fires, so callers always see the
-    corrected file. ``on_progress(fraction)`` fires from ffmpeg's
-    ``-progress`` stream. Identical ffmpeg arguments and output to the
-    non-streaming variant, including the stream-copy-then-reencode fallback.
+    exit). ``on_progress(fraction)`` fires from ffmpeg's ``-progress``
+    stream. Identical ffmpeg arguments and output to the non-streaming
+    variant, including the stream-copy-then-reencode fallback.
     """
     ff = ffmpeg or get_ffmpeg()
     duration = total_duration if total_duration is not None else probe_video_duration(video_path)
-    boundaries = _segment_boundaries(cut_points, duration)
-
-    def _on_segment(idx: int, path: str) -> None:
-        if 0 <= idx < len(boundaries) - 1:
-            _trim_segment(path, boundaries[idx + 1] - boundaries[idx])
-        if on_segment:
-            on_segment(idx, path)
 
     def _run_all(video_args: list[str]) -> None:
         if len(cut_points) <= CHUNK_SIZE:
             _run_chunk_streaming(video_path, output_pattern, cut_points, 0, 0.0,
-                                 None, ff, _on_segment, on_progress, duration, video_args)
+                                 None, ff, on_segment, on_progress, duration, video_args)
             return
 
         for i in range(0, len(cut_points), CHUNK_SIZE):
@@ -284,9 +288,11 @@ def run_ffmpeg_segment_streaming(
             end_time = chunk[-1] if i + CHUNK_SIZE < len(cut_points) else None
             relative = [p - start_time for p in chunk]
             _run_chunk_streaming(video_path, output_pattern, relative, i, start_time,
-                                 end_time, ff, _on_segment, on_progress, duration, video_args)
+                                 end_time, ff, on_segment, on_progress, duration, video_args)
 
     try:
+        if _has_open_gop_leading_pictures(video_path):
+            raise RuntimeError("source has open-GOP leading pictures a stream copy would drop")
         _run_all(_COPY_VIDEO_ARGS)
     except RuntimeError as exc:
         log(f"Stream copy failed ({exc}), re-encoding instead")
