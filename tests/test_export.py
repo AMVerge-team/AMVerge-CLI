@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from fractions import Fraction
 from pathlib import Path
+import subprocess
 
 import pytest
 
 from amverge.core.cutting.smart_cut import cut_scene
 from amverge.core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
 from amverge.core.export import ExportJob, ExportSettings, export_scenes
+from amverge.core.export.engine import CopyContainerError, ExportError, check_copy_container
+from amverge.core.infra.binaries import get_ffmpeg, get_ffprobe
 from amverge.core.export import params
-from tests.fixtures import BY_NAME, media_params
-from tests.fixtures.media import audio_streams, read_frames, stream_duration, video_stream
+from amverge.core.video.probe_utils import probe_seek_origin
+from tests.fixtures import BY_NAME, FIXTURES, media_params
+from tests.fixtures.media import audio_streams, packet_durations, read_frames, video_stream
 
 pytestmark = pytest.mark.media
 
@@ -68,9 +72,10 @@ def expected_frames(spec, indices) -> list[int]:
 
 
 def assert_av_in_sync(path, tolerance: float = 0.05) -> None:
-    video = stream_duration(video_stream(path))
-    for stream in audio_streams(path):
-        assert stream_duration(stream) == pytest.approx(video, abs=tolerance)
+    spans = packet_durations(path)
+    (video,) = spans["video"]
+    for audio in spans["audio"]:
+        assert audio == pytest.approx(video, abs=tolerance)
 
 
 class TestReencodeCodecs:
@@ -123,6 +128,29 @@ class TestReencodeCodecs:
             ExportSettings(codec="h264_main", hardware="cpu"),
         )
         assert Path(outputs[0]).name == "ep01_0002_final.mp4"
+
+
+class TestBitDepth:
+    """Every 8-bit and 10-bit source re-encodes to the target profile's bit
+    depth, frame-exact, whichever depth it started at; av1_main pins no
+    pixel format, so it keeps the source's depth."""
+
+    DEPTH_SOURCES = [
+        s.name for s in FIXTURES if s.codec != "prores"
+    ]
+
+    @pytest.mark.parametrize("spec", media_params(*DEPTH_SOURCES))
+    @pytest.mark.parametrize("codec", ["h264_high", "h264_high10", "h265_main", "h265_main10", "av1_main"])
+    def test_reencode_to_profile_depth(self, media_files, tmp_path, encoders, spec, codec):
+        encoder = params.VIDEO_PARAMS[codec]["cpu"][0]
+        if encoder not in encoders:
+            pytest.skip(f"{encoder} not in this ffmpeg build")
+        idx = 1
+        (out,) = run_export(tmp_path, range_jobs(spec, media_files[spec.name], [idx]), codec=codec)
+        v = video_stream(out)
+        expected = PROFILES[codec][2] or ("yuv420p10le" if spec.bit_depth == 10 else "yuv420p")
+        assert v["pix_fmt"] == expected
+        assert numbers(out) == list(range(*spec.scene_frames[idx]))
 
 
 class TestAudioModes:
@@ -196,18 +224,148 @@ class TestAudioModes:
 
 
 class TestCopyExport:
+    @pytest.mark.parametrize(
+        ("video_spec", "audio_codec"),
+        [
+            (video, audio)
+            for video, targets in {
+                "h264_24_cuts": {"avi": True, "mp4": True, "mov": True},
+                "h265_25_cuts": {"avi": True, "mp4": True, "mov": True},
+                "prores_23976_422hq": {"avi": True, "mp4": False, "mov": True},
+            }.items()
+            for audio in ("aac", "pcm_s16le", "libopus")
+        ],
+    )
+    def test_copy_preflight_checks_ffmpeg_muxer_matrix(
+        self, media_files, tmp_path, video_spec, audio_codec,
+    ):
+        source = media_files[BY_NAME[video_spec].name]
+        input_path = tmp_path / f"{video_spec}-{audio_codec}.mkv"
+        result = subprocess.run(
+            [
+                get_ffmpeg(), "-v", "error", "-y", "-i", str(source), "-f", "lavfi", "-i",
+                "sine=frequency=500:sample_rate=48000", "-map", "0:v:0", "-map", "1:a:0",
+                "-shortest", "-c:v", "copy", "-c:a", audio_codec, str(input_path),
+            ],
+            capture_output=True, text=True,
+        )
+        if result.returncode:
+            pytest.skip(f"{audio_codec} encoder unavailable: {result.stderr}")
+        targets = {"avi": True, "mp4": True, "mov": True}
+        if video_spec == "prores_23976_422hq":
+            targets["mp4"] = False
+        if audio_codec == "pcm_s16le":
+            targets["mp4"] = False
+        if audio_codec == "libopus":
+            targets = {container: accepted and container == "mp4" for container, accepted in targets.items()}
+        for container, accepted in targets.items():
+            settings = ExportSettings(codec="copy", audio="copy", container=container)
+            if accepted:
+                check_copy_container([ExportJob(scene_index=0, input=str(input_path))], settings,
+                                     ffmpeg=get_ffmpeg(), ffprobe=get_ffprobe())
+            else:
+                with pytest.raises(CopyContainerError) as error:
+                    check_copy_container([ExportJob(scene_index=0, input=str(input_path))], settings,
+                                         ffmpeg=get_ffmpeg(), ffprobe=get_ffprobe())
+                assert error.value.details["code"] == "copy_container_incompatible"
+
     @pytest.mark.parametrize("spec", media_params())
     def test_individual_copy_is_keyframe_snapped(self, media_files, tmp_path, spec):
         indices = list(range(len(spec.segments)))
         outputs = run_export(
             tmp_path, range_jobs(spec, media_files[spec.name], indices),
-            codec="copy", container=spec.container,
+            codec="copy", container=spec.export_container,
         )
-        source_codec = video_stream(media_files[spec.name])["codec_name"]
+        source = video_stream(media_files[spec.name])
         for out, idx in zip(outputs, indices):
             assert numbers(out) == list(spec.copy_frames(*spec.scene_frames[idx])), f"scene {idx}"
-            assert video_stream(out)["codec_name"] == source_codec
+            v = video_stream(out)
+            assert (v["codec_name"], v.get("profile"), v["pix_fmt"]) == (
+                source["codec_name"], source.get("profile"), source["pix_fmt"]
+            )
         assert all(e.endswith("|copy") for e in run_export.events)
+
+
+    @pytest.mark.parametrize("merge", [False, True])
+    def test_rejects_container_that_cannot_hold_the_video(self, media_files, tmp_path, merge):
+        spec = BY_NAME["prores_23976_422hq"]
+        with pytest.raises(ValueError, match="Cannot stream-copy the video .* into mp4"):
+            run_export(tmp_path, range_jobs(spec, media_files[spec.name], [0, 2]),
+                       codec="copy", container="mp4", merge=merge)
+        assert not (tmp_path / "out").exists() or not any((tmp_path / "out").iterdir())
+
+    def test_rejects_copied_audio_the_container_cannot_hold(self, media_files, tmp_path):
+        spec = BY_NAME["h264_2997_pcm_mov"]
+        with pytest.raises(ValueError, match="Cannot stream-copy the audio"):
+            run_export(tmp_path, range_jobs(spec, media_files[spec.name], [1]), codec="copy", container="mp4")
+
+    def test_pcm_source_copies_video_into_mp4_with_converted_audio(self, media_files, tmp_path):
+        spec = BY_NAME["h264_2997_pcm_mov"]
+        (out,) = run_export(tmp_path, range_jobs(spec, media_files[spec.name], [1]),
+                            codec="copy", container="mp4", audio="aac")
+        assert run_export.events == [f"CLIP_READY|1|{out}|copy"]
+        assert video_stream(out)["codec_name"] == "h264"
+        assert [a["codec_name"] for a in audio_streams(out)] == ["aac"]
+        assert numbers(out) == list(spec.copy_frames(*spec.scene_frames[1]))
+
+
+class TestAviCopyExport:
+    TAGS = {"h264": "H264", "hevc": "HEVC"}
+
+    @pytest.mark.parametrize("spec", media_params(
+        "h264_2997_gop", "h265_24_opengop", "h264_23976_mkv", "prores_23976_422hq",
+        "huffyuv_24_avi", "utvideo_2997_avi", "magicyuv_25_avi",
+    ))
+    def test_copy_into_avi_is_keyframe_snapped(self, media_files, tmp_path, spec):
+        indices = list(range(len(spec.segments)))
+        outputs = run_export(tmp_path, range_jobs(spec, media_files[spec.name], indices),
+                             codec="copy", container="avi")
+        source = video_stream(media_files[spec.name])
+        for out, idx in zip(outputs, indices):
+            assert out.endswith(".avi")
+            assert numbers(out) == list(spec.copy_frames(*spec.scene_frames[idx])), f"scene {idx}"
+            v = video_stream(out)
+            assert int(v["nb_frames"]) == len(spec.copy_frames(*spec.scene_frames[idx])), f"scene {idx} has empty frames"
+            assert v["codec_name"] == source["codec_name"]
+            assert float(Fraction(v["avg_frame_rate"])) == pytest.approx(float(spec.rate), rel=1e-3)
+            if v["codec_name"] in self.TAGS:
+                assert v["codec_tag_string"] == self.TAGS[v["codec_name"]]
+            if spec.audio:
+                assert_av_in_sync(out, tolerance=0.1)
+        assert all(e.endswith("|copy") for e in run_export.events)
+
+    @pytest.mark.parametrize("spec", media_params("huffyuv_24_avi", "h264_2997_gop"))
+    def test_copy_merge_into_avi(self, media_files, tmp_path, spec):
+        indices = [0, 2]
+        (out,) = run_export(tmp_path, range_jobs(spec, media_files[spec.name], indices),
+                            codec="copy", container="avi", merge=True)
+        assert run_export.events == [f"CLIP_READY|0|{out}|copy"]
+        got = numbers(out)
+        assert got == sorted(set(got)) and set(expected_frames(spec, indices)) <= set(got)
+        v = video_stream(out)
+        assert float(Fraction(v["avg_frame_rate"])) == pytest.approx(float(spec.rate), rel=1e-3)
+        assert int(v["nb_frames"]) == len(got)
+        if spec.audio:
+            assert_av_in_sync(out, tolerance=0.1)
+
+    def test_lossless_source_cannot_go_to_mp4(self, media_files, tmp_path):
+        spec = BY_NAME["huffyuv_24_avi"]
+        with pytest.raises(CopyContainerError) as error:
+            run_export(tmp_path, range_jobs(spec, media_files[spec.name], [1]), codec="copy", container="mp4")
+        assert error.value.details["stream_type"] == "video"
+        assert "avi" in error.value.details["alternatives"]
+
+    def test_opus_audio_cannot_be_copied_into_avi(self, media_files, tmp_path):
+        spec = BY_NAME["h264_24_cuts"]
+        source = tmp_path / "opus.mkv"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(media_files[spec.name]), "-map", "0:v",
+                        "-map", "0:a", "-c:v", "copy", "-c:a", "libopus", str(source)], check=True)
+        with pytest.raises(CopyContainerError) as error:
+            run_export(tmp_path, range_jobs(spec, source, [1]), codec="copy", container="avi")
+        assert (error.value.details["stream_type"], error.value.details["codec"]) == ("audio", "opus")
+        (out,) = run_export(tmp_path / "pcm", range_jobs(spec, source, [1]),
+                            codec="copy", container="avi", audio="pcm16")
+        assert [a["codec_name"] for a in audio_streams(out)] == ["pcm_s16le"]
 
 
 class TestCutAndExportParity:
@@ -223,7 +381,7 @@ class TestCutAndExportParity:
             clip, _, _ = cut_scene(path, start, end, i, tmp_path, keyframes, "copy")
             (exported,) = run_export(
                 tmp_path / f"export_{i}", range_jobs(spec, path, [i]),
-                codec="copy", container=spec.container,
+                codec="copy", container=spec.export_container,
             )
             assert numbers(exported) == numbers(clip), f"scene {i}"
 
@@ -258,7 +416,7 @@ class TestMerge:
         indices = list(range(1, len(spec.segments)))
         outputs = run_export(
             tmp_path, range_jobs(spec, media_files[spec.name], indices),
-            codec="copy", container=spec.container, merge=True,
+            codec="copy", container=spec.export_container, merge=True,
         )
         a = spec.scene_frames[indices[0]][0]
         expected = list(spec.copy_frames(a, spec.total_frames))
@@ -269,12 +427,25 @@ class TestMerge:
         indices = [0, 2, 3] if len(spec.segments) > 4 else [0, 2]
         outputs = run_export(
             tmp_path, range_jobs(spec, media_files[spec.name], indices),
-            codec="copy", container=spec.container, merge=True,
+            codec="copy", container=spec.export_container, merge=True,
         )
         got = numbers(outputs[0])
         assert got == sorted(set(got))
         assert set(expected_frames(spec, indices)) <= set(got)
         assert_av_in_sync(outputs[0], tolerance=0.1)
+
+    @pytest.mark.parametrize("audio", ["mp3", "opus", "none"])
+    def test_copy_merge_converts_audio(self, media_files, tmp_path, audio):
+        spec = BY_NAME["h264_2997_gop"]
+        indices = [0, 2, 3]
+        (out,) = run_export(tmp_path, range_jobs(spec, media_files[spec.name], indices),
+                            codec="copy", audio=audio, merge=True)
+        assert run_export.events == [f"CLIP_READY|0|{out}|copy"]
+        assert [a["codec_name"] for a in audio_streams(out)] == ([] if audio == "none" else [AUDIO_CODECS[audio]])
+        got = numbers(out)
+        assert got == sorted(set(got)) and set(expected_frames(spec, indices)) <= set(got)
+        if audio != "none":
+            assert_av_in_sync(out, tolerance=0.1)
 
     def test_copy_merge_of_precut_clips_is_lossless(self, media_files, tmp_path):
         spec = BY_NAME["h264_24_cuts"]
@@ -291,14 +462,13 @@ class TestMerge:
         assert run_export.events == [f"CLIP_READY|0|{outputs[0]}|copy"]
         assert_av_in_sync(outputs[0])
 
-    def test_copy_merge_of_mixed_precut_codecs_reencodes(self, media_files, tmp_path):
+    def test_copy_merge_of_mixed_precut_codecs_rejects_without_reencoding(self, media_files, tmp_path):
         spec = BY_NAME["h264_24_cuts"]
         first = run_export(tmp_path / "a", range_jobs(spec, media_files[spec.name], [0]), codec="h264_high")[0]
         second = run_export(tmp_path / "b", range_jobs(spec, media_files[spec.name], [1]), codec="h265_main")[0]
         jobs = [ExportJob(scene_index=0, input=first), ExportJob(scene_index=1, input=second)]
-        outputs = run_export(tmp_path, jobs, codec="copy", merge=True)
-        assert numbers(outputs[0]) == expected_frames(spec, [0, 1])
-        assert run_export.events == [f"CLIP_READY|0|{outputs[0]}|reencode"]
+        with pytest.raises(ExportError, match="Cannot stream-copy this merge"):
+            run_export(tmp_path, jobs, codec="copy", merge=True)
 
 
 class TestFrameGrid:
@@ -311,13 +481,21 @@ class TestFrameGrid:
         assert params.frame_grid_range(1.52, 3.0, Fraction(24)) is None
         assert params.frame_grid_range(1.0, 2.0, None) is None
 
-    def test_cut_args_seek_half_a_frame_early(self):
+    def test_cut_args_seek_a_quarter_frame_early(self):
         cut = params.frame_cut_args(48, 84, Fraction(24))
-        assert cut.input_args == ["-ss", "1.979166667"]
+        assert cut.input_args == ["-ss", "1.989583333"]
         assert cut.output_args == ["-t", "1.520833333", "-frames:v", "36"]
         assert cut.audio_filters("asetpts=PTS-STARTPTS") == (
-            "atrim=start=0.020833333,asetpts=PTS-STARTPTS,atrim=duration=1.5"
+            "atrim=start=0.010416667,asetpts=PTS-STARTPTS,atrim=duration=1.5"
         )
+
+    def test_seek_shifts_by_the_origin(self):
+        cut = params.frame_cut_args(48, 84, Fraction(24), Fraction(21, 1000))
+        assert cut.input_args == ["-ss", "2.010583333"]
+
+    def test_mkv_origin_is_the_audio_priming(self, media_files):
+        assert probe_seek_origin(str(media_files["h264_23976_mkv"])) == Fraction(21, 1000)
+        assert probe_seek_origin(str(media_files["h264_24_cuts"])) == 0
 
     def test_first_frame_needs_no_seek(self):
         cut = params.frame_cut_args(0, 10, Fraction(25))

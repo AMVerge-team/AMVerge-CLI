@@ -42,9 +42,11 @@ def manifest(tmp_path: Path, spec, keys=("start_sec", "end_sec")) -> Path:
 
 class TestExportCommand:
     @pytest.mark.parametrize("args,message", [
-        (["--container", "mkv"], "isn't supported yet"),
+        (["--container", "mkv"], "Unknown container"),
         (["--codec", "prores_422_hq", "--container", "mp4"], "not compatible"),
         (["--codec", "vp9"], "Unknown codec"),
+        (["--codec", "h265_main", "--container", "avi"], "not compatible"),
+        (["--audio", "opus", "--container", "avi"], "not compatible"),
         (["--audio", "wav"], "Unknown audio"),
         (["--hardware", "tpu"], "Unknown hardware"),
     ])
@@ -87,6 +89,16 @@ class TestExportCommand:
         clip = next(out.iterdir())
         assert audio_streams(clip)[0]["codec_name"] == "aac"
 
+    def test_rejects_copy_into_container_that_cannot_hold_the_source(self, media_files, tmp_path):
+        spec = BY_NAME["prores_50_4444"]
+        out = tmp_path / "out"
+        result = invoke("export", media_files[spec.name], "--scenes", manifest(tmp_path, spec),
+                        "-o", out, "--select", "0,1", "--merge", "--codec", "copy", "--container", "mp4")
+        assert result.exit_code == 1
+        text = " ".join(result.output.split())
+        assert "Cannot stream-copy the video" in text and "into mp4" in text
+        assert not out.exists() or not any(out.iterdir())
+
     def test_prores_copy_export_to_mov(self, media_files, tmp_path):
         spec = BY_NAME["prores_50_4444"]
         out = tmp_path / "out"
@@ -107,6 +119,20 @@ class TestExportCommand:
         payload = last_json_line(result.stdout)
         assert payload["error"] is None
         assert len(payload["outputs"]) == 1 and os.path.exists(payload["outputs"][0])
+
+    def test_ipc_copy_preflight_returns_structured_incompatibility(self, media_files, tmp_path):
+        spec = BY_NAME["prores_50_4444"]
+        output = tmp_path / "out"
+        result = invoke(
+            "export", media_files[spec.name], "--scenes", manifest(tmp_path, spec), "-o", output,
+            "--codec", "copy", "--container", "mp4", "--ipc",
+        )
+        assert result.exit_code == 1
+        payload = last_json_line(result.stdout)
+        assert payload["outputs"] == []
+        assert payload["error"]["code"] == "copy_container_incompatible"
+        assert payload["error"]["stream_type"] == "video"
+        assert not output.exists()
 
     def test_inputs_json_app_mode(self, media_files, tmp_path):
         spec = BY_NAME["h264_24_cuts"]

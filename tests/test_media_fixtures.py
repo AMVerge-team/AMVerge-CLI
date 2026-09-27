@@ -5,21 +5,28 @@ from fractions import Fraction
 import pytest
 
 from tests.fixtures import FIXTURES, media_params
-from tests.fixtures.media import audio_streams, keyframe_times, read_frames, runs, video_stream
+from tests.fixtures.media import audio_streams, keyframe_times, packet_count, read_frames, runs, video_stream
 
 pytestmark = pytest.mark.media
 
-CODEC_NAMES = {"h264": "h264", "h265": "hevc", "prores": "prores"}
+CODEC_NAMES = {"h264": "h264", "h265": "hevc", "av1": "av1", "prores": "prores",
+               "huffyuv": "huffyuv", "utvideo": "utvideo", "magicyuv": "magicyuv"}
 
 
 def test_fixture_matrix_covers_required_variety():
-    assert {s.codec for s in FIXTURES} >= {"h264", "h265", "prores"}
+    assert {s.codec for s in FIXTURES} >= {"h264", "h265", "av1", "prores"}
     assert len({s.fps for s in FIXTURES}) >= 5
     assert len({(s.width, s.height) for s in FIXTURES}) >= 5
-    assert {s.keyframes for s in FIXTURES} == {"cuts", "gop", "sparse", "intra"}
+    assert {s.keyframes for s in FIXTURES} == {"cuts", "gop", "cuts_gop", "sparse", "intra"}
     assert any(not s.audio for s in FIXTURES)
     assert any(len(s.audio) > 1 for s in FIXTURES)
     assert len({s.total_frames for s in FIXTURES}) >= 5
+    assert {(s.codec, s.container, s.bit_depth) for s in FIXTURES} >= {
+        (codec, container, depth)
+        for codec in ("h264", "h265")
+        for container in ("mp4", "mkv")
+        for depth in (8, 10)
+    } | {("av1", "mp4", 8), ("av1", "mkv", 10), ("prores", "mov", 10)}
 
 
 @pytest.mark.parametrize("spec", media_params())
@@ -28,11 +35,13 @@ def test_stream_properties(media_files, spec):
     v = video_stream(path)
     assert v["codec_name"] == CODEC_NAMES[spec.codec]
     assert (v["width"], v["height"]) == (spec.width, spec.height)
-    if spec.track_timescale:
+    if spec.codec != "prores":
+        assert v["pix_fmt"] == spec.pix_fmt
+    if spec.timescale:
         assert float(Fraction(v["avg_frame_rate"])) == pytest.approx(float(spec.rate), rel=1e-3)
     else:
         assert Fraction(v["avg_frame_rate"]) == spec.rate
-    assert int(v["nb_frames"]) == spec.total_frames
+    assert packet_count(path) == spec.total_frames
 
     audio = audio_streams(path)
     assert len(audio) == len(spec.audio)

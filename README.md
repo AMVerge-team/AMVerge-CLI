@@ -25,10 +25,10 @@ Port of the AMVerge desktop app backend by [Crptk](https://github.com/crptk). Sp
 - **Depth Maps** - per-frame monocular depth estimation via Depth-Anything-V2 (GPU/CPU)
 - **Deadframe Removal** - optical flow + ORB homography + motion-area analysis (OpenCV)
 - **Pipeline** - chain deadframes + upscale + interpolate, save/load presets, interactive or TUI
-- **Smart cut** - copy (true stream copy, snapped to keyframes) or full re-encode, your choice
+- **Smart cut** - copy (stream copy, snapped to keyframes) or full re-encode, your choice
 - **15 codec profiles** - H.264, HEVC, AV1, ProRes with hardware (NVENC) support
 - **10 audio codecs** - AAC, FLAC, Opus, PCM, MP3, pass-through
-- **2 container formats** - MP4, MOV (ProRes auto-enforces MOV)
+- **3 container formats** - MP4, MOV (ProRes auto-enforces MOV), AVI for stream copies (HuffYUV, Ut Video, MagicYUV, Lagarith)
 - Auto-generated scene thumbnails (progressive JPEG)
 - Duplicate / similar scene detection (cosine similarity)
 - Scene export with full codec + audio + hardware selection

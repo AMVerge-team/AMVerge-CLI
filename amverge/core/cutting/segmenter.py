@@ -10,11 +10,13 @@ from typing import Any, Callable
 
 from ..infra.binaries import get_ffmpeg
 from ..infra.ipc import log
+from ..keyframes.keyframe_align import get_keyframe_timestamps_pyav, get_open_gop_keyframes
 from ..video.probe_utils import probe_video_duration
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 _COPY_VIDEO_ARGS = ["-c:v", "copy"]
+_SPLIT_TOLERANCE = 1e-3
 _REENCODE_VIDEO_ARGS = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16", "-pix_fmt", "yuv420p"]
 
 _SILENCED = [
@@ -47,30 +49,22 @@ def _clean_ffmpeg_output(text: str | None) -> str:
     return "\n".join(lines)
 
 
-def _has_open_gop_leading_pictures(video_path: str) -> bool:
-    """Whether any keyframe in the source is followed, in decode order, by a
-    picture that displays *before* it (open GOP, common on x265/anime
-    encodes). A stream-copy segment split can only cut on keyframes, and
-    those leading pictures decode from the keyframe that follows them --
-    keeping them decodable would mean writing that keyframe into both
-    segments, which breaks exact tiling; dropping them, which is what
-    ffmpeg's segment muxer already does today (their rebased pts goes
-    negative once `-reset_timestamps 1` zeroes the new segment at the
-    keyframe, and it silently discards them), loses real frames instead.
-    Neither is acceptable from a stream copy, so the caller re-encodes."""
-    import av
-
-    with av.open(video_path) as container:
-        stream = container.streams.video[0]
-        last_keyframe_pts = None
-        for packet in container.demux(stream):
-            if packet.pts is None:
-                continue
-            if packet.is_keyframe:
-                last_keyframe_pts = packet.pts
-                continue
-            if last_keyframe_pts is not None and packet.pts < last_keyframe_pts:
-                return True
+def _cuts_on_open_gop_keyframes(video_path: str, cut_points: list[float]) -> bool:
+    """Whether the segment muxer would split at a keyframe with open-GOP
+    leading pictures: it starts each segment at the first keyframe at or
+    after the cut, and a segment starting at such a keyframe loses those
+    pictures (see ``keyframe_align.get_open_gop_keyframes``). Keyframe
+    detection never cuts there, but other cut lists can."""
+    if not cut_points:
+        return False
+    open_gop = get_open_gop_keyframes(video_path)
+    if not open_gop:
+        return False
+    keyframes = get_keyframe_timestamps_pyav(video_path)
+    for cut in cut_points:
+        split = next((k for k in keyframes if k >= cut - _SPLIT_TOLERANCE), None)
+        if split is not None and any(abs(split - k) < _SPLIT_TOLERANCE for k in open_gop):
+            return True
     return False
 
 
@@ -176,8 +170,8 @@ def run_ffmpeg_segment(
                 _run_chunk(video_path, output_pattern, relative, i, start_time, end_time, ff, video_args)
 
     try:
-        if _has_open_gop_leading_pictures(video_path):
-            raise RuntimeError("source has open-GOP leading pictures a stream copy would drop")
+        if _cuts_on_open_gop_keyframes(video_path, cut_points):
+            raise RuntimeError("a cut lands on an open-GOP keyframe whose leading pictures no player decodes from a stream-copied segment")
         _run_all(_COPY_VIDEO_ARGS)
     except RuntimeError as exc:
         log(f"Stream copy failed ({exc}), re-encoding instead")
@@ -291,8 +285,8 @@ def run_ffmpeg_segment_streaming(
                                  end_time, ff, on_segment, on_progress, duration, video_args)
 
     try:
-        if _has_open_gop_leading_pictures(video_path):
-            raise RuntimeError("source has open-GOP leading pictures a stream copy would drop")
+        if _cuts_on_open_gop_keyframes(video_path, cut_points):
+            raise RuntimeError("a cut lands on an open-GOP keyframe whose leading pictures no player decodes from a stream-copied segment")
         _run_all(_COPY_VIDEO_ARGS)
     except RuntimeError as exc:
         log(f"Stream copy failed ({exc}), re-encoding instead")

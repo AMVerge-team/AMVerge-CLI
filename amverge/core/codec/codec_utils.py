@@ -35,12 +35,8 @@ VALID_CODECS = {
 }
 VALID_AUDIO = {"copy", "aac", "aac_320", "pcm16", "pcm24", "flac", "alac", "opus", "mp3", "none"}
 
-VALID_CONTAINERS = {"mp4", "mov"}
+VALID_CONTAINERS = {"avi", "mp4", "mov"}
 VALID_HARDWARE = {"auto", "gpu", "cpu"}
-
-# Containers we recognize but deliberately reject, so the CLI can explain why
-# instead of just calling them "unknown".
-NO_EDIT_LIST_CONTAINERS = {"mkv", "webm"}
 
 CODEC_ALIASES: dict[str, str] = {
     "h264": "h264_main",

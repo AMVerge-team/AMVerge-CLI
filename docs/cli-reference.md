@@ -74,7 +74,7 @@ amverge export episode.mp4 --scenes scenes.json --codec prores_422 --container m
 | `--merge` | false | Merge selection into one file |
 | `--codec` | `copy` | Codec profile (see below) |
 | `--audio` | `copy` | Audio codec (see below) |
-| `--container` | `mp4` | Output container: `mp4`, `mkv`, `mov` |
+| `--container` | `mp4` | Output container: `mp4`, `mov`, `avi` (`avi` only with `--codec copy`) |
 | `--hardware` | `auto` | GPU encode: `auto`, `gpu`, `cpu` |
 | `--no-rpc` | false | Disable Discord RPC |
 

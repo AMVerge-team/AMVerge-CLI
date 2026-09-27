@@ -69,7 +69,7 @@ def _audio_graph(spec: MediaSpec) -> list[str]:
 
 
 def _force_keyframes(spec: MediaSpec) -> list[str]:
-    if spec.keyframes != "cuts":
+    if spec.keyframes not in ("cuts", "cuts_gop"):
         return []
     terms = "+".join(f"eq(n,{f})" for f in [0, *spec.cut_frames])
     return ["-force_key_frames", f"expr:{terms}"]
@@ -77,7 +77,7 @@ def _force_keyframes(spec: MediaSpec) -> list[str]:
 
 def _video_encoder(spec: MediaSpec) -> list[str]:
     total = spec.total_frames + 1
-    keyint = {"cuts": total, "gop": spec.gop, "sparse": total}.get(spec.keyframes)
+    keyint = {"cuts": total, "gop": spec.gop, "cuts_gop": spec.gop, "sparse": total}.get(spec.keyframes)
     if spec.codec == "h264":
         args = [
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
@@ -91,8 +91,16 @@ def _video_encoder(spec: MediaSpec) -> list[str]:
             "-x265-params",
             f"keyint={keyint}:min-keyint={keyint}:scenecut=0:open-gop={int(spec.open_gop)}"
             f":bframes={spec.bframes}:log-level=error",
-            "-tag:v", "hvc1",
         ]
+        if spec.container != "mkv":
+            args += ["-tag:v", "hvc1"]
+    elif spec.codec == "av1":
+        args = [
+            "-c:v", "libsvtav1", "-preset", "10", "-crf", "30",
+            "-svtav1-params", f"keyint={keyint}:scd=0",
+        ]
+    elif spec.codec in ("huffyuv", "utvideo", "magicyuv"):
+        args = ["-c:v", spec.codec]
     else:
         args = ["-c:v", "prores_ks", "-vendor", "apl0"]
     if spec.profile:
@@ -123,7 +131,7 @@ def build_command(spec: MediaSpec, out: Path, timecode: bool = True) -> list[str
     cmd += _video_encoder(spec) + _audio_encoder(spec)
     if spec.container == "mp4":
         cmd += ["-movflags", "+faststart"]
-    if spec.track_timescale:
+    if spec.track_timescale and spec.container != "mkv":
         cmd += ["-video_track_timescale", str(spec.track_timescale)]
     cmd.append(str(out))
     return cmd

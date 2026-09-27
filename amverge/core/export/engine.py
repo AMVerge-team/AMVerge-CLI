@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -9,11 +10,12 @@ import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Callable, Optional
 
 from ..infra.binaries import get_ffmpeg, get_ffprobe
-from ..video.probe_utils import probe_video_rate
+from ..video.probe_utils import probe_seek_origin, probe_video_rate
 from . import params
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -28,6 +30,19 @@ class ExportError(RuntimeError):
 
 class ExportAborted(RuntimeError):
     pass
+
+
+class CopyContainerError(ValueError):
+    def __init__(self, details: dict[str, str]):
+        self.details = details
+        stream = details["stream_type"]
+        label = f"the {stream}" if stream in ("video", "audio") else stream
+        alternatives = details.get("alternatives")
+        hint = f"use {alternatives}" if alternatives else "choose a compatible container or re-encode that stream"
+        super().__init__(
+            f"Cannot stream-copy {label} stream {details['stream_index']} ({details['codec']}) of "
+            f"{details['input']} into {details['container']}; {hint}"
+        )
 
 
 @dataclass
@@ -338,16 +353,18 @@ def _export_one(
     def copy_args() -> list[str]:
         bsf = params.stream_copy_bsf(source_video_codec, ext)
         return params.build_copy_args(job.input, out_path, settings.audio, job.seek_ms, job.dur_ms, bsf,
-                                      track, audio_count, settings.audio_single)
+                                      track, audio_count, settings.audio_single,
+                                      params.copy_video_args(source_video_codec, ext, source_frame_rate))
 
     frames = job_frames(job)
     grid_rate = str(probe_video_rate(job.input)) if frames else None
+    seek_origin = probe_seek_origin(job.input) if job.seek_ms else Fraction(0)
 
     def reencode_args(codec: str, gpu: bool) -> list[str]:
         return params.build_reencode_args(job.input, out_path, codec, settings.audio, gpu,
                                           job.seek_ms, job.dur_ms, track, audio_count,
                                           settings.audio_single, source_frame_rate,
-                                          frames, grid_rate)
+                                          frames, grid_rate, seek_origin)
 
     if settings.codec == "copy":
         _run_ffmpeg(ffmpeg, copy_args(), total_ms, on_frac, abort, active)
@@ -395,7 +412,7 @@ def _contiguous_range_groups(jobs: list[ExportJob], eps: float = 0.05) -> list[l
     return groups
 
 
-def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool) -> list[ExportJob]:
+def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool, frame_timed: bool = False) -> list[ExportJob]:
     """For remux (copy) exports, cut each source range as a true,
     keyframe-snapped stream copy (see ``cutting.smart_cut``) so every
     boundary is guaranteed decodable. Whole-file jobs (already a pre-cut
@@ -432,12 +449,105 @@ def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool) -> list
         start = job.seek_ms / 1000.0
         end = (last.seek_ms + (last.dur_ms or 0)) / 1000.0
         out_path = tmp_dir / f"range_{job.scene_index}{suffix_cache[src]}"
-        copy_range(Path(src), start, end, out_path, kf_cache[src], rate=rate_cache[src])
+        copy_range(Path(src), start, end, out_path, kf_cache[src], rate=rate_cache[src], frame_timed=frame_timed)
         out.append(ExportJob(scene_index=job.scene_index, input=str(out_path)))
     return out
 
 
 # -- orchestration ---------------------------------------------------------
+
+def _copy_streams(ffprobe: str, source: str, include_audio: bool) -> list[dict[str, str]]:
+    result = subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries", "stream=index,codec_name,codec_type", "-of", "json", source],
+        capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+    )
+    if result.returncode:
+        raise ExportError((result.stderr or "ffprobe could not inspect input").strip())
+    payload = json.loads(result.stdout or "{}")
+    return [
+        {key: str(value) for key, value in stream.items()}
+        for stream in payload.get("streams", [])
+        if stream.get("codec_type") == "video" or (include_audio and stream.get("codec_type") == "audio")
+    ]
+
+
+def _ffmpeg_video_copy_error(
+    source: str, stream: dict[str, str], container: str, ffmpeg: str, ffprobe: str,
+) -> str | None:
+    """Why ffmpeg cannot stream-copy ``source``'s video ``stream`` into
+    ``container``, or None. Copies a few frames the way the export does and
+    reads the result back: a muxer that accepts a codec it has no mapping for
+    (HEVC re-encoded into AVI without a tag) writes a file that reads back as
+    something else."""
+    codec = stream["codec_name"]
+    with tempfile.TemporaryDirectory() as temp_dir:
+        target = str(Path(temp_dir) / f"probe.{container}")
+        args = [ffmpeg, "-v", "error", "-y", "-i", source, "-map", f"0:{stream['index']}",
+                "-frames:v", "3", "-c", "copy"]
+        bsf = params.stream_copy_bsf(codec, container)
+        if bsf:
+            args += ["-bsf:v", bsf]
+        args += params.copy_video_args(codec, container)
+        args += ["-f", params.muxer_name(container), target]
+        result = subprocess.run(args, capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+        if result.returncode:
+            return (result.stderr or "the muxer rejected the stream").strip()
+        back = _copy_streams(ffprobe, target, include_audio=False)
+        if not back or back[0]["codec_name"] != codec:
+            return f"{container} stores {codec} as {back[0]['codec_name'] if back else 'nothing'}"
+    return None
+
+
+def check_copy_container(
+    jobs: list[ExportJob], settings: ExportSettings, *, ffmpeg: str | None = None, ffprobe: str | None = None,
+) -> None:
+    """Raise :class:`CopyContainerError` when a ``codec="copy"`` export's
+    container cannot hold a stream copy of an input's video (ProRes into MP4),
+    or of its audio when that is copied too (PCM into MP4, Opus into AVI).
+    Runs before anything is written, so an impossible copy is rejected
+    instead of failing partway or being re-encoded.
+
+    Video is tried with ffmpeg itself, since ffmpeg writes the final file
+    (:func:`_ffmpeg_video_copy_error`). Audio follows
+    ``params.audio_copy_safe``, the same table the CLI uses to pick a
+    fallback audio codec: ffmpeg will write some audio no player reads
+    (PCM into MP4)."""
+    if settings.codec != "copy":
+        return
+    ffmpeg = ffmpeg or get_ffmpeg()
+    ffprobe = ffprobe or get_ffprobe()
+
+    for src in dict.fromkeys(job.input for job in jobs):
+        streams = _copy_streams(ffprobe, src, include_audio=settings.audio == "copy")
+        video = next((st for st in streams if st["codec_type"] == "video"), None)
+        failures = []
+        if video is None:
+            failures.append({"stream_type": "video", "stream_index": "-1", "codec": "none", "reason": "no video stream"})
+        else:
+            reason = _ffmpeg_video_copy_error(src, video, settings.container, ffmpeg, ffprobe)
+            if reason:
+                failures.append({"stream_type": "video", "stream_index": video["index"],
+                                 "codec": video["codec_name"], "reason": reason})
+        for st in streams:
+            if st["codec_type"] == "audio" and not params.audio_copy_safe(st["codec_name"], settings.container):
+                failures.append({"stream_type": "audio", "stream_index": st["index"], "codec": st["codec_name"],
+                                 "reason": f"{settings.container} does not carry {st['codec_name']} audio"})
+        if failures:
+            failure = failures[0]
+            others = [c for c in ("mp4", "mov", "avi") if c != settings.container]
+            if failure["stream_type"] == "video" and video is not None:
+                fits = [c for c in others if _ffmpeg_video_copy_error(src, video, c, ffmpeg, ffprobe) is None]
+            else:
+                fits = [c for c in others if params.audio_copy_safe(failure["codec"], c)]
+            if fits:
+                failure = {**failure, "alternatives": " or ".join(fits)}
+            raise CopyContainerError({
+                "code": "copy_container_incompatible",
+                "input": str(Path(src)),
+                "container": settings.container,
+                **failure,
+            })
+
 
 def export_scenes(
     jobs: list[ExportJob],
@@ -456,6 +566,7 @@ def export_scenes(
     ffprobe = ffprobe or get_ffprobe()
     abort = abort or threading.Event()
     active: set = set()
+    check_copy_container(jobs, settings, ffmpeg=ffmpeg, ffprobe=ffprobe)
     os.makedirs(out_dir, exist_ok=True)
 
     def progress(pct: int, msg: str) -> None:
@@ -473,7 +584,8 @@ def export_scenes(
     if settings.codec == "copy" and any(j.seek_ms is not None for j in jobs):
         smartcut_tmp = tempfile.TemporaryDirectory()
         progress(5, "Cutting source ranges...")
-        jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), dedupe=settings.merge)
+        jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), dedupe=settings.merge,
+                                frame_timed=settings.container == "avi")
 
     source_video_codec = probe_video_codec(ffprobe, jobs[0].input) if jobs else None
     source_is_10bit = probe_is_10bit(ffprobe, jobs[0].input) if jobs else False
@@ -567,21 +679,16 @@ def _merge(
             progress(30, "Merging (stream copy)...")
             merge_langs = probe_audio_languages(ffprobe, inputs[0])
             merge_track = resolve_audio_track(merge_langs, settings.audio_language)
-            try:
-                _concat_copy(inputs, out_path, ext, source_video_codec,
-                             settings.audio, ffmpeg, abort, active,
-                             merge_track if merge_track is not None else settings.audio_track,
-                             len(merge_langs) if merge_langs else audio_count)
-                event(f"CLIP_READY|0|{out_path}|copy")
-                return out_path
-            except ExportAborted:
-                raise
-            except ExportError:
-                progress(35, "Stream-copy merge failed; re-encoding...")
-                force_reencode = True
-        else:
-            progress(25, "Re-encoding for a clean join...")
-            force_reencode = True
+            _concat_copy(inputs, out_path, ext, source_video_codec,
+                         settings.audio, ffmpeg, abort, active,
+                         merge_track if merge_track is not None else settings.audio_track,
+                         len(merge_langs) if merge_langs else audio_count, source_frame_rate)
+            event(f"CLIP_READY|0|{out_path}|copy")
+            return out_path
+        raise ExportError(
+            "Cannot stream-copy this merge because the inputs do not share a compatible video stream "
+            "or do not begin on a keyframe; export the clips individually or choose a re-encode codec"
+        )
 
     seg_copy = settings.codec == "copy" and not force_reencode and not has_ranges
     fallback_codec = "h264_high10" if source_is_10bit else "h264_high"
@@ -627,7 +734,7 @@ def _merge(
 
         progress(90, "Concatenating segments...")
         _concat_copy(segments, out_path, ext, source_video_codec if seg_copy else None,
-                     "copy", ffmpeg, abort, active)
+                     "copy", ffmpeg, abort, active, frame_rate=source_frame_rate)
         
     event(f"CLIP_READY|0|{out_path}|{'copy' if seg_copy else 'reencode'}")
     return out_path
@@ -637,6 +744,7 @@ def _concat_copy(
     inputs: list[str], out_path: str, ext: str, source_video_codec: Optional[str],
     audio: str, ffmpeg: str, abort: threading.Event, active: set,
     audio_track: Optional[int] = None, audio_count: Optional[int] = None,
+    frame_rate: Optional[str] = None,
 ) -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
         listfile = f.name
@@ -649,12 +757,15 @@ def _concat_copy(
         args += ["-c:v", "copy"]
         if audio == "none":
             args += ["-an"]
-        else:
+        elif audio == "copy":
             args += ["-c:a", "copy"]
+        else:
+            args += params.audio_args(audio)
         args += params.disposition_args(audio, audio_track, audio_count)
         bsf = params.stream_copy_bsf(source_video_codec, ext)
         if bsf:
             args += ["-bsf:v", bsf]
+        args += params.copy_video_args(source_video_codec, ext, frame_rate)
         if ext in ("mp4", "mov"):
             args += ["-movflags", "+faststart"]
         args += ["-max_muxing_queue_size", "1024", out_path]

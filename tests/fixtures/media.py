@@ -53,6 +53,35 @@ def stream_duration(stream: dict) -> float:
     return float(stream["duration"])
 
 
+def packet_durations(path: str | Path) -> dict[str, list[float]]:
+    """Span of each video/audio stream measured from its packets, for
+    containers (AVI) whose streams carry no duration. Video is its packet
+    count over the frame rate: AVI gives B-frame packets no pts."""
+    spans: dict[int, tuple] = {}
+    counts: dict[int, int] = {}
+    with av.open(str(path)) as container:
+        rates = {s.index: s.average_rate for s in container.streams.video}
+        kinds = {s.index: s.type for s in container.streams}
+        for packet in container.demux():
+            index = packet.stream.index
+            if kinds.get(index) == "video" and packet.size:
+                counts[index] = counts.get(index, 0) + 1
+            elif kinds.get(index) == "audio" and packet.pts is not None:
+                tb = packet.time_base
+                start, end = packet.pts * tb, (packet.pts + (packet.duration or 0)) * tb
+                lo, hi = spans.get(index, (start, end))
+                spans[index] = (min(lo, start), max(hi, end))
+    return {
+        "video": [float(n / rates[i]) for i, n in counts.items()],
+        "audio": [float(hi - lo) for lo, hi in spans.values()],
+    }
+
+
+def packet_count(path: str | Path) -> int:
+    data = ffprobe(path, "-select_streams", "v:0", "-count_packets", "-show_entries", "stream=nb_read_packets")
+    return int(data["streams"][0]["nb_read_packets"])
+
+
 def keyframe_times(path: str | Path) -> list[float]:
     data = ffprobe(path, "-select_streams", "v:0", "-show_entries", "packet=pts_time,flags")
     return sorted(

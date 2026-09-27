@@ -5,30 +5,16 @@ from __future__ import annotations
 - ``copy``: a true, unmodified stream copy. AI-detected scene boundaries
   rarely land on a keyframe (H.264/HEVC can only start decoding cleanly on
   one), so a copy that started exactly at the detected cut would either be
-  undecodable or need something else -- an edit list, a partial-GOP
-  re-encode of the head, a concat splice -- to paper over the gap. Every one
-  of those turned out to have real, hard-to-fully-enumerate edge cases (see
-  git history: PTS corruption, B-frame-crossing trims, concat timestamp
-  splices, tail-overshoot). This mode sidesteps the problem instead of
-  solving it: it widens the copy outward to the nearest keyframe on both
-  ends -- backward at the start, forward at the end -- so the cut is never
-  anything but a plain packet remux of a keyframe-to-keyframe span (see
-  :func:`_lossless_copy`). The trade-off is visible and permanent: the clip can carry up to
-  one keyframe interval of the neighboring scene at either edge. Nothing is
-  ever dropped, mixed up, hidden behind metadata, or re-encoded -- every
-  frame in the output is a byte-exact copy of the source, playable in
-  anything that can open the source at all, including editors with no edit
-  list support.
+  undecodable or need something else. The clip can carry up to
+  one keyframe interval of the neighboring scene at either edge.
 - ``reencode``: exact boundaries, at the cost of a real (if usually small)
   re-encode.
 
 Which mode to use is the caller's choice, made once for the whole job --
-this module does not guess per scene. An earlier version tried to have it
-both ways (copy when cheap, re-encode when not, snapped or trimmed as
-needed) and kept surfacing new correctness edge cases as a result; two
-plain, well-understood modes replace it.
+this module does not guess per scene.
 """
 
+import io
 import os
 import subprocess
 from bisect import bisect_left, bisect_right
@@ -37,9 +23,11 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Callable, Literal
 
+import av
+
 from ..export.params import frame_cut_args, frame_grid_range
 from ..infra.binaries import get_ffmpeg, get_ffprobe
-from ..video.probe_utils import probe_video_rate
+from ..video.probe_utils import probe_seek_origin, probe_video_rate
 from ..infra.ipc import emit_progress, log
 
 CutMode = Literal["copy", "reencode"]
@@ -112,28 +100,90 @@ def snap_range_to_keyframes(
 _TS_EPSILON = 1e-6
 
 
+def _add_copy_stream(dst, stream):
+    """Add an output stream that remuxes ``stream``'s packets untouched.
+    ``opaque`` copies the codec parameters without looking up an encoder
+    (there is none for a decoder-only codec such as libdav1d AV1). The source
+    codec tag is kept, else the MOV muxer labels every ProRes stream HQ
+    (``apch``), and HEVC is tagged ``hvc1`` since QuickTime rejects MP4's
+    default ``hev1`` (MKV sources carry no tag of their own)."""
+    out = dst.add_stream_from_template(stream, opaque=True)
+    tag = stream.codec_context.codec_tag
+    if stream.type == "video" and stream.codec_context.name == "hevc":
+        out.codec_context.codec_tag = "hvc1"
+    elif tag.strip("\x00 "):
+        out.codec_context.codec_tag = tag
+    return out
+
+
+def copy_muxability_error(input_file: Path, container: str, audio: bool = True) -> dict[str, str] | None:
+    """Return details when a target muxer cannot accept copied input streams."""
+    with av.open(str(input_file)) as src:
+        video_streams = list(src.streams.video)
+        if not video_streams:
+            return {"stream_type": "video", "stream_index": "-1", "codec": "none", "reason": "no video stream"}
+        streams = [*video_streams, *(src.streams.audio if audio else [])]
+        for stream in streams:
+            try:
+                with av.open(io.BytesIO(), "w", format=container) as probe:
+                    _add_copy_stream(probe, stream)
+                    probe.start_encoding()
+            except (ValueError, av.FFmpegError) as e:
+                return {
+                    "stream_type": stream.type,
+                    "stream_index": str(stream.index),
+                    "codec": stream.codec_context.name or "unknown",
+                    "reason": str(e),
+                }
+        try:
+            with av.open(io.BytesIO(), "w", format=container) as probe:
+                for stream in streams:
+                    _add_copy_stream(probe, stream)
+                probe.start_encoding()
+        except (ValueError, av.FFmpegError) as e:
+            return {
+                "stream_type": "muxer",
+                "stream_index": "-1",
+                "codec": "multiple",
+                "reason": str(e),
+            }
+    return None
+
+
+def copy_muxable(input_file: Path, container: str, audio: bool = True) -> bool:
+    """Whether ``container`` can hold copied video and optional audio streams."""
+    return copy_muxability_error(input_file, container, audio) is None
+
+
+def _own_container(input_file: Path) -> str | None:
+    with av.open(str(input_file)) as src:
+        names = src.format.name.split(",")
+    if "avi" in names:
+        return "avi"
+    if "matroska" in names:
+        return "mkv"
+    return None
+
+
 def copy_container_suffix(input_file: Path) -> str:
     """File suffix a copy-mode clip of ``input_file`` must use: ``".mp4"``
     when every stream :func:`_lossless_copy` keeps can be muxed into MP4
-    as-is, ``".mov"`` otherwise (ProRes and other intermediate codecs MP4
-    has no tag for). Asks the muxer itself rather than keeping a codec list.
+    as-is, else the source's own AVI or Matroska container, which always
+    holds its own streams (HuffYUV, Ut Video, MagicYUV and Lagarith fit
+    neither MP4 nor MOV), else ``".mov"`` (ProRes, PCM audio). See
+    :func:`copy_muxable`. Raises ValueError when none can.
     """
-    import io
-
-    import av
-
-    with av.open(str(input_file)) as src:
-        streams = [src.streams.video[0], *src.streams.audio]
-        try:
-            with av.open(io.BytesIO(), "w", format="mp4") as probe:
-                for stream in streams:
-                    probe.add_stream_from_template(stream)
-        except ValueError:
-            return ".mov"
-    return ".mp4"
+    own = _own_container(input_file)
+    candidates = ["mp4", own, "mov"] if own else ["mp4", "mov"]
+    for container in candidates:
+        if copy_muxable(input_file, "matroska" if container == "mkv" else container):
+            return f".{container}"
+    raise ValueError(f"No container can stream-copy {Path(input_file).name}")
 
 
-def _lossless_copy(input_file: Path, start: float, end: float | None, out_path: Path) -> None:
+def _lossless_copy(
+    input_file: Path, start: float, end: float | None, out_path: Path, frame_timed: bool = False,
+) -> None:
     """Stream-copy the keyframe-to-keyframe span ``[start, end)`` verbatim by
     remuxing packets with PyAV. Callers pass keyframe-aligned boundaries
     (see :func:`snap_range_to_keyframes`); ``end=None`` copies through EOF.
@@ -161,19 +211,28 @@ def _lossless_copy(input_file: Path, start: float, end: float | None, out_path: 
     same timeline an ``ffmpeg -ss X -c copy`` produced. Audio packets are
     kept when they overlap ``[start, end)``, so the packet straddling the
     start (and the AAC priming packet at the head of a file) survive with a
-    slightly negative pts, as they did under ffmpeg.
+    slightly negative pts, as they did under ffmpeg. Except in AVI: its
+    video time base is one frame, so the muxer's shift past that negative
+    audio rounds the second frame a whole slot late and the first frame
+    shows twice. There audio starts with the first packet at or after the
+    keyframe instead, and ends with the last packet that finishes by ``end``
+    (a concat spaces clips by their longest stream, and audio running past
+    the video leaves an empty frame at the join). AVI also has no pts, only
+    a slot per packet in decode order, so the leading pictures dropped at
+    the start would leave empty slots after the keyframe; the later video
+    dts close that gap.
     """
-    import av
-
+    frame_timed = frame_timed or out_path.suffix.lower() == ".avi"
     try:
         with av.open(str(input_file)) as src, av.open(
-            str(out_path), "w", container_options={"movflags": "+faststart"}
+            str(out_path), "w",
+            container_options={"movflags": "+faststart"} if out_path.suffix.lower() in (".mp4", ".mov") else {},
         ) as dst:
             video = src.streams.video[0]
             audio = list(src.streams.audio)
             out_streams = {}
             for stream in (video, *audio):
-                out = dst.add_stream_from_template(stream)
+                out = _add_copy_stream(dst, stream)
                 out.metadata.update(stream.metadata)
                 out.disposition = stream.disposition
                 out_streams[stream.index] = out
@@ -195,12 +254,16 @@ def _lossless_copy(input_file: Path, start: float, end: float | None, out_path: 
             pending_audio: list = []
             audio_done = {s.index: False for s in audio}
 
+            dropped_ticks = 0
+
             def write(packet) -> None:
                 offset = base[packet.stream.index]
                 if packet.pts is not None:
                     packet.pts -= offset
                 if packet.dts is not None:
                     packet.dts -= offset
+                    if packet.stream.index == video.index:
+                        packet.dts -= dropped_ticks
                 packet.stream = out_streams[packet.stream.index]
                 dst.mux(packet)
 
@@ -210,7 +273,11 @@ def _lossless_copy(input_file: Path, start: float, end: float | None, out_path: 
                     audio_done[packet.stream.index] = True
                     return False
                 t_end = t + seconds(packet.duration or 0, packet.time_base)
-                if t_end >= float(base_sec) - _TS_EPSILON:
+                if frame_timed and end is not None and t_end > end + _TS_EPSILON:
+                    audio_done[packet.stream.index] = True
+                    return False
+                first = t if frame_timed else t_end
+                if first >= float(base_sec) - _TS_EPSILON:
                     write(packet)
                 return True
 
@@ -220,6 +287,9 @@ def _lossless_copy(input_file: Path, start: float, end: float | None, out_path: 
                 base[video.index] = key_packet.pts
                 for s in audio:
                     base[s.index] = round(base_sec / s.time_base)
+
+            rate = video.average_rate or video.guessed_rate
+            frame_ticks = round(1 / (rate * video.time_base)) if rate else 1
 
             for packet in src.demux(video, *audio):
                 if packet.dts is None and packet.pts is None:
@@ -254,6 +324,8 @@ def _lossless_copy(input_file: Path, start: float, end: float | None, out_path: 
                         held = [packet]
                         continue
                     if t is not None and t < start - _TS_EPSILON:
+                        if frame_timed:
+                            dropped_ticks += packet.duration or frame_ticks
                         continue
                     write(packet)
                     continue
@@ -285,11 +357,14 @@ def copy_range(
     out_path: Path,
     keyframes: list[float],
     rate: Fraction | None = None,
+    frame_timed: bool = False,
 ) -> float:
     """Stream-copy ``[start_sec, end_sec)`` widened outward to its enclosing
     keyframes. The only copy-mode cut: :func:`cut_scene` and
     ``export.engine._smartcut_ranges`` both go through it, so a boundary
-    fix lands in both at once.
+    fix lands in both at once. ``frame_timed`` starts audio at the keyframe
+    as for an AVI output (see :func:`_lossless_copy`); set it when the clip
+    is headed for AVI in a later step.
 
     The range is first mapped onto the source's frame grid (recovering the
     intended frame from millisecond-rounded export times), then snapped to
@@ -307,7 +382,7 @@ def copy_range(
     if frames:
         start_sec, end_sec = float(frames[0] / rate), float(frames[1] / rate)
     clip_start, clip_end = snap_range_to_keyframes(keyframes, start_sec, end_sec, rate=rate)
-    _lossless_copy(Path(input_file), clip_start, clip_end, Path(out_path))
+    _lossless_copy(Path(input_file), clip_start, clip_end, Path(out_path), frame_timed)
     offset = start_sec - clip_start
     if rate:
         offset = float(round(offset * rate) / rate)
@@ -340,15 +415,16 @@ def _encode_segment(
     rounding of ``start``/``end``; off-grid (VFR) it falls back to plain
     time-based seeking."""
     rate = probe_video_rate(input_file)
+    origin = probe_seek_origin(input_file)
     frames = frame_grid_range(start, end, rate)
     if frames:
-        cut = frame_cut_args(*frames, rate)
+        cut = frame_cut_args(*frames, rate, origin)
         in_args = cut.input_args
         out_args = [*cut.output_args, "-r", f"{rate.numerator}/{rate.denominator}", "-fps_mode", "cfr"]
         audio_chain = cut.audio_filters("asetpts=PTS-STARTPTS")
     else:
         pre_seek = max(0.0, start - PRE_SEEK_OFFSET)
-        in_args = ["-ss", f"{pre_seek:.9f}"] if pre_seek > 0.0 else []
+        in_args = ["-ss", f"{pre_seek + float(origin):.9f}"] if pre_seek > 0.0 else []
         out_args = ["-ss", f"{start - pre_seek:.9f}", "-t", f"{end - start:.9f}"]
         audio_chain = "asetpts=PTS-STARTPTS"
     ten_bit = _is_10bit(input_file)

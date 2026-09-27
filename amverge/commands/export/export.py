@@ -13,11 +13,10 @@ from ...core.infra.binaries import get_ffmpeg, get_ffprobe
 from ...core.infra.ipc import emit_progress, emit_event, log
 from ...core.codec.codec_utils import (
     VALID_CODECS, VALID_AUDIO, VALID_CONTAINERS, VALID_HARDWARE, CODEC_ALIASES,
-    NO_EDIT_LIST_CONTAINERS,
 )
 from ...core.export import export_scenes, ExportJob, ExportSettings
 from ...core.export import params as xparams
-from ...core.export.engine import probe_audio_codec
+from ...core.export.engine import CopyContainerError, probe_audio_codec
 from ...ui import banner, console, make_progress, ok, fail
 
 
@@ -84,7 +83,7 @@ def export(
     merge: bool = typer.Option(False, "--merge", help="Merge selected clips into one file"),
     codec: str = typer.Option("copy", "--codec", help="copy · h264_* · h265_* · av1_main · prores_*"),
     audio: str = typer.Option("copy", "--audio", help="copy · aac · aac_320 · pcm16 · pcm24 · flac · alac · opus · mp3 · none"),
-    container: str = typer.Option("mp4", "--container", help="mp4 · mov"),
+    container: str = typer.Option("mp4", "--container", help="mp4 · mov · avi (avi: copy only)"),
     hardware: str = typer.Option("auto", "--hardware", help="auto · gpu · cpu"),
     workers: int = typer.Option(1, "--workers", help="Parallel clip exports"),
     audio_track: int = typer.Option(-1, "--audio-track", help="0-based audio index to hoist to first (preview language); -1 = keep order"),
@@ -98,11 +97,6 @@ def export(
     if audio not in VALID_AUDIO:
         fail(f"Unknown audio '{audio}'. Valid: {', '.join(sorted(VALID_AUDIO))}")
         raise typer.Exit(1)
-    if container in NO_EDIT_LIST_CONTAINERS:
-        fail(
-            f"Container '{container}' isn't supported yet. Use 'mp4' or 'mov'."
-        )
-        raise typer.Exit(1)
     if container not in VALID_CONTAINERS:
         fail(f"Unknown container '{container}'. Valid: {', '.join(sorted(VALID_CONTAINERS))}")
         raise typer.Exit(1)
@@ -115,8 +109,10 @@ def export(
         rec = xparams.recommended_container(codec)
         fail(f"Codec '{codec}' is not compatible with container '{container}'. Use '{rec}'.")
         raise typer.Exit(1)
+    if not xparams.audio_mode_container_compatible(audio, container):
+        fail(f"Audio '{audio}' is not compatible with container '{container}'.")
+        raise typer.Exit(1)
 
-    output.mkdir(parents=True, exist_ok=True)
     ff, fp = get_ffmpeg(), get_ffprobe()
 
     if inputs_json is not None:
@@ -206,6 +202,9 @@ def export(
                 on_progress=emit_progress, on_event=emit_event,
                 abort=abort, ffmpeg=ff, ffprobe=fp,
             )
+        except CopyContainerError as e:
+            print(json.dumps({"schema_version": "1.0", "outputs": [], "error": e.details}), flush=True)
+            raise typer.Exit(1)
         except Exception as e:  # if BLE001 report structured error to the app
             log(f"EXPORT FATAL: {e}")
             print(json.dumps({"schema_version": "1.0", "outputs": [],
@@ -215,14 +214,18 @@ def export(
         return
 
     banner("export")
-    with make_progress() as progress:
-        task = progress.add_task(f"Exporting {len(jobs)} clip(s)", total=100)
+    try:
+        with make_progress() as progress:
+            task = progress.add_task(f"Exporting {len(jobs)} clip(s)", total=100)
 
-        def _cb(pct: int, msg: str) -> None:
-            progress.update(task, completed=pct, description=msg)
+            def _cb(pct: int, msg: str) -> None:
+                progress.update(task, completed=pct, description=msg)
 
-        outputs = export_scenes(
-            jobs, str(output), file_stem, settings,
-            on_progress=_cb, abort=abort, ffmpeg=ff, ffprobe=fp,
-        )
+            outputs = export_scenes(
+                jobs, str(output), file_stem, settings,
+                on_progress=_cb, abort=abort, ffmpeg=ff, ffprobe=fp,
+            )
+    except CopyContainerError as e:
+        fail(str(e))
+        raise typer.Exit(1)
     ok(f"{len(outputs)} file(s) -> {output}")

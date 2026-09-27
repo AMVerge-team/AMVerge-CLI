@@ -62,3 +62,35 @@ def get_keyframe_timestamps_pyav(video_path: str) -> list[float]:
                 continue
             keyframe_times.append(float(ts * packet.time_base))
     return sorted(set(keyframe_times))
+
+
+def get_open_gop_keyframes(video_path: str) -> list[float]:
+    """Timestamps of the keyframes that have leading pictures: pictures
+    stored after the keyframe that display before it. In HEVC those are the
+    RASL pictures of an open-GOP CRA, which also reference the GOP before
+    it, so a decoder that starts at the CRA discards them. A stream copy
+    split at such a keyframe loses those frames from both clips.
+
+    x265 (open GOP by default) gives them only to keyframes it places by
+    interval in the middle of a long shot; one at a scene change ends the
+    previous mini-GOP on a P-frame and has none. On a real 24-minute x265
+    episode that was 13 of 321 keyframes. Keyframe detection skips these
+    (see ``generate_keyframes(skip_open_gop=True)``).
+
+    Also matches RADL pictures, which are decodable from the keyframe alone;
+    treating those as unsafe only costs a cut point, never a wrong clip.
+    """
+    open_gop: list[float] = []
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        last_key = None
+        for packet in container.demux(stream):
+            if packet.pts is None:
+                continue
+            if packet.is_keyframe:
+                last_key = packet.pts
+                continue
+            if last_key is not None and packet.pts < last_key:
+                open_gop.append(float(last_key * stream.time_base))
+                last_key = None
+    return open_gop

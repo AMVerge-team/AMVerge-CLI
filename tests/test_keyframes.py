@@ -4,7 +4,7 @@ import pytest
 
 from amverge.core.detection.keyframe import detect_cuts_by_keyframe, detect_scenes_by_keyframe
 from amverge.core.keyframes import generate_keyframes
-from amverge.core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
+from amverge.core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, get_open_gop_keyframes
 from tests.fixtures import BY_NAME, media_params
 from tests.fixtures.media import keyframe_times
 
@@ -32,7 +32,7 @@ def test_keyframe_cuts_respect_min_duration(media_files, spec, min_duration):
     kf = spec.keyframe_secs
     assert cuts == sorted(cuts)
     for c in cuts:
-        assert min(abs(c - k) for k in kf) < spec.pts_tolerance
+        assert min(abs(c - k) for k in spec.clean_keyframe_secs) < spec.pts_tolerance
     bounds = [0.0, *cuts]
     for a, b in zip(bounds, bounds[1:]):
         assert b - a >= min_duration - 1e-6
@@ -65,3 +65,23 @@ def test_keyframe_scenes_tile_the_whole_video(media_files, spec):
         assert end == start
     for start, end in scenes:
         assert end > start
+
+
+@pytest.mark.parametrize("spec", media_params())
+def test_open_gop_keyframes_are_the_ones_with_leading_pictures(media_files, spec):
+    got = get_open_gop_keyframes(str(media_files[spec.name]))
+    assert got == pytest.approx([spec.frame_time(k) for k in spec.leading_keyframe_frames], abs=spec.pts_tolerance)
+
+
+@pytest.mark.parametrize("spec", media_params("h265_24_opengop", "h265_23976_main10_opengop_mkv", "h265_23976_cuts_opengop_mkv"))
+def test_keyframe_cuts_skip_open_gop_keyframes(media_files, spec):
+    path = str(media_files[spec.name])
+    assert generate_keyframes(path) == pytest.approx(spec.keyframe_secs, abs=spec.pts_tolerance)
+    assert generate_keyframes(path, skip_open_gop=True) == pytest.approx(spec.clean_keyframe_secs, abs=spec.pts_tolerance)
+    assert detect_cuts_by_keyframe(path, min_duration=0.0) == pytest.approx(spec.clean_keyframe_secs[1:], abs=spec.pts_tolerance)
+
+
+def test_keyframe_cuts_on_mixed_open_gop_are_the_scene_cuts(media_files):
+    spec = BY_NAME["h265_23976_cuts_opengop_mkv"]
+    cuts = detect_cuts_by_keyframe(str(media_files[spec.name]), min_duration=0.25)
+    assert cuts == pytest.approx(spec.cut_secs, abs=spec.pts_tolerance)

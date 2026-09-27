@@ -7,6 +7,7 @@ import pytest
 
 from amverge.core.cutting.segmenter import collect_scenes, run_ffmpeg_segment
 from amverge.core.cutting.smart_cut import cut_all_scenes, cut_scene, snap_range_to_keyframes
+from amverge.core.detection.keyframe import detect_cuts_by_keyframe
 from amverge.core.detection.short_scenes import merge_short_scenes
 from amverge.core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
 from amverge.core.thumbnails import make_thumbnail
@@ -54,11 +55,11 @@ def test_reencode_cut_is_frame_exact(media_files, spec, tmp_path):
 
 
 @pytest.mark.media
-@pytest.mark.parametrize("spec", media_params("h265_60_main10_gop", "prores_23976_422hq"))
-def test_reencode_cut_keeps_10bit(media_files, spec, tmp_path):
+@pytest.mark.parametrize("spec", media_params())
+def test_reencode_cut_keeps_bit_depth(media_files, spec, tmp_path):
     a, b = spec.scene_frames[1]
     clip, _, _ = cut_scene(media_files[spec.name], spec.frame_time(a), spec.frame_time(b), 1, tmp_path, [], "reencode")
-    assert video_stream(clip)["pix_fmt"] == "yuv420p10le"
+    assert video_stream(clip)["pix_fmt"] == ("yuv420p10le" if spec.bit_depth == 10 else "yuv420p")
 
 
 @pytest.mark.media
@@ -74,8 +75,13 @@ def test_copy_cut_snaps_outward_to_keyframes(media_files, spec, tmp_path):
         expected = spec.copy_frames(a, b)
         assert [f.number for f in read_frames(clip)] == list(expected), f"scene {i}"
         assert offset == pytest.approx(spec.frame_time(a) - spec.frame_time(expected.start), abs=1e-4)
-        assert video_stream(clip)["codec_name"] == video_stream(path)["codec_name"]
-        assert Path(clip).suffix == (".mov" if spec.codec == "prores" else ".mp4")
+        source, out = video_stream(path), video_stream(clip)
+        assert (out["codec_name"], out.get("profile"), out["pix_fmt"]) == (
+            source["codec_name"], source.get("profile"), source["pix_fmt"]
+        )
+        assert Path(clip).suffix == f".{spec.export_container}"
+        if spec.codec == "h265":
+            assert out["codec_tag_string"] == "hvc1"
 
 
 @pytest.mark.media
@@ -173,3 +179,28 @@ class TestShortSceneMerge:
     def test_nothing_short_is_untouched(self):
         scenes = self._scenes([0.0, 1.0, 2.0])
         assert merge_short_scenes(scenes, "unused.mp4") is scenes
+
+
+@pytest.mark.media
+def test_segmenter_copies_open_gop_source_at_clean_keyframes(media_files, tmp_path):
+    spec = BY_NAME["h265_23976_cuts_opengop_mkv"]
+    path = str(media_files[spec.name])
+    cuts = detect_cuts_by_keyframe(path, min_duration=0.25)
+    run_ffmpeg_segment(path, str(tmp_path / "seg_%04d.mp4"), cuts)
+    scenes = collect_scenes(str(tmp_path), "seg", cuts, spec.duration)
+    assert len(scenes) == len(spec.segments)
+    for i, scene in enumerate(scenes):
+        assert video_stream(scene["path"])["codec_name"] == "hevc"
+        assert [f.number for f in read_frames(scene["path"])] == list(range(*spec.scene_frames[i]))
+
+
+@pytest.mark.media
+def test_segmenter_reencodes_when_a_cut_lands_on_an_open_gop_keyframe(media_files, tmp_path):
+    spec = BY_NAME["h265_23976_cuts_opengop_mkv"]
+    path = str(media_files[spec.name])
+    cuts = [spec.frame_time(spec.leading_keyframe_frames[0])]
+    run_ffmpeg_segment(path, str(tmp_path / "seg_%04d.mp4"), cuts)
+    scenes = collect_scenes(str(tmp_path), "seg", cuts, spec.duration)
+    assert video_stream(scenes[0]["path"])["codec_name"] == "h264"
+    numbers = [n for s in scenes for n in (f.number for f in read_frames(s["path"]))]
+    assert numbers == list(range(spec.total_frames))

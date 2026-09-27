@@ -117,6 +117,7 @@ def codec_container_compatible(codec: str, container: str) -> bool:
         "mov": fam in ("h264", "h265", "av1", "prores"),
         "mkv": True,
         "mxf": fam == "prores",
+        "avi": False,
     }.get(container, True)
 
 
@@ -135,12 +136,24 @@ def audio_copy_safe(audio_codec: str | None, container: str) -> bool:
             "aac", "ac3", "eac3", "mp3", "alac",
             "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_f32le", "qdm2",
         )
+    if container == "avi":
+        return codec in ("aac", "mp3", "mp2", "ac3", "flac", "pcm_s16le", "pcm_s24le", "pcm_u8")
     if container in ("mkv", "webm"):
         return True
     return True
 
 
+def audio_mode_container_compatible(audio: str, container: str) -> bool:
+    """Whether an audio re-encode mode (``--audio``) can be written to
+    ``container``. AVI has no ALAC or Opus mapping."""
+    if container == "avi":
+        return audio not in ("alac", "opus")
+    return True
+
+
 def fallback_audio_mode(container: str) -> str:
+    if container == "avi":
+        return "pcm16"
     if container in ("mp4", "mov", "m4v", "m4a"):
         return "aac"
     if container in ("mkv", "webm"):
@@ -156,6 +169,31 @@ def container_codec_tag_args(codec: str, ext: str) -> list[str]:
     if e == "mov" and c == "av1_main":
         return ["-tag:v", "av01"]
     return []
+
+
+def muxer_name(container: str) -> str:
+    return {"mkv": "matroska"}.get(container, container)
+
+
+def copy_video_args(source_video_codec: str | None, target_container: str,
+                    frame_rate: str | None = None) -> list[str]:
+    """Extra args for a video stream copy into AVI.
+
+    - FourCC for H.264/HEVC: ffmpeg would carry over MP4's ``avc1``/``hvc1``,
+      which AVI players don't recognize.
+    - ``-r`` at the source rate: copied from an MP4/MOV (a fine time base
+      such as 1/12288), the AVI muxer otherwise declares 600 fps and pads
+      with empty frames, which editors read as a 600 fps file.
+    """
+    if target_container != "avi":
+        return []
+    args = ["-r", frame_rate] if frame_rate else []
+    codec = (source_video_codec or "").strip().lower()
+    if codec in ("h264", "avc", "avc1"):
+        args += ["-tag:v", "H264"]
+    elif codec in ("hevc", "h265", "hvc1", "hev1"):
+        args += ["-tag:v", "HEVC"]
+    return args
 
 
 def stream_copy_bsf(source_video_codec: str | None, target_container: str) -> str | None:
@@ -201,16 +239,21 @@ class FrameCut:
     ``input_args`` go before ``-i`` and ``output_args`` after it.
     ``audio_filters(chain)`` wraps a re-encoded audio filter chain.
 
-    - Start: the input seek lands half a frame before ``first``, so rounding
-      in the seek time can never cross a frame boundary.
+    - Start: the input seek lands a quarter frame before ``first``, so
+      rounding in the seek time can never cross a frame boundary. Not half a
+      frame: a stream whose time base is one frame (AVI stores ``1/24``)
+      rounds a seek to the nearest tick, and exactly half a frame early
+      rounds down onto the frame before. ``origin`` shifts it onto ffmpeg's
+      seek timeline (see
+      :func:`~amverge.core.video.probe_utils.probe_seek_origin`).
     - Video length: a frame count (``-frames:v``). ``-t`` is not reliable
       for this: its cutoff sits exactly on a frame edge, and depending on
       frame rate and seek it keeps one frame too many or drops the last one.
       The caller must also pin the output to ``-fps_mode cfr`` at the source
       rate: under ffmpeg's default frame-rate mode, a ``setpts`` filter makes
       ``-frames:v n`` write ``n - 1`` frames on some sources.
-    - Audio: seeking early starts it half a frame early, so the chain first
-      trims that off, then ends it with an exact ``atrim=duration``.
+    - Audio: seeking early starts it a quarter frame early, so the chain
+      first trims that off, then ends it with an exact ``atrim=duration``.
     - ``-t`` stays only as a cap, half a frame past the end, for audio that
       is stream-copied and so cannot be filtered.
     """
@@ -223,14 +266,15 @@ class FrameCut:
         return ",".join(f for f in (self.audio_head, chain, self.audio_tail) if f)
 
 
-def frame_cut_args(first: int, end: int, rate: Fraction) -> FrameCut:
+def frame_cut_args(first: int, end: int, rate: Fraction, origin: Fraction = Fraction(0)) -> FrameCut:
     half = Fraction(1, 2) / rate
+    lead = Fraction(1, 4) / rate
     duration = (end - first) / rate
     input_args: list[str] = []
     audio_head = None
     if first > 0:
-        input_args = ["-ss", _sec_str(first / rate - half)]
-        audio_head = f"atrim=start={_sec_str(half)}"
+        input_args = ["-ss", _sec_str(first / rate - lead + origin)]
+        audio_head = f"atrim=start={_sec_str(lead)}"
     return FrameCut(
         input_args=input_args,
         output_args=["-t", _sec_str(duration + half), "-frames:v", str(end - first)],
@@ -298,7 +342,7 @@ def build_copy_args(
     inp: str, out: str, audio: str,
     seek_ms: int | None = None, dur_ms: int | None = None, bsf: str | None = None,
     audio_track: int | None = None, audio_count: int | None = None,
-    audio_single: bool = False,
+    audio_single: bool = False, video_tag: list[str] | None = None,
 ) -> list[str]:
     """Stream-copy the whole input (pre-cut clip) or a [seek, seek+dur] range
     (cut from a source episode). Input-side ``-ss`` = fast keyframe seek."""
@@ -320,6 +364,7 @@ def build_copy_args(
     args += disposition_args(audio, audio_track, audio_count, audio_single)
     if bsf:
         args += ["-bsf:v", bsf]
+    args += video_tag or []
     if ext in ("mp4", "mov"):
         args += ["-movflags", "+faststart"]
     args.append(out)
@@ -334,21 +379,24 @@ def build_reencode_args(
     frame_rate: str | None = None,
     frames: tuple[int, int] | None = None,
     grid_rate: str | None = None,
+    seek_origin: Fraction = Fraction(0),
 ) -> list[str]:
     """Re-encode the whole input (pre-cut clip) or a [seek, seek+dur] range.
 
     ``frames`` (see :func:`frame_grid_range`) replaces the millisecond range
     with an exact frame selection built by :func:`frame_cut_args`, on the
-    input's own frame grid ``grid_rate`` (default ``frame_rate``)."""
+    input's own frame grid ``grid_rate`` (default ``frame_rate``).
+    ``seek_origin`` is the input's
+    :func:`~amverge.core.video.probe_utils.probe_seek_origin`."""
     ext = Path(out).suffix.lstrip(".").lower()
     args = ["-y"]
     cut = None
     grid = grid_rate or frame_rate
     if frames and grid:
-        cut = frame_cut_args(*frames, Fraction(grid))
+        cut = frame_cut_args(*frames, Fraction(grid), seek_origin)
         args += cut.input_args
     elif seek_ms and seek_ms > 0:
-        args += ["-ss", _time_str(seek_ms)]
+        args += ["-ss", _sec_str(Fraction(seek_ms, 1000) + seek_origin)]
     args += ["-i", inp, "-map", "0:v:0"]
     args += audio_map_args(audio, audio_track, audio_count, audio_single)
     if cut:
