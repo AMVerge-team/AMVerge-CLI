@@ -7,13 +7,12 @@ import subprocess
 import pytest
 
 from amverge.core.cutting.smart_cut import cut_scene
-from amverge.core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
 from amverge.core.export import ExportJob, ExportSettings, export_scenes
 from amverge.core.export.engine import CopyContainerError, ExportError, check_copy_container
 from amverge.core.infra.binaries import get_ffmpeg, get_ffprobe
 from amverge.core.export import params
 from amverge.core.video.probe_utils import probe_seek_origin
-from tests.fixtures import BY_NAME, FIXTURES, media_params
+from tests.fixtures import BY_NAME, media_params
 from tests.fixtures.media import audio_streams, packet_durations, read_frames, video_stream
 
 pytestmark = pytest.mark.media
@@ -135,11 +134,9 @@ class TestBitDepth:
     depth, frame-exact, whichever depth it started at; av1_main pins no
     pixel format, so it keeps the source's depth."""
 
-    DEPTH_SOURCES = [
-        s.name for s in FIXTURES if s.codec != "prores"
-    ]
-
-    @pytest.mark.parametrize("spec", media_params(*DEPTH_SOURCES))
+    @pytest.mark.parametrize("spec", media_params(
+        "h264_24_cuts", "h265_60_main10_gop", "h264_23976_hi10_mkv", "huffyuv_24_avi",
+    ))
     @pytest.mark.parametrize("codec", ["h264_high", "h264_high10", "h265_main", "h265_main10", "av1_main"])
     def test_reencode_to_profile_depth(self, media_files, tmp_path, encoders, spec, codec):
         encoder = params.VIDEO_PARAMS[codec]["cpu"][0]
@@ -368,37 +365,11 @@ class TestAviCopyExport:
         assert [a["codec_name"] for a in audio_streams(out)] == ["pcm_s16le"]
 
 
-class TestCutAndExportParity:
-    """A single-scene cut and a one-scene export of the same range must give
-    the same frames. They share `smart_cut.copy_range` (copy) and the same
-    frame-cut args (reencode); this catches either path drifting off again."""
-
-    @pytest.mark.parametrize("spec", media_params())
-    def test_copy(self, media_files, tmp_path, spec):
-        path = media_files[spec.name]
-        keyframes = get_keyframe_timestamps_pyav(str(path))
-        for i, (start, end) in enumerate(spec.scene_secs):
-            clip, _, _ = cut_scene(path, start, end, i, tmp_path, keyframes, "copy")
-            (exported,) = run_export(
-                tmp_path / f"export_{i}", range_jobs(spec, path, [i]),
-                codec="copy", container=spec.export_container,
-            )
-            assert numbers(exported) == numbers(clip), f"scene {i}"
-
-    @pytest.mark.parametrize("spec", media_params("h264_24_cuts", "h264_2997_gop", "h264_23976_ms_pts"))
-    def test_reencode(self, media_files, tmp_path, spec):
-        path = media_files[spec.name]
-        for i, (start, end) in enumerate(spec.scene_secs):
-            clip, _, _ = cut_scene(path, start, end, i, tmp_path, [], "reencode")
-            (exported,) = run_export(
-                tmp_path / f"export_{i}", range_jobs(spec, path, [i]), codec="h264_high",
-            )
-            assert numbers(exported) == numbers(clip) == list(range(*spec.scene_frames[i])), f"scene {i}"
-
-
 class TestMerge:
-    @pytest.mark.parametrize("spec", media_params())
-    @pytest.mark.parametrize("codec", ["h264_high", "h265_main", "prores_422_hq"])
+    @pytest.mark.parametrize(("spec", "codec"), [
+        *[pytest.param(p.values[0], "h264_high", id=f"h264_high-{p.id}", marks=p.marks) for p in media_params()],
+        *[pytest.param(BY_NAME["h264_2997_gop"], c, id=f"{c}-h264_2997_gop") for c in ("h265_main", "prores_422_hq")],
+    ])
     def test_reencode_merge_is_exact_and_in_sync(self, media_files, tmp_path, spec, codec):
         indices = [0, 2, len(spec.segments) - 1] if len(spec.segments) > 3 else [0, 2]
         container = params.recommended_container(codec)

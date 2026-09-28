@@ -11,6 +11,11 @@ from tests.fixtures.generate import ffmpeg_available, generate_all
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 
+def pytest_configure(config) -> None:
+    if not hasattr(config, "workerinput") and ffmpeg_available() and config.getoption("numprocesses", None):
+        generate_all()
+
+
 @pytest.fixture(scope="session")
 def media_files() -> dict[str, Path]:
     if not ffmpeg_available():
