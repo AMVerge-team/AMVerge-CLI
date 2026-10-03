@@ -145,6 +145,36 @@ def info(
     console.print(f"Scenes : {result.scene_count}")
 
 
+@scout.command("open")
+def open_db(
+    path: str = typer.Argument(..., help="Path to database file"),
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    from ...core.scenescout import db as scoutdb
+    from ...core.scenescout.paths import db_path
+
+    resolved = db_path(path, root)
+    try:
+        result = scoutdb.open_database(resolved)
+    except Exception as e:
+        if as_json:
+            _emit({"error": str(e), "path": str(resolved)}, True)
+            raise typer.Exit(1)
+        fail(str(e))
+        raise typer.Exit(1)
+
+    if as_json:
+        _emit({"database": result.to_json()}, True)
+        return
+
+    banner("scout open")
+    console.print(f"Name   : {result.name}")
+    console.print(f"Path   : {result.path}")
+    console.print(f"Videos : {result.video_count}")
+    console.print(f"Scenes : {result.scene_count}")
+
+
 @scout.command("videos")
 def videos(
     database: str = typer.Argument(..., help="Database name"),

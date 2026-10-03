@@ -66,36 +66,39 @@ def sanitize_db_name(name: str) -> str:
     return cleaned[:64] or "database"
 
 
-def looks_like_path(value: str) -> bool:
-    """True when `value` names a file rather than a database inside the root.
+SUPPORTED_DB_SUFFIXES = {".scoutdb", ".db", ".scdb", ".sqlite", ".sqlite3"}
 
-    The app lets a user save a database anywhere they like, so `--db` has to
-    accept both "My Series" and "D:/somewhere/My Series.scoutdb". A separator or
-    the suffix is enough to tell them apart; a bare name never has either.
-    """
-    return value.endswith(DB_SUFFIX) or "/" in value or "\\" in value
+
+def looks_like_path(value: str) -> bool:
+    return any(value.lower().endswith(s) for s in SUPPORTED_DB_SUFFIXES) or "/" in value or "\\" in value
 
 
 def db_path(name: str, root: str | Path | None = None) -> Path:
-    """Absolute path of a database.
-
-    Accepts either a name to resolve inside the root, or a path to a database
-    the user put somewhere of their own choosing.
-    """
     if looks_like_path(name):
         path = Path(name).expanduser()
-        if path.suffix != DB_SUFFIX:
+        if path.is_file():
+            return path.resolve()
+        if path.suffix.lower() not in SUPPORTED_DB_SUFFIXES:
             path = path.with_suffix(DB_SUFFIX)
         return path.resolve()
     return resolve_root(root) / f"{sanitize_db_name(name)}{DB_SUFFIX}"
 
 
 def list_db_paths(root: str | Path | None = None) -> list[Path]:
-    """Every database in the root, oldest name first. Missing root is not an error."""
     directory = resolve_root(root)
     if not directory.is_dir():
         return []
-    return sorted(p for p in directory.glob(f"*{DB_SUFFIX}") if p.is_file())
+    found: list[Path] = []
+    for suffix in (".scoutdb", ".db", ".scdb"):
+        found.extend(directory.glob(f"*{suffix}"))
+    seen = set()
+    result = []
+    for p in sorted(found):
+        resolved = p.resolve()
+        if p.is_file() and resolved not in seen:
+            seen.add(resolved)
+            result.append(p)
+    return result
 
 
 def ensure_root(root: str | Path | None = None) -> Path:

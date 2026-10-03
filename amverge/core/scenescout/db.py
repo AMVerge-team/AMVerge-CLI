@@ -79,30 +79,27 @@ def connect(path: str | Path, timeout: float = 10.0) -> Iterator[sqlite3.Connect
 
 
 def create_database(name: str, root: str | Path | None = None) -> Path:
-    """Create an empty database. Returns its path; existing ones are left alone.
-
-    `name` is either a name inside the storage root or a full path the user
-    chose, so the parent is created rather than assumed to exist.
-    """
     path = db_path(name, root)
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        conn.execute("PRAGMA user_version = 3")
     return path
 
 
 def database_info(path: str | Path) -> DatabaseInfo:
-    """Counts and size for one database."""
     p = Path(path)
     videos = scenes = 0
+    model_version = EMBEDDING_MODEL_VERSION
     if p.is_file():
         try:
             with connect(p) as conn:
                 videos = conn.execute("SELECT COUNT(*) FROM processed_videos").fetchone()[0]
                 scenes = conn.execute("SELECT COUNT(*) FROM scene_embeddings").fetchone()[0]
+                row = conn.execute("SELECT model_version FROM processed_videos LIMIT 1").fetchone()
+                if row and row[0]:
+                    model_version = str(row[0])
         except sqlite3.DatabaseError:
-            # a truncated or foreign file in the storage folder: report it as
-            # empty rather than taking the whole listing down
             pass
 
     return DatabaseInfo(
@@ -111,7 +108,129 @@ def database_info(path: str | Path) -> DatabaseInfo:
         video_count=videos,
         scene_count=scenes,
         size_bytes=p.stat().st_size if p.is_file() else 0,
+        model_version=model_version,
     )
+
+
+def is_valid_database(path: str | Path) -> bool:
+    p = Path(path)
+    if not p.is_file():
+        return False
+    try:
+        with connect(p) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = {row[0] for row in cursor.fetchall()}
+            return bool(tables.intersection({"processed_videos", "scene_embeddings", "image_embeddings"}))
+    except Exception:
+        return False
+
+
+def migrate_database(path: str | Path) -> bool:
+    p = Path(path)
+    if not p.is_file():
+        return False
+
+    with connect(p) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cursor.fetchall()}
+
+        if not tables.intersection({"processed_videos", "scene_embeddings", "image_embeddings"}):
+            raise ValueError(f"'{p.name}' is not a valid Scene Scout database (missing core tables).")
+
+        has_scene_embeddings = "scene_embeddings" in tables
+
+        if has_scene_embeddings:
+            cursor.execute("PRAGMA table_info(scene_embeddings)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if "thumbnail" not in cols:
+                try:
+                    conn.execute("ALTER TABLE scene_embeddings ADD COLUMN thumbnail BLOB")
+                except sqlite3.OperationalError:
+                    pass
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS index_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT UNIQUE NOT NULL,
+                is_directory BOOLEAN NOT NULL DEFAULT 0,
+                recursive BOOLEAN NOT NULL DEFAULT 1,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS image_embeddings (
+                filepath TEXT PRIMARY KEY,
+                modified_at REAL NOT NULL,
+                embedding BLOB NOT NULL,
+                model_version TEXT DEFAULT '{EMBEDDING_MODEL_VERSION}',
+                file_type TEXT DEFAULT 'image'
+            )
+        """)
+
+        needs_v3 = False
+        if has_scene_embeddings:
+            cursor.execute("PRAGMA table_info(scene_embeddings)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if "video_id" not in cols:
+                needs_v3 = True
+
+        if needs_v3:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                conn.execute(f"""
+                    CREATE TABLE processed_videos_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        filepath TEXT UNIQUE NOT NULL,
+                        modified_at REAL NOT NULL,
+                        model_version TEXT DEFAULT '{EMBEDDING_MODEL_VERSION}',
+                        status TEXT DEFAULT 'completed'
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE scene_embeddings_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        video_id INTEGER NOT NULL,
+                        scene_index INTEGER NOT NULL,
+                        start_time_ms INTEGER NOT NULL,
+                        end_time_ms INTEGER NOT NULL,
+                        embedding BLOB NOT NULL,
+                        thumbnail BLOB,
+                        FOREIGN KEY (video_id) REFERENCES processed_videos_new(id) ON DELETE CASCADE
+                    )
+                """)
+                conn.execute("""
+                    INSERT INTO processed_videos_new (filepath, modified_at, model_version)
+                    SELECT filepath, modified_at, model_version FROM processed_videos
+                """)
+                conn.execute("""
+                    INSERT INTO scene_embeddings_new (video_id, scene_index, start_time_ms, end_time_ms, embedding, thumbnail)
+                    SELECT pv_new.id, se.scene_index, se.start_time_ms, se.end_time_ms, se.embedding, se.thumbnail
+                    FROM scene_embeddings se
+                    JOIN processed_videos_new pv_new ON se.filepath = pv_new.filepath
+                """)
+                conn.execute("DROP TABLE scene_embeddings")
+                conn.execute("DROP TABLE processed_videos")
+                conn.execute("ALTER TABLE processed_videos_new RENAME TO processed_videos")
+                conn.execute("ALTER TABLE scene_embeddings_new RENAME TO scene_embeddings")
+                conn.execute("CREATE INDEX idx_scene_video_id ON scene_embeddings(video_id)")
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
+
+        conn.execute("PRAGMA user_version = 3")
+        return True
+
+
+def open_database(path: str | Path) -> DatabaseInfo:
+    p = Path(path).resolve()
+    if not p.is_file():
+        raise FileNotFoundError(f"Database file not found: {p}")
+    if not is_valid_database(p):
+        raise ValueError(f"'{p.name}' is not a valid Scene Scout database.")
+    migrate_database(p)
+    return database_info(p)
 
 
 def list_databases(root: str | Path | None = None) -> list[DatabaseInfo]:
