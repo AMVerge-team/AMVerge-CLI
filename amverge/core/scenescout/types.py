@@ -14,7 +14,7 @@ from typing import Any, Optional
 # Bumped whenever the embedding model or its preprocessing changes. Rows carry
 # it so a database built by an older version can be detected and re-indexed
 # rather than silently compared against embeddings from a different space.
-EMBEDDING_MODEL_VERSION = "siglip2-so400m-patch16-naflex"
+EMBEDDING_MODEL_VERSION = "google/siglip2-so400m-patch16-naflex"
 
 
 @dataclass(frozen=True)
@@ -108,6 +108,7 @@ class SearchOptions:
     batch_size: int = 16
     device: Optional[str] = None
     databases: list[str] = field(default_factory=list)
+    video_paths: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)

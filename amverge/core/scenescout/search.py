@@ -34,6 +34,8 @@ def _search_one(
     best: list[tuple[float, int, SceneHit]] = []
     tie = 0
 
+    norm_videos = {p.replace("\\", "/").lower() for p in options.video_paths} if options.video_paths else None
+
     with scoutdb.connect(path) as conn:
         cursor = conn.execute(
             """
@@ -41,6 +43,7 @@ def _search_one(
                    s.thumbnail, v.filepath
             FROM scene_embeddings s
             JOIN processed_videos v ON v.id = s.video_id
+            WHERE v.status = 'completed'
             """
         )
 
@@ -50,6 +53,8 @@ def _search_one(
                 break
 
             for scene_index, start_ms, end_ms, blob, thumb, filepath in rows:
+                if norm_videos is not None and filepath.replace("\\", "/").lower() not in norm_videos:
+                    continue
                 vector = unpack_embedding(blob)
                 if vector.shape != query.shape:
                     # a row written by a different model version; comparing it
