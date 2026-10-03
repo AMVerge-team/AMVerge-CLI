@@ -127,10 +127,13 @@ def is_valid_database(path: str | Path) -> bool:
 
 
 def migrate_database(path: str | Path) -> bool:
+    from ..infra.ipc import log as ipc_log
+
     p = Path(path)
     if not p.is_file():
         return False
 
+    ipc_log(f"scene scout {p.name} | checking database schema...")
     with connect(p) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -145,6 +148,7 @@ def migrate_database(path: str | Path) -> bool:
             cursor.execute("PRAGMA table_info(scene_embeddings)")
             cols = {row[1] for row in cursor.fetchall()}
             if "thumbnail" not in cols:
+                ipc_log(f"scene scout {p.name} | upgrading schema: adding thumbnail column...")
                 try:
                     conn.execute("ALTER TABLE scene_embeddings ADD COLUMN thumbnail BLOB")
                 except sqlite3.OperationalError:
@@ -178,6 +182,7 @@ def migrate_database(path: str | Path) -> bool:
                 needs_v3 = True
 
         if needs_v3:
+            ipc_log(f"scene scout {p.name} | migrating schema to v3: converting to relational video/scene tables...")
             conn.execute("PRAGMA foreign_keys = OFF")
             try:
                 conn.execute(f"""
@@ -216,6 +221,7 @@ def migrate_database(path: str | Path) -> bool:
                 conn.execute("ALTER TABLE processed_videos_new RENAME TO processed_videos")
                 conn.execute("ALTER TABLE scene_embeddings_new RENAME TO scene_embeddings")
                 conn.execute("CREATE INDEX idx_scene_video_id ON scene_embeddings(video_id)")
+                ipc_log(f"scene scout {p.name} | v3 schema migration completed successfully")
             finally:
                 conn.execute("PRAGMA foreign_keys = ON")
 
@@ -224,13 +230,18 @@ def migrate_database(path: str | Path) -> bool:
 
 
 def open_database(path: str | Path) -> DatabaseInfo:
+    from ..infra.ipc import log as ipc_log
+
     p = Path(path).resolve()
     if not p.is_file():
         raise FileNotFoundError(f"Database file not found: {p}")
+    ipc_log(f"scene scout {p.name} | opening database...")
     if not is_valid_database(p):
         raise ValueError(f"'{p.name}' is not a valid Scene Scout database.")
     migrate_database(p)
-    return database_info(p)
+    info = database_info(p)
+    ipc_log(f"scene scout {p.name} | database ready ({info.video_count} videos, {info.scene_count} scenes)")
+    return info
 
 
 def list_databases(root: str | Path | None = None) -> list[DatabaseInfo]:
