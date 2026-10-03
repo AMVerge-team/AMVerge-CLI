@@ -198,7 +198,7 @@ def index_video(
     is visibly incomplete rather than one that looks finished but has no scenes.
     """
     from ..infra.ipc import log
-    from .embedding import embed_frames, pack_embedding
+    from .embedding import embed_frames, is_model_loaded, pack_embedding
 
     video_path = Path(video).resolve()
     if not video_path.is_file():
@@ -219,6 +219,10 @@ def index_video(
     report("sampling", 0, len(scenes))
     frames = sample_frames(video_path, scenes)
     log(f"[diag] scene scout {video_path.name} | sampled {len(frames)} frames")
+
+    if not is_model_loaded():
+        report("loading_model", 0, 1)
+        log(f"[diag] scene scout {video_path.name} | loading SigLIP 2 model weights...")
 
     report("embedding", 0, len(frames))
     last_log_pct = -1
