@@ -74,8 +74,6 @@ def detect_scenes(
 ) -> list[tuple[int, int]]:
     """Scene boundaries as ``(start_ms, end_ms)`` pairs.
 
-    TODO(scene-scout): call the matching AMVerge detector for each branch.
-
     Use AMVerge's own detectors, not PySceneDetect. Scene boundaries then match the clips the user already has from importing that episode, so a search
     result points at a scene they can actually see in their grid.
 
@@ -94,17 +92,24 @@ def detect_scenes(
     Both AMVerge detectors return seconds; this returns milliseconds, because
     that is what the database columns and the upstream schema use.
     """
-    raise NotImplementedError(
-        "Wire up scene detection: dispatch on `method` to "
-        "amverge.core.detection.ai_scene_detection (transnetv2_gpu) or "
-        "amverge.core.detection.keyframe (keyframe_detection)"
-    )
+    use_ai = accurate or method == DETECTOR_AI
+    if use_ai:
+        from ..detection.ai_scene_detection import TRANSNET_AVAILABLE, decode_and_detect_scenes
+
+        if TRANSNET_AVAILABLE:
+            scenes_secs, _ = decode_and_detect_scenes(video)
+            scenes = [(int(s * 1000), int(e * 1000)) for s, e in scenes_secs]
+            if scenes:
+                return scenes
+
+    from ..detection.keyframe import detect_scenes_by_keyframe
+
+    keyframe_scenes = detect_scenes_by_keyframe(video)
+    return [(int(s * 1000), int(e * 1000)) for s, e in keyframe_scenes]
 
 
 def sample_frames(video: str | Path, scenes: list[tuple[int, int]]) -> list:
     """One representative frame per scene.
-
-    TODO(scene-scout): port from src/processing.py.
 
     In:  the video path, and the scene list :func:`detect_scenes` returned.
     Out: a list of exactly ``len(scenes)`` frames, in the same order. Each frame
@@ -121,7 +126,43 @@ def sample_frames(video: str | Path, scenes: list[tuple[int, int]]) -> list:
     OpenCV for this, and if you use it anyway remember it returns BGR while the
     embedding step expects RGB.
     """
-    raise NotImplementedError("Port frame sampling from scene-scout's src/processing.py")
+    import av
+
+    if not scenes:
+        return []
+
+    targets = [(s + e) // 2 for s, e in scenes]
+
+    container = av.open(str(video), options={"err_detect": "ignore_err"})
+    stream = container.streams.video[0]
+    stream.thread_type = "AUTO"
+
+    out: list = []
+    target_idx = 0
+    last_frame = None
+
+    try:
+        for frame in container.decode(stream):
+            try:
+                current_ms = int(frame.time * 1000)
+                nd = frame.to_ndarray(format="rgb24")
+            except (av.AVError, ValueError):
+                continue
+            last_frame = nd
+
+            while target_idx < len(targets) and current_ms >= targets[target_idx]:
+                out.append(nd)
+                target_idx += 1
+
+            if target_idx >= len(targets):
+                break
+    finally:
+        container.close()
+
+    if len(out) < len(scenes) and last_frame is not None:
+        out.extend([last_frame] * (len(scenes) - len(out)))
+
+    return out
 
 
 def encode_thumbnail(frame) -> bytes:
@@ -156,6 +197,7 @@ def index_video(
     to ``completed`` at the end, so a run interrupted halfway leaves a row that
     is visibly incomplete rather than one that looks finished but has no scenes.
     """
+    from ..infra.ipc import log
     from .embedding import embed_frames, pack_embedding
 
     video_path = Path(video).resolve()
@@ -167,16 +209,35 @@ def index_video(
             on_progress(stage, done, total)
 
     report("detecting", 0, 1)
+    log(f"[diag] scene scout {video_path.name} | detecting scenes using {method}...")
     scenes = detect_scenes(video_path, method=method, accurate=accurate)
     if not scenes:
+        log(f"[diag] scene scout {video_path.name} | no scenes detected")
         return 0
 
+    log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes")
     report("sampling", 0, len(scenes))
     frames = sample_frames(video_path, scenes)
+    log(f"[diag] scene scout {video_path.name} | sampled {len(frames)} frames")
 
     report("embedding", 0, len(frames))
+    last_log_pct = -1
+
+    def on_embed_progress(done: int, total: int) -> None:
+        nonlocal last_log_pct
+        report("embedding", done, total)
+        if total > 0:
+            pct = done * 100 // total
+            if pct != last_log_pct and (pct % 20 == 0 or done == total):
+                last_log_pct = pct
+                log(f"[diag] scene scout {video_path.name} | embedding {done}/{total} ({pct}%)")
+
     vectors = embed_frames(
-        frames, device=device, max_patches=max_patches, batch_size=batch_size
+        frames,
+        device=device,
+        max_patches=max_patches,
+        batch_size=batch_size,
+        on_progress=on_embed_progress,
     )
 
     video_id = scoutdb.upsert_video(
@@ -191,6 +252,7 @@ def index_video(
     scoutdb.insert_scenes(database, video_id, rows)
     scoutdb.mark_video_complete(database, video_id)
     report("done", len(rows), len(rows))
+    log(f"[diag] scene scout {video_path.name} | indexed {len(rows)} scenes successfully")
 
     return len(rows)
 

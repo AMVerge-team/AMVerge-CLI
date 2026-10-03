@@ -6,8 +6,8 @@ Layered so the cheap parts stay importable without the AI extra:
     types.py      value types shared with the JSON contract
     db.py         SQLite storage, schema-compatible with the standalone tool
     search.py     similarity search, complete
-    embedding.py  SigLIP 2 model, needs porting
-    indexing.py   video -> scenes -> embeddings, needs porting
+    embedding.py  SigLIP 2 model, complete
+    indexing.py   video -> scenes -> embeddings, complete
 
 Only `embedding` and `indexing` require torch, and both import it lazily, so
 listing databases and reporting status work on a machine without it.

@@ -412,6 +412,17 @@ def status(
     console.print(f"Model version   : {payload['modelVersion']}")
     console.print(f"Device          : {device or 'n/a'}")
     console.print(f"Storage root    : {directory}")
-    console.print(f"Databases       : {payload['databaseCount']}")
     if not available:
         console.print(r"[yellow]Install the model extra:[/yellow] pip install 'amverge\[scout]'")
+
+
+@scout.command("daemon")
+def daemon(
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    device: Optional[str] = typer.Option(None, "--device", help="cuda, mps or cpu"),
+    idle_seconds: int = typer.Option(300, "--idle-seconds", help="Idle seconds before model standby"),
+) -> None:
+    from .daemon import run_daemon
+
+    run_daemon(root=root, device=device, idle_seconds=idle_seconds)
+
