@@ -149,6 +149,9 @@ def run_daemon(
                 video_paths=raw_videos,
             )
 
+            if not embedding.is_model_loaded():
+                _reply({"id": req_id, "status": "progress", "stage": "loading_model", "done": 0, "total": 1})
+
             try:
                 started = time.perf_counter()
                 hits = (
