@@ -215,6 +215,56 @@ def videos(
     console.print(table)
 
 
+@scout.command("delete-video")
+def delete_video(
+    database: str = typer.Argument(..., help="Database name or path"),
+    video_identifier: Optional[str] = typer.Argument(None, help="Video ID or filepath to remove"),
+    id: Optional[int] = typer.Option(None, "--id", help="Video ID to remove"),
+    video: Optional[str] = typer.Option(None, "--video", help="Video filepath to remove"),
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    from ...core.scenescout import db as scoutdb
+    from ...core.scenescout.paths import db_path
+
+    if id is None and not video and video_identifier is not None:
+        if video_identifier.isdigit():
+            id = int(video_identifier)
+        else:
+            video = video_identifier
+
+    path = db_path(database, root)
+    if not path.is_file():
+        if as_json:
+            _emit({"deleted": False, "error": f"database not found at {path}"}, True)
+            raise typer.Exit(1)
+        fail(f"No database at {path}")
+        raise typer.Exit(1)
+
+    if id is None and not video:
+        if as_json:
+            _emit({"deleted": False, "error": "specify --id or --video to delete"}, True)
+            raise typer.Exit(1)
+        fail("Specify a video ID or filepath to delete")
+        raise typer.Exit(1)
+
+    removed = scoutdb.remove_video(path, video_id=id, filepath=video)
+
+    if as_json:
+        _emit({"deleted": removed, "database": str(path), "id": id, "video": video}, True)
+        return
+
+    banner("scout delete-video")
+    if removed:
+        console.print(f"Removed video from [bold]{path.name}[/bold]")
+    else:
+        fail(f"Video not found in {path.name}")
+        raise typer.Exit(1)
+
+
+scout.command("remove-video", hidden=True)(delete_video)
+
+
 @scout.command("add")
 def add(
     video: Path = typer.Argument(..., help="Video file to index", exists=True),

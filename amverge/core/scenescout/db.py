@@ -278,10 +278,31 @@ def list_videos(path: str | Path) -> list[IndexedVideo]:
     ]
 
 
-def remove_video(path: str | Path, video_id: int) -> bool:
-    """Drop a video and its scenes. The FK cascade handles the embeddings."""
+def remove_video(
+    path: str | Path,
+    video_id: int | None = None,
+    filepath: str | None = None,
+) -> bool:
     with connect(path) as conn:
-        cur = conn.execute("DELETE FROM processed_videos WHERE id = ?", (video_id,))
+        resolved_id = video_id
+        resolved_path = filepath
+        if resolved_id is None and resolved_path is not None:
+            row = conn.execute("SELECT id FROM processed_videos WHERE filepath = ?", (str(resolved_path),)).fetchone()
+            if not row:
+                return False
+            resolved_id = int(row[0])
+        elif resolved_id is not None and resolved_path is None:
+            row = conn.execute("SELECT filepath FROM processed_videos WHERE id = ?", (resolved_id,)).fetchone()
+            if row:
+                resolved_path = str(row[0])
+
+        if resolved_id is None:
+            return False
+
+        conn.execute("DELETE FROM scene_embeddings WHERE video_id = ?", (resolved_id,))
+        if resolved_path is not None:
+            conn.execute("DELETE FROM index_queue WHERE path = ?", (resolved_path,))
+        cur = conn.execute("DELETE FROM processed_videos WHERE id = ?", (resolved_id,))
         return cur.rowcount > 0
 
 
