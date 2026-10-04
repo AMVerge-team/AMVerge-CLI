@@ -15,7 +15,6 @@ from ...ui import banner, console, err, make_progress, ok, fail
 from ...core.infra.diagnostics import get_gpu_info
 from ...core.infra.ffmpeg_bootstrap import is_portable_ffmpeg_installed, ensure_ffmpeg
 from ...core.upscaling.monitor import SystemMonitor, format_eta
-from ...core.deadframes.registry import DEADFRAMES_REGISTRY
 
 
 def _ensure_ffmpeg_interactive(auto_yes=False):
@@ -41,6 +40,7 @@ def _ensure_ffmpeg_interactive(auto_yes=False):
 
 def _ensure_model_downloaded(model_key, auto_yes=False):
     from ...core.deadframes import is_weight_downloaded, download_weights
+    from ...core.deadframes.registry import DEADFRAMES_REGISTRY
 
     if model_key == "heuristic":
         return
@@ -155,6 +155,8 @@ def deadframes(
 
     Requires: pip install amverge[deadframes]
     """
+    from ...core.deadframes.registry import DEADFRAMES_REGISTRY
+
     if list_methods:
         banner("deadframes methods")
         console.print()

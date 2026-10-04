@@ -17,9 +17,6 @@ from ...core.upscaling.weight_loader import (
 from ...core.upscaling.anime4k import (
     download_anime4k_shaders, is_anime4k_downloaded as _anime4k_is_downloaded, list_shaders, get_shader_dir,
 )
-from ...core.upscaling.artcnn import (
-    download_artcnn, is_artcnn_downloaded as _artcnn_is_downloaded, get_artcnn_path,
-)
 from ...core.interpolation.registry import INTERPOLATION_REGISTRY
 from ...core.interpolation.weight_loader import (
     is_weight_downloaded as _interp_is_downloaded,
@@ -39,6 +36,8 @@ def _format_size(size_bytes):
 
 
 def _upscale_model_size(key):
+    from ...core.upscaling.artcnn import get_artcnn_path
+
     entry = UPSCALE_REGISTRY.get(key, {})
 
     if entry.get("method") == "ml":
@@ -60,6 +59,8 @@ def _upscale_model_size(key):
 
 
 def _upscale_is_downloaded_check(key):
+    from ...core.upscaling.artcnn import is_artcnn_downloaded as _artcnn_is_downloaded
+
     entry = UPSCALE_REGISTRY.get(key, {})
 
     if entry.get("method") == "ml":
@@ -157,6 +158,8 @@ def _handle_delete(key, upscale_only, interpolation_only, flowframes_only, depth
 
 
 def _do_upscale_delete(key):
+    from ...core.upscaling.artcnn import get_artcnn_path
+
     if key in get_ml_models():
         path = get_weight_path(key)
         if os.path.exists(path):
@@ -213,6 +216,8 @@ def _handle_download_action(key, upscale_only, interpolation_only, flowframes_on
 
 
 def _do_upscale_download(key):
+    from ...core.upscaling.artcnn import download_artcnn
+
     if key in get_ml_models():
         entry = get_ml_models()[key]
         console.print(f"  Downloading [accent]{entry.get('name', key)}[/accent]...")
