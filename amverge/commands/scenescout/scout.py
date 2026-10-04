@@ -456,3 +456,35 @@ def daemon(
 
     run_daemon(root=root, device=device, idle_seconds=idle_seconds)
 
+
+@scout.command("generate-thumbnails")
+def generate_thumbnails_cmd(
+    database: str = typer.Option(..., "--db", help="Database name or path"),
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    as_json: bool = typer.Option(False, "--json", help="Emit progress and result as JSON lines"),
+) -> None:
+    from ...core.scenescout import indexing
+    from ...core.scenescout.paths import db_path
+    from ...core.infra.ipc import log
+
+    path = db_path(database, root)
+    if not path.is_file():
+        fail(f"Database does not exist: {path}")
+        raise typer.Exit(1)
+
+    log(f"[diag] scene scout generate-thumbnails | starting for {path.name}...")
+
+    def on_progress(stage: str, done: int, total: int) -> None:
+        if as_json:
+            print(json.dumps({"stage": stage, "done": done, "total": total}, separators=(",", ":")), flush=True)
+
+    count = indexing.generate_missing_thumbnails(path, on_progress=on_progress)
+    log(f"[diag] scene scout generate-thumbnails | done: generated {count} thumbnails")
+
+    if as_json:
+        _emit({"done": True, "generated": count, "database": str(path)}, True)
+        return
+
+    banner("scout generate-thumbnails")
+    console.print(f"[green]> Generated {count} missing thumbnails for {path.name}[/green]")
+

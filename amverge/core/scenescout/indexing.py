@@ -263,3 +263,75 @@ def index_video(
 
 def model_version() -> str:
     return EMBEDDING_MODEL_VERSION
+
+
+def generate_missing_thumbnails(
+    database: str | Path,
+    *,
+    on_progress: Optional[ProgressCallback] = None,
+) -> int:
+    from ..infra.ipc import log
+
+    db_path = scoutdb.resolve_db_path(database)
+    if not db_path.is_file():
+        raise FileNotFoundError(f"Database does not exist: {db_path}")
+
+    with scoutdb.connect(db_path) as conn:
+        video_rows = conn.execute(
+            """
+            SELECT pv.id, pv.filepath, COUNT(se.id)
+            FROM processed_videos pv
+            JOIN scene_embeddings se ON pv.id = se.video_id
+            WHERE se.thumbnail IS NULL
+            GROUP BY pv.id
+            """
+        ).fetchall()
+
+        total_missing = sum(row[2] for row in video_rows)
+        if total_missing == 0:
+            return 0
+
+        updated_count = 0
+
+        for video_id, filepath, _ in video_rows:
+            v_path = Path(filepath)
+            if not v_path.is_file():
+                log(f"[diag] scene scout generate-thumbnails | skipping missing video file: {filepath}")
+                continue
+
+            scene_rows = conn.execute(
+                """
+                SELECT id, start_time_ms, end_time_ms
+                FROM scene_embeddings
+                WHERE video_id = ? AND thumbnail IS NULL
+                ORDER BY scene_index
+                """,
+                (video_id,),
+            ).fetchall()
+
+            if not scene_rows:
+                continue
+
+            scenes = [(row[1], row[2]) for row in scene_rows]
+            try:
+                frames = sample_frames(v_path, scenes)
+            except Exception as e:
+                log(f"[diag] scene scout generate-thumbnails | decode error on {v_path.name}: {e}")
+                continue
+
+            batch_updates = []
+            for (scene_id, _, _), frame in zip(scene_rows, frames):
+                thumb_bytes = encode_thumbnail(frame)
+                batch_updates.append((thumb_bytes, scene_id))
+
+            conn.executemany(
+                "UPDATE scene_embeddings SET thumbnail = ? WHERE id = ?",
+                batch_updates,
+            )
+            conn.commit()
+
+            updated_count += len(batch_updates)
+            if on_progress:
+                on_progress("thumbnails", updated_count, total_missing)
+
+        return updated_count
