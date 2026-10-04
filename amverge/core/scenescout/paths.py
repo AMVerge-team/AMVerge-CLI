@@ -69,19 +69,28 @@ def sanitize_db_name(name: str) -> str:
 SUPPORTED_DB_SUFFIXES = {".scoutdb", ".db", ".scdb", ".sqlite", ".sqlite3"}
 
 
-def looks_like_path(value: str) -> bool:
-    return any(value.lower().endswith(s) for s in SUPPORTED_DB_SUFFIXES) or "/" in value or "\\" in value
+def looks_like_path(value: str | Path) -> bool:
+    s = str(value)
+    return any(s.lower().endswith(suf) for suf in SUPPORTED_DB_SUFFIXES) or "/" in s or "\\" in s
 
 
-def db_path(name: str, root: str | Path | None = None) -> Path:
-    if looks_like_path(name):
-        path = Path(name).expanduser()
+def db_path(name: str | Path, root: str | Path | None = None) -> Path:
+    s = str(name)
+    if looks_like_path(s):
+        path = Path(s).expanduser()
         if path.is_file():
             return path.resolve()
         if path.suffix.lower() not in SUPPORTED_DB_SUFFIXES:
             path = path.with_suffix(DB_SUFFIX)
         return path.resolve()
-    return resolve_root(root) / f"{sanitize_db_name(name)}{DB_SUFFIX}"
+    return resolve_root(root) / f"{sanitize_db_name(s)}{DB_SUFFIX}"
+
+
+def resolve_db_path(database: str | Path, root: str | Path | None = None) -> Path:
+    p = Path(database)
+    if p.is_file():
+        return p.resolve()
+    return db_path(database, root)
 
 
 def list_db_paths(root: str | Path | None = None) -> list[Path]:

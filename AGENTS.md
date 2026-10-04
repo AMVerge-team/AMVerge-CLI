@@ -101,7 +101,7 @@ AMVerge-CLI/
 │   │   │   └── probe.py         amverge probe  (V2 diagnostics: codec/HEVC/keyframes/scene cache)
 │   │   ├── scenescout/
 │   │   │   ├── daemon.py        amverge scout daemon  (persistent in-memory model daemon)
-│   │   │   └── scout.py         amverge scout  (search scenes by description; databases/create/open/delete/info/videos/add/search/status)
+│   │   │   └── scout.py         amverge scout  (search scenes by description; databases/create/open/delete/info/videos/add/search/status/generate-thumbnails)
 │   │   ├── sidecar/
 │   │   │   ├── backend.py       amverge backend <video> <output_dir>  (hidden - Rust sidecar replacement)
 │   │   │   └── rpc_server.py    amverge rpc-server  (hidden - Discord RPC sidecar, reads JSON from stdin)

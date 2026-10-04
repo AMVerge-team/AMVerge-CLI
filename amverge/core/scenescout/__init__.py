@@ -13,7 +13,7 @@ Only `embedding` and `indexing` require torch, and both import it lazily, so
 listing databases and reporting status work on a machine without it.
 """
 
-from .paths import STORAGE_DIR_NAME, DB_SUFFIX, resolve_root, db_path, list_db_paths
+from .paths import STORAGE_DIR_NAME, DB_SUFFIX, resolve_root, db_path, list_db_paths, resolve_db_path
 from .types import SceneHit, DatabaseInfo, IndexedVideo, SearchOptions, EMBEDDING_MODEL_VERSION
 
 __all__ = [
@@ -22,6 +22,7 @@ __all__ = [
     "resolve_root",
     "db_path",
     "list_db_paths",
+    "resolve_db_path",
     "SceneHit",
     "DatabaseInfo",
     "IndexedVideo",

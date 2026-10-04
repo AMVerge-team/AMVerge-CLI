@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
-from .paths import db_path, list_db_paths, ensure_root
+from .paths import db_path, list_db_paths, ensure_root, resolve_db_path
 from .types import DatabaseInfo, IndexedVideo, EMBEDDING_MODEL_VERSION
 
 SCHEMA = f"""
