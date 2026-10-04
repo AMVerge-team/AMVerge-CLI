@@ -4,7 +4,6 @@ from pathlib import Path
 
 import typer
 
-from ...core.video import get_video_info
 from ...ui import banner, console, make_table, dim
 
 
@@ -31,6 +30,8 @@ def info(
     video: Path = typer.Argument(..., help="Video file", exists=True),
 ) -> None:
     """Show video stream metadata."""
+    from ...core.video import get_video_info
+
     banner("info")
 
     data = get_video_info(str(video.resolve()))

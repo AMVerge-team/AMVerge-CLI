@@ -353,7 +353,7 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
     pix_fmt = (probe_video(input_video).get("pix_fmt") or "").lower()
     if pix_fmt and pix_fmt not in NVDEC_SAFE_PIX_FMTS:
         raise RuntimeError(
-            f"NVDEC decoding is unreliable for {pix_fmt}; use the FFmpeg decoder"
+            f"Unreliable for {pix_fmt}"
         )
 
     VideoReader = _get_nelux_video_reader()
