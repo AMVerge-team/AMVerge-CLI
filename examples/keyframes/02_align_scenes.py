@@ -1,13 +1,16 @@
-"""Keyframe alignment - classify scenes for cutting strategy.
+"""Keyframe snapping - see how a scene's cut widens to enclosing keyframes.
 
-Shows which scenes can be losslessly copied vs. need smartcut/re-encode.
+Shows what cutting.smart_cut.snap_range_to_keyframes does before a "copy"
+mode cut: widen [start, end) outward to the last keyframe at or before
+start, and the first keyframe at or after end.
 
 Usage:
     python 02_align_scenes.py [video_path]
 """
 
 import sys
-from amverge import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
+from amverge import get_keyframe_timestamps_pyav
+from amverge.core.cutting.smart_cut import snap_range_to_keyframes
 
 VIDEO = sys.argv[1] if len(sys.argv) > 1 else "episode.mp4"
 
@@ -15,26 +18,17 @@ VIDEO = sys.argv[1] if len(sys.argv) > 1 else "episode.mp4"
 example_scenes = [
     (0.0, 5.0),
     (5.0, 10.0),
-    (10.2, 15.0),   # starts 0.2s after keyframe at 10.0 - still aligned
-    (15.5, 20.0),   # starts 0.5s after keyframe at 15.0 - re-encode
+    (10.2, 15.0),   # starts 0.2s after a keyframe -> widens back to it
+    (15.5, 20.3),   # ends 0.3s after a keyframe -> widens forward past it
 ]
 
 kf = get_keyframe_timestamps_pyav(VIDEO)
-copy, reencode = classify_scenes_by_keyframe_alignment(example_scenes, kf, threshold=0.2)
-
 print(f"\n{len(kf)} keyframes extracted from {VIDEO}")
-print(f"\nExample scenes: {len(example_scenes)} total")
-print(f"  Copy candidates:    {len(copy)}")
-print(f"  Re-encode candidates: {len(reencode)}")
+print(f"\n{len(example_scenes)} example scenes:\n")
 
-if copy:
-    print("\nCopy candidates (lossless):")
-    for c in copy:
-        print(f"  scene {c['scene_id']}: start={c['orig_start']:.2f}s "
-              f"-> snapped to {c['start']:.2f}s (diff={c['start_diff_sec']:.3f}s)")
-
-if reencode:
-    print("\nRe-encode candidates (need smartcut or re-encode):")
-    for c in reencode:
-        print(f"  scene {c['scene_id']}: start={c['orig_start']:.2f}s "
-              f"(nearest kf at {c['start']:.2f}s, diff={c['start_diff_sec']:.3f}s)")
+for start, end in example_scenes:
+    clip_start, clip_end = snap_range_to_keyframes(kf, start, end)
+    end_desc = f"{clip_end:.2f}s" if clip_end is not None else "EOF"
+    widened = clip_start != start or clip_end != end
+    print(f"  [{start:6.2f}s, {end:6.2f}s)  ->  [{clip_start:6.2f}s, {end_desc:>6})"
+          f"  {'(widened)' if widened else '(already aligned)'}")

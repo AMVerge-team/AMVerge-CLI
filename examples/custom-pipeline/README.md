@@ -25,18 +25,15 @@ video file
      ↓
 [2] keyframe timestamps            (keyframe_align.py)
      ↓
-[3] HEVC check                     (codec_utils.py)
+[3] build scene objects            (scene_utils.py)
      ↓
-[4] build scene objects            (scene_utils.py)
+[4] cut every scene, one mode:     (smart_cut.py)
+    "copy"     - stream copy, snapped outward to keyframes
+    "reencode" - exact boundaries, real encode cost
      ↓
-[5] classify by keyframe alignment (keyframe_align.py)
+[5] thumbnails + similarity check  (thumbnails.py, similarity.py)
      ↓
-[6] Phase 1: lossless copy         (smart_cut.py, 8 workers)
-    Phase 2: smartcut / re-encode  (smart_cut.py, 2 workers)
-     ↓
-[7] thumbnails + similarity check  (thumbnails.py, similarity.py)
-     ↓
-JSON manifest + metadata
+[6] JSON manifest + metadata
 ```
 
 Each step uses a separate low-level module. Swap any step to change the behavior.

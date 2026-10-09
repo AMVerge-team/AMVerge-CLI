@@ -10,9 +10,9 @@
 
 # Keyframe Examples
 
-**Extract I-frame timestamps and classify scenes for cutting.**  
-Keyframes mark positions where lossless stream copy is possible.
-Scenes starting on a keyframe can be copied; others need re-encoding.
+**Extract I-frame timestamps and snap scene boundaries to them.**  
+A "copy" mode cut is always widened outward to the nearest enclosing
+keyframes - never trimmed, never encoded, just a plain stream copy.
 
 ---
 
@@ -21,17 +21,18 @@ Scenes starting on a keyframe can be copied; others need re-encoding.
 ```txt
 video file
      ↓
-PyAV packet demux (Discard.nonkey)
+PyAV packet demux (every packet, filtered by is_keyframe)
      ↓
 sorted keyframe timestamps (seconds)
      ↓
-classify scene boundaries against keyframes
+snap_range_to_keyframes(start, end)
      ↓
-copy candidates (lossless) / re-encode candidates
+[preceding keyframe, following keyframe) - the actual copy range
 ```
 
 The V1 method (`generate_keyframes`) supports progress callbacks.
-The V2 method (`get_keyframe_timestamps_pyav`) uses PyAV 17.x enum API.
+The V2 method (`get_keyframe_timestamps_pyav`) never sets
+`stream.discard` - doing so corrupts PTS on B-frame sources.
 
 ---
 
@@ -40,7 +41,7 @@ The V2 method (`get_keyframe_timestamps_pyav`) uses PyAV 17.x enum API.
 | File | Description |
 |---|---|
 | [01_extract_keyframes.py](01_extract_keyframes.py) | V1 + V2 keyframe extraction with stats |
-| [02_align_scenes.py](02_align_scenes.py) | classify scenes for lossless copy vs re-encode |
+| [02_align_scenes.py](02_align_scenes.py) | snap scene boundaries outward to keyframes |
 
 ---
 
@@ -52,7 +53,7 @@ pip install amverge
 # Extract keyframes
 python examples/keyframes/01_extract_keyframes.py episode.mp4
 
-# Align sample scenes
+# Snap sample scenes to keyframes
 python examples/keyframes/02_align_scenes.py episode.mp4
 ```
 
@@ -62,5 +63,5 @@ python examples/keyframes/02_align_scenes.py episode.mp4
 
 | | |
 |---|---|
-| [Library API](../../docs/library.md) | `get_keyframe_timestamps_pyav()`, `classify_scenes_by_keyframe_alignment()` |
+| [Library API](../../docs/library.md) | `get_keyframe_timestamps_pyav()`, `snap_range_to_keyframes()` |
 | [Detection Methods](../../docs/detection-methods.md) | how keyframes drive the cut pipeline |

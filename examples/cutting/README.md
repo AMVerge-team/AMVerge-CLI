@@ -11,7 +11,7 @@
 # Scene Cutting Examples
 
 **Cut video into clips using smart cut or FFmpeg segment muxer.**  
-Automatic mode selection: lossless copy when possible, smartcut/re-encode when needed.
+One mode for the whole batch: `copy` (true stream copy) or `reencode` (exact boundaries).
 
 ---
 
@@ -20,20 +20,24 @@ Automatic mode selection: lossless copy when possible, smartcut/re-encode when n
 ```txt
 scene boundaries + keyframes
      ↓
-check start alignment with keyframe
-     ↓
-┌─────────────────────────────────────┐
-│ on keyframe     → copy (lossless)   │
-│ HEVC, kf < 5s   → snapped_copy     │
-│ H.264, kf < 90% → smartcut         │
-│ fallback        → reencode         │
-└─────────────────────────────────────┘
+mode="copy"                          mode="reencode"
+     ↓                                    ↓
+snap [start, end) outward             re-encode the exact
+to the enclosing keyframes            [start, end) range
+     ↓                                    ↓
+one plain `-c copy`                   libx264/NVENC
      ↓
 parallel cut via ThreadPoolExecutor
 ```
 
-The V1 pipeline uses `ffmpeg -segment_times` with stream copy for lossless splitting.
-The V2 pipeline uses `cut_all_scenes` with automatic four-mode smart cut.
+`copy` is always a true, unmodified stream copy - no edit lists, no
+trimming, no silent fallback to re-encode. The trade-off: a clip can carry
+up to one keyframe interval of the neighboring scene at either edge.
+`reencode` cuts the exact boundary at the cost of a real encode.
+
+The V1 pipeline (`run_ffmpeg_segment`) uses `ffmpeg -segment_times` with
+stream copy for lossless splitting - same trade-off as `copy` mode above,
+since a stream-copy split can only land on a real keyframe.
 
 ---
 
@@ -41,9 +45,9 @@ The V2 pipeline uses `cut_all_scenes` with automatic four-mode smart cut.
 
 | File | Description |
 |---|---|
-| [01_smart_cut.py](01_smart_cut.py) | V2 pipeline: automatic mode selection |
+| [01_smart_cut.py](01_smart_cut.py) | V2 pipeline: `copy` or `reencode`, whole batch |
 | [02_ffmpeg_segment.py](02_ffmpeg_segment.py) | V1 pipeline: FFmpeg segment muxer |
-| [03_single_scene.py](03_single_scene.py) | cut one scene, inspect chosen mode |
+| [03_single_scene.py](03_single_scene.py) | cut one scene, inspect the keyframe snap |
 
 ---
 
@@ -53,7 +57,8 @@ The V2 pipeline uses `cut_all_scenes` with automatic four-mode smart cut.
 pip install amverge[ml]
 
 # Smart cut (V2)
-python examples/cutting/01_smart_cut.py episode.mp4
+python examples/cutting/01_smart_cut.py episode.mp4 copy
+python examples/cutting/01_smart_cut.py episode.mp4 reencode
 
 # FFmpeg segment (V1)
 python examples/cutting/02_ffmpeg_segment.py episode.mp4

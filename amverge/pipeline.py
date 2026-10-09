@@ -276,8 +276,6 @@ def detect_scenes(
             run_model_one_pass,
         )
         from .core.detection.nelux_runtime import nelux_available
-        from .core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
-        from .core.codec.codec_utils import check_if_hevc
         from .core.video.scene_utils import scenes_to_objects
         from .core.cutting.smart_cut import cut_all_scenes
 
@@ -323,24 +321,17 @@ def detect_scenes(
             scene_det.emit_progress = _orig_emit_scene
             smart_cut.emit_progress = _orig_emit_cut
 
-        _progress("detect", 80, "Extracting keyframe timestamps...")
-        keyframes = get_keyframe_timestamps_pyav(video_path)
-        is_hevc = check_if_hevc(video_path)
+        keyframes: list[float] = []
 
         raw_scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
-        scene_pairs = [(s["start_sec"], s["end_sec"]) for s in raw_scenes]
-        copy_candidates, reencode_candidates = classify_scenes_by_keyframe_alignment(
-            scene_pairs, keyframes
-        )
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         scenes_out_dir = Path(output_dir) / "scenes"
         scenes_out_dir.mkdir(parents=True, exist_ok=True)
         cut_by_idx: dict[int, dict] = {}
 
-        copy_idx = {c["scene_id"] for c in copy_candidates}
-        phase1_scenes = [s for s in raw_scenes if s["scene_index"] in copy_idx]
-        phase2_scenes = [s for s in raw_scenes if s["scene_index"] not in copy_idx]
+        phase1_scenes = []
+        phase2_scenes = raw_scenes
 
         def _on_clip_ready(result: dict) -> None:
             cut_by_idx[result["scene_index"]] = result
@@ -356,8 +347,8 @@ def detect_scenes(
                 scenes=phase1_scenes,
                 keyframes=keyframes,
                 out_dir=scenes_out_dir,
+                mode="copy",
                 use_cuda=(device == "cuda"),
-                is_hevc=is_hevc,
                 max_workers=8,
                 on_ready=_on_clip_ready,
             )
@@ -369,8 +360,8 @@ def detect_scenes(
                     scenes=phase2_scenes,
                     keyframes=keyframes,
                     out_dir=scenes_out_dir,
+                    mode="reencode",
                     use_cuda=(device == "cuda"),
-                    is_hevc=is_hevc,
                     max_workers=2,
                     on_ready=_on_clip_ready,
                     emit_progress_updates=False,
@@ -464,7 +455,8 @@ def detect_scenes(
                 nonlocal _done
                 thumb_path = os.path.join(output_dir, f"{video_stem}_{scene.index:04d}.jpg")
                 if scene.path and os.path.exists(scene.path):
-                    _make_thumbnail(scene.path, thumb_path)
+                    poster_offset_sec = cut_by_idx.get(scene.index, {}).get("poster_offset_sec") or 0.0
+                    _make_thumbnail(scene.path, thumb_path, seek_sec=poster_offset_sec)
                 scene.thumbnail = thumb_path
                 with _lock:
                     _done += 1

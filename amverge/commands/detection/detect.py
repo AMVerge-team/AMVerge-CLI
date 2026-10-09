@@ -233,8 +233,6 @@ def _detect_ipc(
             decode_video_frames_nelux,
             run_model_one_pass,
         )
-        from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
-        from ...core.codec.codec_utils import check_if_hevc
         from ...core.video.scene_utils import scenes_to_objects
         from ...core.cutting.smart_cut import cut_all_scenes
         from ...core.thumbnails import make_thumbnail
@@ -260,23 +258,16 @@ def _detect_ipc(
         if scenes_secs is None:
             scenes_secs, scenes_frames = decode_and_detect_scenes(video_path, threshold=ai_threshold)
 
-        emit_progress(80, "Extracting keyframe timestamps...")
-        keyframes = get_keyframe_timestamps_pyav(video_path)
-        is_hevc = check_if_hevc(video_path)
+        keyframes: list[float] = []
 
         raw_scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
-        scene_pairs = [(s["start_sec"], s["end_sec"]) for s in raw_scenes]
-        copy_candidates, reencode_candidates = classify_scenes_by_keyframe_alignment(
-            scene_pairs, keyframes
-        )
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         scenes_out_dir = Path(output_dir) / "scenes"
         scenes_out_dir.mkdir(parents=True, exist_ok=True)
 
-        copy_idx = {c["scene_id"] for c in copy_candidates}
-        phase1_scenes = [s for s in raw_scenes if s["scene_index"] in copy_idx]
-        phase2_scenes = [s for s in raw_scenes if s["scene_index"] not in copy_idx]
+        phase1_scenes = []
+        phase2_scenes = raw_scenes
 
         def _thumb_path(scene_index: int) -> str:
             return os.path.join(output_dir, f"{video_stem}_{scene_index:04d}.jpg")
@@ -302,8 +293,8 @@ def _detect_ipc(
         thumb_pool = ThreadPoolExecutor(max_workers=4)
         thumb_futures: list = []
 
-        def _gen_thumb(scene_index: int, clip_path: str, is_copy: bool) -> None:
-            if make_thumbnail(clip_path, _thumb_path(scene_index), first_keyframe=is_copy):
+        def _gen_thumb(scene_index: int, clip_path: str, poster_offset_sec: float) -> None:
+            if make_thumbnail(clip_path, _thumb_path(scene_index), seek_sec=poster_offset_sec):
                 emit_event(f"THUMBNAIL_READY|{scene_index}")
 
         def _on_clip_ready(result: dict) -> None:
@@ -311,11 +302,10 @@ def _detect_ipc(
             cut_by_idx[scene_index] = result
             clip_path = result.get("clip_path") or ""
             clip_mode = result.get("clip_mode") or "failed"
+            poster_offset_sec = result.get("poster_offset_sec") or 0.0
             emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
             if clip_path and os.path.exists(clip_path):
-                thumb_futures.append(
-                    thumb_pool.submit(_gen_thumb, scene_index, clip_path, clip_mode == "copy")
-                )
+                thumb_futures.append(thumb_pool.submit(_gen_thumb, scene_index, clip_path, poster_offset_sec))
 
         emit_progress(82, f"Cutting {len(phase1_scenes)} scenes (lossless copy)...")
         cut_all_scenes(
@@ -323,8 +313,8 @@ def _detect_ipc(
             scenes=phase1_scenes,
             keyframes=keyframes,
             out_dir=scenes_out_dir,
+            mode="copy",
             use_cuda=(device == "cuda"),
-            is_hevc=is_hevc,
             max_workers=8,
             on_ready=_on_clip_ready,
         )
@@ -349,8 +339,8 @@ def _detect_ipc(
                 scenes=phase2_scenes,
                 keyframes=keyframes,
                 out_dir=scenes_out_dir,
+                mode="reencode",
                 use_cuda=(device == "cuda"),
-                is_hevc=is_hevc,
                 max_workers=2,
                 on_ready=_on_reencode_ready,
                 emit_progress_updates=False,

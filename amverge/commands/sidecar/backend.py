@@ -180,6 +180,8 @@ def backend(
 
         input_video_duration = probe_video_duration(input_video)
         input_video_fps = probe_video_fps(input_video)
+        if cache_hit and not use_keyframe:
+            scenes_secs = transnet_scenes_to_seconds(scenes_frames, input_video_fps)
         input_video_width, input_video_height = probe_video_dimensions(input_video)
         scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
         # a few-frame scene stream-copies to a whole GOP, so it plays far too fast
@@ -216,22 +218,28 @@ def backend(
 
             if use_keyframe:
                 keyframes = sorted({float(s["start_sec"]) for s in scenes})
+                phase1_scenes, phase2_scenes = scenes, []
+                log(f"Video preview cut mode: copy ({len(scenes)} scenes)")
             else:
-                emit_progress(82, "Extracting keyframe timestamps...")
-                keyframes = get_keyframe_timestamps_pyav(str(input_video))
-            is_hevc = check_if_hevc(str(input_video))
+                # ai cuts that already sit exactly on keyframes copy with no bleed; the rest re-encode
+                keyframes, phase1_scenes, phase2_scenes = [], [], scenes
+                if exact_copy_supported(input_video):
+                    from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, get_open_gop_keyframes
+                    from ...core.video.probe_utils import probe_video_rate
 
-            scene_pairs = [(s["start_sec"], s["end_sec"]) for s in scenes]
-            copy_candidates, reencode_candidates = classify_scenes_by_keyframe_alignment(
-                scene_pairs, keyframes
-            )
-            copy_idx = {c["scene_id"] for c in copy_candidates}
-            phase1_scenes = [s for s in scenes if s["scene_index"] in copy_idx]
-            phase2_scenes = [s for s in scenes if s["scene_index"] not in copy_idx]
-            log(
-                f"Video cut split: {len(phase1_scenes)} lossless copies, "
-                f"{len(phase2_scenes)} re-encodes"
-            )
+                    emit_progress(82, "Checking scenes against keyframes...")
+                    keyframes = get_keyframe_timestamps_pyav(str(input_video))
+                    phase1_scenes, phase2_scenes = split_exact_copy_scenes(
+                        scenes,
+                        keyframes,
+                        get_open_gop_keyframes(str(input_video)),
+                        probe_video_rate(input_video),
+                        input_video_duration,
+                    )
+                log(
+                    f"Video preview cut mode: {len(phase1_scenes)} copy, "
+                    f"{len(phase2_scenes)} reencode (ai exact-keyframe copies)"
+                )
 
             cut_by_idx: dict[int, dict] = {}
 
@@ -241,8 +249,8 @@ def backend(
             thumb_pool = _futures.ThreadPoolExecutor(max_workers=4)
             thumb_futures: list = []
 
-            def _gen_thumb(scene_index: int, clip_path: str, is_copy: bool) -> None:
-                if make_thumbnail(clip_path, str(_poster_path(scene_index)), first_keyframe=is_copy):
+            def _gen_thumb(scene_index: int, clip_path: str, poster_offset_sec: float) -> None:
+                if make_thumbnail(clip_path, str(_poster_path(scene_index)), seek_sec=poster_offset_sec):
                     emit_event(f"THUMBNAIL_READY|{scene_index}")
                 else:
                     log(f"Thumbnail produced no frame for scene {scene_index}")
@@ -252,14 +260,13 @@ def backend(
                 cut_by_idx[scene_index] = result
                 clip_path = result.get("clip_path") or ""
                 clip_mode = result.get("clip_mode") or "failed"
+                poster_offset_sec = result.get("poster_offset_sec") or 0.0
                 emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
                 if clip_path and Path(clip_path).exists():
-                    thumb_futures.append(
-                        thumb_pool.submit(_gen_thumb, scene_index, clip_path, clip_mode == "copy")
-                    )
+                    thumb_futures.append(thumb_pool.submit(_gen_thumb, scene_index, clip_path, poster_offset_sec))
 
             use_segmenter = (
-                not phase2_scenes
+                use_keyframe
                 and len(scenes) > 1
                 and all(s["scene_index"] == i for i, s in enumerate(scenes))
             )
@@ -309,8 +316,8 @@ def backend(
                     scenes=phase1_scenes,
                     keyframes=keyframes,
                     out_dir=scenes_out_dir,
+                    mode="copy",
                     use_cuda=use_cuda,
-                    is_hevc=is_hevc,
                     max_workers=8,
                     on_ready=_on_clip_ready,
                     progress_range=(82, 99),
@@ -335,8 +342,8 @@ def backend(
                 scenes=phase2_scenes,
                 keyframes=keyframes,
                 out_dir=scenes_out_dir,
+                mode="reencode",
                 use_cuda=use_cuda,
-                is_hevc=is_hevc,
                 max_workers=2,
                 on_ready=_on_reencode_ready,
                 emit_progress_updates=False,

@@ -20,6 +20,10 @@ def detect_cuts_by_keyframe(
 ) -> list[float]:
     """Return cut-point timestamps (seconds) using keyframe packet metadata.
 
+    Keyframes with open-GOP leading pictures are skipped: a stream-copied
+    preview split there would lose those frames, and x265 only places them
+    mid-shot, so they are never the scene changes this is looking for.
+
     Args:
         video_path: Path to the source video.
         min_duration: Merge any adjacent cuts closer than this many seconds.
@@ -33,6 +37,7 @@ def detect_cuts_by_keyframe(
         progress_cb=progress_cb,
         progress_base=0,
         progress_range=100,
+        skip_open_gop=True,
     )
 
     if not keyframes:

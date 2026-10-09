@@ -38,7 +38,7 @@ amverge detect episode.mp4 --min-duration 0.5 --workers 8
 | `--edge-radius` | `0.6` | Keyframe window radius (edge method) |
 | `--no-rpc` | false | Disable Discord RPC |
 
-**Output:** scene clips (`.mp4`), thumbnails (`.jpg`), and a `scenes.json` index.
+**Output:** scene clips (`.mp4`), thumbnails (`.jpg`), and a `scenes.json` index. Keyframe detection uses stream copy; TransNetV2 scene previews are re-encoded at the detected boundaries.
 
 **Detection methods:**
 
@@ -74,7 +74,7 @@ amverge export episode.mp4 --scenes scenes.json --codec prores_422 --container m
 | `--merge` | false | Merge selection into one file |
 | `--codec` | `copy` | Codec profile (see below) |
 | `--audio` | `copy` | Audio codec (see below) |
-| `--container` | `mp4` | Output container: `mp4`, `mkv`, `mov` |
+| `--container` | `mp4` | Output container: `mp4`, `mov`, `avi` (`avi` only with `--codec copy`) |
 | `--hardware` | `auto` | GPU encode: `auto`, `gpu`, `cpu` |
 | `--no-rpc` | false | Disable Discord RPC |
 

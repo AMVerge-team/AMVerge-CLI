@@ -81,21 +81,10 @@ convert frames to seconds
       ↓
 get keyframe timestamps (PyAV)
       ↓
-classify scenes by keyframe alignment
-      ↓
-Phase 1: lossless copy (keyframe-aligned scenes, max_workers=8)
-      ↓
-Phase 2: smartcut or re-encode (non-aligned scenes, max_workers=2)
+re-encode every scene at its detected boundary (max_workers=2)
 ```
 
-**Cut modes:**
-
-| mode | when | method |
-|------|------|--------|
-| `copy` | scene starts on a keyframe | lossless stream copy |
-| `smartcut` | H.264, next keyframe within 90% of scene | encode tiny head + lossless tail, concat |
-| `snapped_copy` | HEVC CPU, nearest keyframe within 5s | lossless copy from snapped keyframe |
-| `reencode` | fallback | full re-encode with NVENC (GPU) or libx264/libx265 (CPU) |
+TransNetV2 previews are always re-encoded at their detected boundaries, so the thumbnail and first frame match the detected scene. Copy-mode keyframe snapping is reserved for export.
 
 **Pros:**
 
@@ -161,7 +150,7 @@ ffmpeg -segment_times (stream copy)
 |---|---|---|---|
 | Speed | Fast | Medium | Slow |
 | Accuracy | Good | Best | Excellent |
-| Lossless output | Yes | Partial (smart cut) | Yes |
+| Lossless output | Yes | Re-encoded at exact detected boundaries | Yes |
 | Extra dependency | None | PyTorch | OpenCV |
 | GPU support | - | CUDA | - |
 | Cache | - | .npy files | - |

@@ -1,7 +1,7 @@
 """Keyframe extraction - V1 and V2 methods.
 
 V1: generate_keyframes (PyAV packet demux with progress callback)
-V2: get_keyframe_timestamps_pyav (PyAV demux, Discard.nonkey enum)
+V2: get_keyframe_timestamps_pyav (PyAV demux, every packet filtered by is_keyframe)
 
 Usage:
     python 01_extract_keyframes.py [video_path]

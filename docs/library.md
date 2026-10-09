@@ -320,10 +320,8 @@ merged  = merge_short_scenes([0.0, 0.2, 5.0, 10.0], min_duration=0.5)
 ### Keyframes
 
 ```python
-from amverge import (
-    generate_keyframes, get_keyframe_timestamps_pyav,
-    classify_scenes_by_keyframe_alignment,
-)
+from amverge import generate_keyframes, get_keyframe_timestamps_pyav
+from amverge.core.cutting.smart_cut import snap_range_to_keyframes
 
 # V1 pipeline (with progress)
 kf = generate_keyframes("video.mp4")
@@ -331,10 +329,8 @@ kf = generate_keyframes("video.mp4")
 # V2 pipeline (PyAV demux)
 kf = get_keyframe_timestamps_pyav("video.mp4")
 
-# Classify scenes for lossless copy vs re-encode
-copy, reencode = classify_scenes_by_keyframe_alignment(
-    [(0.0, 5.0), (5.2, 10.0)], kf
-)
+# Widen a scene outward to its enclosing keyframes (what "copy" mode does)
+clip_start, clip_end = snap_range_to_keyframes(kf, 5.2, 10.0)
 ```
 
 ### Scene Detection V1
@@ -371,13 +367,13 @@ else:
 from amverge import cut_scene, cut_all_scenes, run_ffmpeg_segment, collect_scenes
 from pathlib import Path
 
-# Smart cut (V2 pipeline - handles copy/smartcut/reencode)
+# Smart cut (V2 pipeline - one mode for the whole batch: copy or reencode)
 results = cut_all_scenes(
     input_file=Path("video.mp4"),
     scenes=[{"scene_index": 0, "start_sec": 0.0, "end_sec": 5.0}],
     keyframes=[0.0, 0.5, 1.0, 1.5, 5.0],
     out_dir=Path("./scenes"),
-    use_cuda=True, is_hevc=False,
+    mode="copy", use_cuda=True,
     on_ready=lambda r: print(r["clip_mode"]),
 )
 
