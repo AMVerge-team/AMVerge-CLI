@@ -7,9 +7,7 @@ from typing import Optional
 
 import typer
 
-from ...pipeline import detect_scenes, DetectResult
 from ...ui import banner, console, err, make_progress, make_table, ok, warn, fail, dim
-from ...core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
 
 _STAGE_LABELS = {
     "detect":     "Detecting cuts",
@@ -81,6 +79,9 @@ def detect(
     if ipc:
         _detect_ipc(video, output, method, min_duration, workers, similarity_threshold, edge_threshold, edge_radius, threshold, decode_method)
         return
+
+    from ...pipeline import detect_scenes, DetectResult
+    from ...core.discord.discord_rpc import RPC_AVAILABLE, DiscordRPC
 
     banner("detect")
 

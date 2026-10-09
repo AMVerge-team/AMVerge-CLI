@@ -12,7 +12,6 @@ from pathlib import Path
 import typer
 
 from ...ui import banner, console, err, make_progress, ok, fail, warn
-from ...ui.interactive import select, checkboxes, confirm, text_input
 from ...core.pipeline.presets import list_presets, load_preset, save_preset, delete_preset
 
 
@@ -63,6 +62,8 @@ def pipeline_enabled(ops: dict[str, bool] | None = None) -> bool:
 
 
 def _prompt_deadframes(defaults: dict | None = None):
+    from ...ui.interactive import confirm, text_input
+
     d = defaults or {}
     banner("deadframes settings")
     err.print("  [muted]Configure deadframe removal options.[/]\n")
@@ -120,6 +121,7 @@ def _prompt_deadframes(defaults: dict | None = None):
 
 def _prompt_upscale(defaults: dict | None = None):
     from ...core.upscaling.registry import UPSCALE_REGISTRY, get_all_model_keys, get_model_scales
+    from ...ui.interactive import select
 
     d = defaults or {}
     banner("upscale settings")
@@ -168,6 +170,7 @@ def _prompt_upscale(defaults: dict | None = None):
 
 def _prompt_interpolate(defaults: dict | None = None):
     from ...core.interpolation import INTERPOLATION_REGISTRY
+    from ...ui.interactive import select
 
     d = defaults or {}
     banner("interpolation settings")
@@ -331,6 +334,9 @@ def pipeline(
     Run interactively with arrow-key navigation. Save presets with --save <name>.
     Load saved presets with --load <name>.
     """
+    # questionary is slow to import and only the interactive flow needs it
+    from ...ui.interactive import checkboxes, confirm, text_input
+
     ops = available_ops()
     if not pipeline_enabled(ops):
         available = [k for k, v in ops.items() if v]

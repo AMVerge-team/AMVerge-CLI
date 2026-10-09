@@ -13,6 +13,7 @@ a table against the standalone default.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -144,6 +145,36 @@ def info(
     console.print(f"Scenes : {result.scene_count}")
 
 
+@scout.command("open")
+def open_db(
+    path: str = typer.Argument(..., help="Path to database file"),
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    from ...core.scenescout import db as scoutdb
+    from ...core.scenescout.paths import db_path
+
+    resolved = db_path(path, root)
+    try:
+        result = scoutdb.open_database(resolved)
+    except Exception as e:
+        if as_json:
+            _emit({"error": str(e), "path": str(resolved)}, True)
+            raise typer.Exit(1)
+        fail(str(e))
+        raise typer.Exit(1)
+
+    if as_json:
+        _emit({"database": result.to_json()}, True)
+        return
+
+    banner("scout open")
+    console.print(f"Name   : {result.name}")
+    console.print(f"Path   : {result.path}")
+    console.print(f"Videos : {result.video_count}")
+    console.print(f"Scenes : {result.scene_count}")
+
+
 @scout.command("videos")
 def videos(
     database: str = typer.Argument(..., help="Database name"),
@@ -184,6 +215,56 @@ def videos(
     console.print(table)
 
 
+@scout.command("delete-video")
+def delete_video(
+    database: str = typer.Argument(..., help="Database name or path"),
+    video_identifier: Optional[str] = typer.Argument(None, help="Video ID or filepath to remove"),
+    id: Optional[int] = typer.Option(None, "--id", help="Video ID to remove"),
+    video: Optional[str] = typer.Option(None, "--video", help="Video filepath to remove"),
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    from ...core.scenescout import db as scoutdb
+    from ...core.scenescout.paths import db_path
+
+    if id is None and not video and video_identifier is not None:
+        if video_identifier.isdigit():
+            id = int(video_identifier)
+        else:
+            video = video_identifier
+
+    path = db_path(database, root)
+    if not path.is_file():
+        if as_json:
+            _emit({"deleted": False, "error": f"database not found at {path}"}, True)
+            raise typer.Exit(1)
+        fail(f"No database at {path}")
+        raise typer.Exit(1)
+
+    if id is None and not video:
+        if as_json:
+            _emit({"deleted": False, "error": "specify --id or --video to delete"}, True)
+            raise typer.Exit(1)
+        fail("Specify a video ID or filepath to delete")
+        raise typer.Exit(1)
+
+    removed = scoutdb.remove_video(path, video_id=id, filepath=video)
+
+    if as_json:
+        _emit({"deleted": removed, "database": str(path), "id": id, "video": video}, True)
+        return
+
+    banner("scout delete-video")
+    if removed:
+        console.print(f"Removed video from [bold]{path.name}[/bold]")
+    else:
+        fail(f"Video not found in {path.name}")
+        raise typer.Exit(1)
+
+
+scout.command("remove-video", hidden=True)(delete_video)
+
+
 @scout.command("add")
 def add(
     video: Path = typer.Argument(..., help="Video file to index", exists=True),
@@ -210,11 +291,27 @@ def add(
     """
     from ...core.scenescout import db as scoutdb
     from ...core.scenescout import indexing
+    from ...core.scenescout.embedding import SceneScoutModelUnavailable
     from ...core.scenescout.paths import db_path
+    from ...core.infra.ipc import log
 
     path = db_path(database, root)
-    if not path.is_file():
+    if not path.is_file() and root is None:
         scoutdb.create_database(database, root)
+
+    if not path.is_file():
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "error": f"database not found at {path}; create it first with: amverge scout create <name>"
+                    }
+                ),
+                flush=True,
+            )
+            raise typer.Exit(1)
+        fail(f"No database at {path}. Create it first with: amverge scout create <name>")
+        raise typer.Exit(1)
 
     def on_progress(stage: str, done: int, total: int) -> None:
         if as_json:
@@ -225,6 +322,11 @@ def add(
     if not as_json:
         banner("scout add")
 
+    started = time.perf_counter()
+    log(
+        f"[diag] scene scout add | db={Path(database).name} video={Path(video).name} "
+        f"detector={detector} accurate={accurate}"
+    )
     try:
         count = indexing.index_video(
             path,
@@ -237,12 +339,13 @@ def add(
             generate_thumbnails=not no_thumbnails,
             on_progress=on_progress,
         )
-    except NotImplementedError as exc:
+    except (NotImplementedError, SceneScoutModelUnavailable) as exc:
         if as_json:
             print(json.dumps({"error": str(exc)}), flush=True)
             raise typer.Exit(1)
         fail(str(exc))
         raise typer.Exit(1)
+    log(f"[diag] scene scout add done: {count} scenes in {time.perf_counter() - started:.2f}s")
 
     if as_json:
         print(json.dumps({"done": True, "scenes": count, "video": str(video)}), flush=True)
@@ -254,6 +357,7 @@ def add(
 def search(
     query: Optional[str] = typer.Argument(None, help="What to look for"),
     database: list[str] = typer.Option([], "--db", help="Database to search (repeatable)"),
+    video: list[str] = typer.Option([], "--video", help="Filter search to specific video filepath(s)"),
     image: Optional[Path] = typer.Option(None, "--image", help="Search by reference image instead"),
     root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
     top_k: int = typer.Option(24, "--top-k", help="Maximum results"),
@@ -265,15 +369,15 @@ def search(
 ) -> None:
     """Search indexed scenes by description, or by reference image."""
     from ...core.scenescout import search as scoutsearch
+    from ...core.scenescout.embedding import SceneScoutModelUnavailable
     from ...core.scenescout.paths import db_path, list_db_paths
     from ...core.scenescout.types import SearchOptions
+    from ...core.infra.ipc import log
 
     if not query and not image:
         fail("Give a search query, or --image")
         raise typer.Exit(1)
 
-    # no --db means every database in the root, which is what the app's
-    # "search all" toggle sends
     targets = [str(db_path(name, root)) for name in database] if database else [
         str(p) for p in list_db_paths(root)
     ]
@@ -284,6 +388,13 @@ def search(
         fail("No databases to search. Create one with: amverge scout create <name>")
         raise typer.Exit(1)
 
+    started = time.perf_counter()
+    focus = query if query else f"image={Path(image).name}"
+    log(
+        f"[diag] scene scout search | {focus} databases={len(targets)} "
+        f"top_k={top_k} threshold={threshold}"
+    )
+
     options = SearchOptions(
         top_k=top_k,
         similarity_threshold=threshold,
@@ -291,6 +402,7 @@ def search(
         max_patches=max_patches,
         device=device,
         databases=targets,
+        video_paths=video,
     )
 
     try:
@@ -299,12 +411,13 @@ def search(
             if image
             else scoutsearch.search_text(query or "", options)
         )
-    except NotImplementedError as exc:
+    except (NotImplementedError, SceneScoutModelUnavailable) as exc:
         if as_json:
             _emit({"results": [], "error": str(exc)}, True)
             raise typer.Exit(1)
         fail(str(exc))
         raise typer.Exit(1)
+    log(f"[diag] scene scout search done: {len(hits)} results in {time.perf_counter() - started:.2f}s")
 
     if as_json:
         _emit({"results": [h.to_json() for h in hits]}, True)
@@ -345,6 +458,7 @@ def status(
     """
     from ...core.scenescout import embedding
     from ...core.scenescout.paths import resolve_root, list_db_paths
+    from ...core.infra.ipc import log
 
     available = embedding.is_available()
     directory = resolve_root(root)
@@ -364,6 +478,11 @@ def status(
         "databaseCount": len(list_db_paths(root)),
     }
 
+    log(
+        f"[diag] scene scout status | model={'available' if available else 'not installed'} "
+        f"device={device or 'n/a'} databases={payload['databaseCount']}"
+    )
+
     if as_json:
         _emit(payload, True)
         return
@@ -373,6 +492,49 @@ def status(
     console.print(f"Model version   : {payload['modelVersion']}")
     console.print(f"Device          : {device or 'n/a'}")
     console.print(f"Storage root    : {directory}")
-    console.print(f"Databases       : {payload['databaseCount']}")
     if not available:
         console.print(r"[yellow]Install the model extra:[/yellow] pip install 'amverge\[scout]'")
+
+
+@scout.command("daemon")
+def daemon(
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    device: Optional[str] = typer.Option(None, "--device", help="cuda, mps or cpu"),
+    idle_seconds: int = typer.Option(300, "--idle-seconds", help="Idle seconds before model standby"),
+) -> None:
+    from .daemon import run_daemon
+
+    run_daemon(root=root, device=device, idle_seconds=idle_seconds)
+
+
+@scout.command("generate-thumbnails")
+def generate_thumbnails_cmd(
+    database: str = typer.Option(..., "--db", help="Database name or path"),
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    as_json: bool = typer.Option(False, "--json", help="Emit progress and result as JSON lines"),
+) -> None:
+    from ...core.scenescout import indexing
+    from ...core.scenescout.paths import db_path
+    from ...core.infra.ipc import log
+
+    path = db_path(database, root)
+    if not path.is_file():
+        fail(f"Database does not exist: {path}")
+        raise typer.Exit(1)
+
+    log(f"[diag] scene scout generate-thumbnails | starting for {path.name}...")
+
+    def on_progress(stage: str, done: int, total: int) -> None:
+        if as_json:
+            print(json.dumps({"stage": stage, "done": done, "total": total}, separators=(",", ":")), flush=True)
+
+    count = indexing.generate_missing_thumbnails(path, on_progress=on_progress)
+    log(f"[diag] scene scout generate-thumbnails | done: generated {count} thumbnails")
+
+    if as_json:
+        _emit({"done": True, "generated": count, "database": str(path)}, True)
+        return
+
+    banner("scout generate-thumbnails")
+    console.print(f"[green]> Generated {count} missing thumbnails for {path.name}[/green]")
+

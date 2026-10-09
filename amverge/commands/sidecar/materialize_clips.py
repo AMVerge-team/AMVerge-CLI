@@ -9,8 +9,6 @@ from pathlib import Path
 import typer
 
 from ...core.infra.ipc import emit_progress, log
-from ...core.thumbnails import make_thumbnail
-from ...core.cutting.smart_cut import cut_scene
 
 
 def _materialize_one(
@@ -18,6 +16,9 @@ def _materialize_one(
     item: dict,
     out_dir: Path,
 ) -> dict:
+    from ...core.thumbnails import make_thumbnail
+    from ...core.cutting.smart_cut import cut_scene
+
     stem = uuid.uuid4().hex
     dest_clip = out_dir / f"{stem}.mp4"
     dest_thumb = out_dir / f"{stem}.jpg"
@@ -89,6 +90,9 @@ def materialize_clips(
 
     Emits IPC progress to stderr and final JSON to stdout.
     """
+    from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
+    from ...core.codec.codec_utils import check_if_hevc
+
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
