@@ -389,6 +389,69 @@ def copy_range(
     return offset
 
 
+_PREVIEW_AUDIO_CODECS = {"aac", "mp3", "opus", "flac"}
+
+
+def exact_copy_supported(input_file: Path) -> bool:
+    """Whether scenes of ``input_file`` can be stream-copied into previews the
+    app plays as-is: the copy lands in MP4 (see :func:`copy_container_suffix`)
+    and every audio stream is one Chromium plays from MP4 (AAC, MP3, Opus,
+    FLAC). AC3/DTS/TrueHD and anything else keep the whole job on re-encode."""
+    try:
+        if copy_container_suffix(input_file) != ".mp4":
+            return False
+        with av.open(str(input_file)) as src:
+            return all(s.codec_context.name in _PREVIEW_AUDIO_CODECS for s in src.streams.audio)
+    except (ValueError, OSError, av.FFmpegError):
+        return False
+
+
+def split_exact_copy_scenes(
+    scenes: list[dict],
+    keyframes: list[float],
+    open_gop: list[float],
+    rate: Fraction | None,
+    duration: float | None,
+) -> tuple[list[dict], list[dict]]:
+    """Split contiguous scenes into ``(copy, reencode)`` batches, where a copy
+    is exactly as frame-accurate as a re-encode.
+
+    A scene goes to ``copy`` only when :func:`copy_range` would cut it with no
+    bleed at all: it sits on the constant frame grid, its start is a keyframe,
+    and its end is a keyframe without open-GOP leading pictures (those keep
+    one frame of the next scene, see :func:`_lossless_copy`) -- or, for the
+    last scene, the end of the file. Both checks use the same half-frame
+    snap :func:`copy_range` does. Everything else goes to ``reencode``.
+    """
+    if not rate or not keyframes:
+        return [], list(scenes)
+
+    half = float(Fraction(1, 2) / rate)
+    copy: list[dict] = []
+    reencode: list[dict] = []
+    for pos, scene in enumerate(scenes):
+        frames = frame_grid_range(float(scene["start_sec"]), float(scene["end_sec"]), rate)
+        if frames is None:
+            reencode.append(scene)
+            continue
+        start, end = float(frames[0] / rate), float(frames[1] / rate)
+        try:
+            clip_start, clip_end = snap_range_to_keyframes(keyframes, start, end, rate=rate)
+        except ValueError:
+            reencode.append(scene)
+            continue
+
+        start_exact = abs(clip_start - start) <= half
+        if clip_end is None:
+            # copies through EOF, exact only for a last scene that ends there
+            end_exact = pos == len(scenes) - 1 and duration is not None and abs(duration - end) <= half
+        else:
+            end_exact = abs(clip_end - end) <= half and not any(abs(clip_end - k) <= half for k in open_gop)
+
+        (copy if start_exact and end_exact else reencode).append(scene)
+    return copy, reencode
+
+
 def _is_10bit(path: Path) -> bool:
     """Whether the video stream's pixel format carries more than 8 bits per
     channel (ProRes, HEVC Main10, most lossless/intermediate codecs)."""

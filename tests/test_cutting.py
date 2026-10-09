@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from amverge.core.cutting.segmenter import collect_scenes, run_ffmpeg_segment
-from amverge.core.cutting.smart_cut import cut_all_scenes, cut_scene, snap_range_to_keyframes
+from fractions import Fraction
+
+import subprocess
+
+from amverge.core.cutting.smart_cut import (
+    cut_all_scenes, cut_scene, exact_copy_supported, snap_range_to_keyframes, split_exact_copy_scenes,
+)
 from amverge.core.detection.keyframe import detect_cuts_by_keyframe
 from amverge.core.detection.short_scenes import merge_short_scenes
 from amverge.core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
@@ -38,6 +44,70 @@ class TestSnapRange:
     def test_requires_keyframe_before_start(self):
         with pytest.raises(ValueError):
             snap_range_to_keyframes([1.0, 2.0], 0.5, 1.5)
+
+
+class TestSplitExactCopyScenes:
+    RATE = Fraction(24)
+    KF = [0.0, 1.0, 2.0, 3.0]
+
+    @staticmethod
+    def scenes(*bounds):
+        return [
+            {"scene_index": i, "start_sec": a, "end_sec": b}
+            for i, (a, b) in enumerate(zip(bounds, bounds[1:]))
+        ]
+
+    def split(self, scenes, keyframes=None, open_gop=(), rate=RATE, duration=4.0):
+        copy, reencode = split_exact_copy_scenes(
+            scenes, self.KF if keyframes is None else keyframes, list(open_gop), rate, duration,
+        )
+        return [s["scene_index"] for s in copy], [s["scene_index"] for s in reencode]
+
+    def test_keyframe_bounded_scenes_copy(self):
+        assert self.split(self.scenes(0.0, 1.0, 2.0)) == ([0, 1], [])
+
+    def test_off_keyframe_cut_reencodes_both_neighbours(self):
+        # the 1.5s cut is no keyframe, so it is the end of scene 1 and the start of scene 2
+        assert self.split(self.scenes(0.0, 1.0, 1.5, 2.0, 3.0)) == ([0, 3], [1, 2])
+
+    def test_open_gop_end_keyframe_reencodes(self):
+        assert self.split(self.scenes(0.0, 1.0, 2.0), open_gop=[1.0]) == ([1], [0])
+
+    def test_open_gop_start_keyframe_still_copies(self):
+        assert self.split(self.scenes(1.0, 2.0), open_gop=[1.0]) == ([0], [])
+
+    def test_last_scene_copies_through_eof(self):
+        assert self.split(self.scenes(3.0, 4.0)) == ([0], [])
+
+    def test_last_scene_short_of_eof_reencodes(self):
+        assert self.split(self.scenes(3.0, 3.5), duration=4.0) == ([], [0])
+
+    def test_middle_scene_past_last_keyframe_reencodes(self):
+        assert self.split(self.scenes(3.0, 3.5, 4.0)) == ([], [0, 1])
+
+    def test_no_rate_or_keyframes_reencodes_everything(self):
+        scenes = self.scenes(0.0, 1.0, 2.0)
+        assert self.split(scenes, rate=None) == ([], [0, 1])
+        assert self.split(scenes, keyframes=[]) == ([], [0, 1])
+
+    def test_off_frame_grid_reencodes(self):
+        assert self.split(self.scenes(0.0, 1.013, 2.0)) == ([], [0, 1])
+
+
+@pytest.mark.media
+@pytest.mark.parametrize(("audio_codec", "expected"), [
+    ("aac", True), ("libopus", True), ("flac", True), ("ac3", False),
+])
+def test_exact_copy_supported_by_audio_codec(tmp_path, audio_codec, expected):
+    # anime mkvs mostly carry opus or flac, which chromium plays from mp4; ac3 it cannot
+    path = tmp_path / f"src_{audio_codec}.mkv"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24:duration=1",
+        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", audio_codec, str(path),
+    ], check=True, capture_output=True)
+    assert exact_copy_supported(path) is expected
 
 
 @pytest.mark.media

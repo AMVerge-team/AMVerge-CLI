@@ -209,7 +209,8 @@ class TestBackendSidecar:
         scenes = payload["scenes"]
         assert [spec.frame_at(s["start_sec"]) for s in scenes] == [0, *spec.cut_frames]
         for i, s in enumerate(scenes):
-            assert s["clip_mode"] == "reencode"
+            # keyframe-bounded scenes stream-copy, the rest re-encode; both must be frame exact
+            assert s["clip_mode"] in ("copy", "reencode")
             assert numbers(s["clip_path"]) == list(range(*spec.scene_frames[i])), f"scene {i}"
 
 

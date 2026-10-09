@@ -12,7 +12,7 @@ from ...core.detection.keyframe import detect_scenes_by_keyframe
 from ...core.video.probe_utils import probe_video_duration, probe_video_fps, probe_video_dimensions
 from ...core.video.scene_utils import scenes_to_objects, transnet_scenes_to_seconds
 from ...core.detection.short_scenes import merge_short_scenes
-from ...core.cutting.smart_cut import cut_all_scenes
+from ...core.cutting.smart_cut import cut_all_scenes, exact_copy_supported, split_exact_copy_scenes
 from ...core.cutting.segmenter import run_ffmpeg_segment_streaming
 from ...core.thumbnails import make_thumbnail
 
@@ -215,11 +215,30 @@ def backend(
             ]
             emit_event(f"INITIAL_CLIPS_READY|{json.dumps(initial_clips)}")
 
-            keyframes = sorted({float(s["start_sec"]) for s in scenes}) if use_keyframe else []
+            if use_keyframe:
+                keyframes = sorted({float(s["start_sec"]) for s in scenes})
+                phase1_scenes, phase2_scenes = scenes, []
+                log(f"Video preview cut mode: copy ({len(scenes)} scenes)")
+            else:
+                # ai cuts that already sit exactly on keyframes copy with no bleed; the rest re-encode
+                keyframes, phase1_scenes, phase2_scenes = [], [], scenes
+                if exact_copy_supported(input_video):
+                    from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, get_open_gop_keyframes
+                    from ...core.video.probe_utils import probe_video_rate
 
-            phase1_scenes = scenes if use_keyframe else []
-            phase2_scenes = [] if use_keyframe else scenes
-            log(f"Video preview cut mode: {'copy' if use_keyframe else 'reencode'} ({len(scenes)} scenes)")
+                    emit_progress(82, "Checking scenes against keyframes...")
+                    keyframes = get_keyframe_timestamps_pyav(str(input_video))
+                    phase1_scenes, phase2_scenes = split_exact_copy_scenes(
+                        scenes,
+                        keyframes,
+                        get_open_gop_keyframes(str(input_video)),
+                        probe_video_rate(input_video),
+                        input_video_duration,
+                    )
+                log(
+                    f"Video preview cut mode: {len(phase1_scenes)} copy, "
+                    f"{len(phase2_scenes)} reencode (ai exact-keyframe copies)"
+                )
 
             cut_by_idx: dict[int, dict] = {}
 
