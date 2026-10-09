@@ -25,6 +25,9 @@ def run_daemon(
 
     last_active = time.time()
     in_standby = False
+    # a request is running; indexing outlasts idle_seconds, and moving the model to cpu
+    # mid-request leaves its inputs on cuda and crashes the forward pass
+    busy = False
     lock = threading.Lock()
     stop_event = threading.Event()
 
@@ -35,7 +38,7 @@ def run_daemon(
             if idle_seconds <= 0:
                 continue
             with lock:
-                if not in_standby and embedding.is_model_loaded():
+                if not in_standby and not busy and embedding.is_model_loaded():
                     if time.time() - last_active >= idle_seconds:
                         embedding.standby_model()
                         in_standby = True
@@ -48,6 +51,11 @@ def run_daemon(
         sys.stdout.flush()
 
     while True:
+        # back here means the previous request finished, so idle time counts from now
+        with lock:
+            busy = False
+            last_active = time.time()
+
         line = sys.stdin.readline()
         if not line:
             break
@@ -67,6 +75,7 @@ def run_daemon(
 
         with lock:
             last_active = time.time()
+            busy = True
             if in_standby:
                 embedding.activate_model()
                 in_standby = False

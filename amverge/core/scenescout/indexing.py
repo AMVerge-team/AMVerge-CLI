@@ -108,7 +108,11 @@ def detect_scenes(
     return [(int(s * 1000), int(e * 1000)) for s, e in keyframe_scenes]
 
 
-def sample_frames(video: str | Path, scenes: list[tuple[int, int]]) -> list:
+def sample_frames(
+    video: str | Path,
+    scenes: list[tuple[int, int]],
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> list:
     """One representative frame per scene.
 
     In:  the video path, and the scene list :func:`detect_scenes` returned.
@@ -125,11 +129,24 @@ def sample_frames(video: str | Path, scenes: list[tuple[int, int]]) -> list:
     Decode with PyAV (``av``), which is already a base dependency. Do not add
     OpenCV for this, and if you use it anyway remember it returns BGR while the
     embedding step expects RGB.
+
+    ``on_progress(done, total)`` fires as frames are collected, about once per
+    percent, so a caller can show how far the decode has got.
     """
     import av
 
     if not scenes:
         return []
+
+    total = len(scenes)
+    step = max(1, total // 100)
+    last_reported = 0
+
+    def report(done: int) -> None:
+        nonlocal last_reported
+        if on_progress and done != last_reported and (done - last_reported >= step or done == total):
+            last_reported = done
+            on_progress(done, total)
 
     targets = [(s + e) // 2 for s, e in scenes]
 
@@ -139,28 +156,45 @@ def sample_frames(video: str | Path, scenes: list[tuple[int, int]]) -> list:
 
     out: list = []
     target_idx = 0
-    last_frame = None
+    # kept raw: converting is the expensive part, and only the end-of-video padding needs it
+    last_raw = None
 
     try:
         for frame in container.decode(stream):
             try:
                 current_ms = int(frame.time * 1000)
-                nd = frame.to_ndarray(format="rgb24")
-            except (av.AVError, ValueError):
+            except (TypeError, ValueError):
                 continue
-            last_frame = nd
+            last_raw = frame
+
+            # only a frame that reaches the next scene's midpoint is converted to rgb;
+            # every other decoded frame is skipped untouched
+            if current_ms < targets[target_idx]:
+                continue
+            try:
+                nd = frame.to_ndarray(format="rgb24")
+            except (av.FFmpegError, ValueError):
+                # an unconvertible frame leaves the target pending for the next one
+                continue
 
             while target_idx < len(targets) and current_ms >= targets[target_idx]:
                 out.append(nd)
                 target_idx += 1
+            report(target_idx)
 
             if target_idx >= len(targets):
                 break
     finally:
         container.close()
 
-    if len(out) < len(scenes) and last_frame is not None:
-        out.extend([last_frame] * (len(scenes) - len(out)))
+    if len(out) < len(scenes) and last_raw is not None:
+        try:
+            last_frame = last_raw.to_ndarray(format="rgb24")
+        except (av.FFmpegError, ValueError):
+            last_frame = None
+        if last_frame is not None:
+            out.extend([last_frame] * (len(scenes) - len(out)))
+    report(len(out))
 
     return out
 
@@ -217,7 +251,7 @@ def index_video(
 
     log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes")
     report("sampling", 0, len(scenes))
-    frames = sample_frames(video_path, scenes)
+    frames = sample_frames(video_path, scenes, on_progress=lambda done, total: report("sampling", done, total))
     log(f"[diag] scene scout {video_path.name} | sampled {len(frames)} frames")
 
     if not is_model_loaded():
