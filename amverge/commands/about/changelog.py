@@ -7,6 +7,9 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v0.8.0"), [
+        "Added scenescout"
+    ],
     ("v0.5.0"), [
         "Fixed deadframes lagging near the end of clips and freezing the video"
     ],

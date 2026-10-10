@@ -3,8 +3,8 @@
 Uses a deep learning model trained for shot boundary detection.
 GPU-accelerated when CUDA is available. Requires amverge[ml].
 
-Smart cut pipeline: lossless copy for keyframe-aligned scenes,
-smartcut or re-encode for the rest.
+Cuts every scene by re-encoding at the detected boundary, so previews and
+thumbnails begin on the detected frame.
 
 Usage:
     pip install amverge[ml]

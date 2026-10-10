@@ -66,6 +66,7 @@ def generate_keyframes(
     progress_base: int = 10,
     progress_range: int = 30,
     progress_interval_s: float = 1.0,
+    skip_open_gop: bool = False,
 ) -> list[float]:
     """Extract keyframe timestamps via PyAV packet demux (V1 pipeline).
 
@@ -79,6 +80,10 @@ def generate_keyframes(
         progress_base: Starting percentage for progress reporting.
         progress_range: Total progress range span.
         progress_interval_s: Minimum seconds between progress updates.
+        skip_open_gop: Leave out keyframes with leading pictures, which no
+            stream copy can split at without losing frames (see
+            ``keyframe_align.get_open_gop_keyframes``). Only the demux path
+            can tell; the decode fallback keeps every keyframe.
 
     Returns:
         Sorted list of unique keyframe timestamps in seconds.
@@ -121,6 +126,7 @@ def generate_keyframes(
         safe_progress(percent, msg)
 
     keyframes: list[float] = []
+    open_gop: set[float] = set()
 
     with av.open(video_path) as container:
         stream = container.streams.video[0]
@@ -135,10 +141,15 @@ def generate_keyframes(
         maybe_emit("open", 0, 0.0, duration_s)
 
         try:
+            last_key = None
             for packet_index, packet in enumerate(container.demux(stream), 1):
                 ts = _pts_to_seconds(packet.pts, stream.time_base)
                 if packet.is_keyframe and ts is not None:
                     keyframes.append(ts)
+                    last_key = ts
+                elif last_key is not None and ts is not None and ts < last_key:
+                    open_gop.add(last_key)
+                    last_key = None
                 if packet_index % 500 == 0:
                     maybe_emit("demux", len(keyframes), ts, duration_s)
         except Exception:
@@ -149,6 +160,7 @@ def generate_keyframes(
                 with av.open(video_path) as dc:
                     ds = dc.streams.video[0]
                     maybe_emit("decode", 0, 0.0, duration_s)
+                    open_gop = set()
                     keyframes = _decode_keyframe_times(
                         dc, ds,
                         lambda stage, count, ts: maybe_emit(stage, count, ts, duration_s),
@@ -156,6 +168,8 @@ def generate_keyframes(
             except Exception:
                 return []
 
+    if skip_open_gop:
+        keyframes = [t for t in keyframes if t not in open_gop]
     normalized = sorted(set(round(t, 6) for t in keyframes if t is not None and t >= 0.0))
     done_pct = int(progress_base) + max(0, int(progress_range))
     safe_progress(done_pct, f"Keyframes done - found {len(normalized)}")

@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
-from .paths import db_path, list_db_paths, ensure_root
+from .paths import db_path, list_db_paths, ensure_root, resolve_db_path
 from .types import DatabaseInfo, IndexedVideo, EMBEDDING_MODEL_VERSION
 
 SCHEMA = f"""
@@ -79,30 +79,27 @@ def connect(path: str | Path, timeout: float = 10.0) -> Iterator[sqlite3.Connect
 
 
 def create_database(name: str, root: str | Path | None = None) -> Path:
-    """Create an empty database. Returns its path; existing ones are left alone.
-
-    `name` is either a name inside the storage root or a full path the user
-    chose, so the parent is created rather than assumed to exist.
-    """
     path = db_path(name, root)
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        conn.execute("PRAGMA user_version = 3")
     return path
 
 
 def database_info(path: str | Path) -> DatabaseInfo:
-    """Counts and size for one database."""
     p = Path(path)
     videos = scenes = 0
+    model_version = EMBEDDING_MODEL_VERSION
     if p.is_file():
         try:
             with connect(p) as conn:
                 videos = conn.execute("SELECT COUNT(*) FROM processed_videos").fetchone()[0]
                 scenes = conn.execute("SELECT COUNT(*) FROM scene_embeddings").fetchone()[0]
+                row = conn.execute("SELECT model_version FROM processed_videos LIMIT 1").fetchone()
+                if row and row[0]:
+                    model_version = str(row[0])
         except sqlite3.DatabaseError:
-            # a truncated or foreign file in the storage folder: report it as
-            # empty rather than taking the whole listing down
             pass
 
     return DatabaseInfo(
@@ -111,7 +108,140 @@ def database_info(path: str | Path) -> DatabaseInfo:
         video_count=videos,
         scene_count=scenes,
         size_bytes=p.stat().st_size if p.is_file() else 0,
+        model_version=model_version,
     )
+
+
+def is_valid_database(path: str | Path) -> bool:
+    p = Path(path)
+    if not p.is_file():
+        return False
+    try:
+        with connect(p) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = {row[0] for row in cursor.fetchall()}
+            return bool(tables.intersection({"processed_videos", "scene_embeddings", "image_embeddings"}))
+    except Exception:
+        return False
+
+
+def migrate_database(path: str | Path) -> bool:
+    from ..infra.ipc import log as ipc_log
+
+    p = Path(path)
+    if not p.is_file():
+        return False
+
+    ipc_log(f"scene scout {p.name} | checking database schema...")
+    with connect(p) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cursor.fetchall()}
+
+        if not tables.intersection({"processed_videos", "scene_embeddings", "image_embeddings"}):
+            raise ValueError(f"'{p.name}' is not a valid Scene Scout database (missing core tables).")
+
+        has_scene_embeddings = "scene_embeddings" in tables
+
+        if has_scene_embeddings:
+            cursor.execute("PRAGMA table_info(scene_embeddings)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if "thumbnail" not in cols:
+                ipc_log(f"scene scout {p.name} | upgrading schema: adding thumbnail column...")
+                try:
+                    conn.execute("ALTER TABLE scene_embeddings ADD COLUMN thumbnail BLOB")
+                except sqlite3.OperationalError:
+                    pass
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS index_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT UNIQUE NOT NULL,
+                is_directory BOOLEAN NOT NULL DEFAULT 0,
+                recursive BOOLEAN NOT NULL DEFAULT 1,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS image_embeddings (
+                filepath TEXT PRIMARY KEY,
+                modified_at REAL NOT NULL,
+                embedding BLOB NOT NULL,
+                model_version TEXT DEFAULT '{EMBEDDING_MODEL_VERSION}',
+                file_type TEXT DEFAULT 'image'
+            )
+        """)
+
+        needs_v3 = False
+        if has_scene_embeddings:
+            cursor.execute("PRAGMA table_info(scene_embeddings)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if "video_id" not in cols:
+                needs_v3 = True
+
+        if needs_v3:
+            ipc_log(f"scene scout {p.name} | migrating schema to v3: converting to relational video/scene tables...")
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                conn.execute(f"""
+                    CREATE TABLE processed_videos_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        filepath TEXT UNIQUE NOT NULL,
+                        modified_at REAL NOT NULL,
+                        model_version TEXT DEFAULT '{EMBEDDING_MODEL_VERSION}',
+                        status TEXT DEFAULT 'completed'
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE scene_embeddings_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        video_id INTEGER NOT NULL,
+                        scene_index INTEGER NOT NULL,
+                        start_time_ms INTEGER NOT NULL,
+                        end_time_ms INTEGER NOT NULL,
+                        embedding BLOB NOT NULL,
+                        thumbnail BLOB,
+                        FOREIGN KEY (video_id) REFERENCES processed_videos_new(id) ON DELETE CASCADE
+                    )
+                """)
+                conn.execute("""
+                    INSERT INTO processed_videos_new (filepath, modified_at, model_version)
+                    SELECT filepath, modified_at, model_version FROM processed_videos
+                """)
+                conn.execute("""
+                    INSERT INTO scene_embeddings_new (video_id, scene_index, start_time_ms, end_time_ms, embedding, thumbnail)
+                    SELECT pv_new.id, se.scene_index, se.start_time_ms, se.end_time_ms, se.embedding, se.thumbnail
+                    FROM scene_embeddings se
+                    JOIN processed_videos_new pv_new ON se.filepath = pv_new.filepath
+                """)
+                conn.execute("DROP TABLE scene_embeddings")
+                conn.execute("DROP TABLE processed_videos")
+                conn.execute("ALTER TABLE processed_videos_new RENAME TO processed_videos")
+                conn.execute("ALTER TABLE scene_embeddings_new RENAME TO scene_embeddings")
+                conn.execute("CREATE INDEX idx_scene_video_id ON scene_embeddings(video_id)")
+                ipc_log(f"scene scout {p.name} | v3 schema migration completed successfully")
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
+
+        conn.execute("PRAGMA user_version = 3")
+        return True
+
+
+def open_database(path: str | Path) -> DatabaseInfo:
+    from ..infra.ipc import log as ipc_log
+
+    p = Path(path).resolve()
+    if not p.is_file():
+        raise FileNotFoundError(f"Database file not found: {p}")
+    ipc_log(f"scene scout {p.name} | opening database...")
+    if not is_valid_database(p):
+        raise ValueError(f"'{p.name}' is not a valid Scene Scout database.")
+    migrate_database(p)
+    info = database_info(p)
+    ipc_log(f"scene scout {p.name} | database ready ({info.video_count} videos, {info.scene_count} scenes)")
+    return info
 
 
 def list_databases(root: str | Path | None = None) -> list[DatabaseInfo]:
@@ -148,10 +278,31 @@ def list_videos(path: str | Path) -> list[IndexedVideo]:
     ]
 
 
-def remove_video(path: str | Path, video_id: int) -> bool:
-    """Drop a video and its scenes. The FK cascade handles the embeddings."""
+def remove_video(
+    path: str | Path,
+    video_id: int | None = None,
+    filepath: str | None = None,
+) -> bool:
     with connect(path) as conn:
-        cur = conn.execute("DELETE FROM processed_videos WHERE id = ?", (video_id,))
+        resolved_id = video_id
+        resolved_path = filepath
+        if resolved_id is None and resolved_path is not None:
+            row = conn.execute("SELECT id FROM processed_videos WHERE filepath = ?", (str(resolved_path),)).fetchone()
+            if not row:
+                return False
+            resolved_id = int(row[0])
+        elif resolved_id is not None and resolved_path is None:
+            row = conn.execute("SELECT filepath FROM processed_videos WHERE id = ?", (resolved_id,)).fetchone()
+            if row:
+                resolved_path = str(row[0])
+
+        if resolved_id is None:
+            return False
+
+        conn.execute("DELETE FROM scene_embeddings WHERE video_id = ?", (resolved_id,))
+        if resolved_path is not None:
+            conn.execute("DELETE FROM index_queue WHERE path = ?", (resolved_path,))
+        cur = conn.execute("DELETE FROM processed_videos WHERE id = ?", (resolved_id,))
         return cur.rowcount > 0
 
 

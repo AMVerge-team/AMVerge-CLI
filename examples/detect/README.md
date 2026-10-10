@@ -29,8 +29,9 @@ ffmpeg segment or smart cut
 .mp4 clips + .jpg thumbnails + scenes.json
 ```
 
-Detection extracts scene boundaries, then segments the video with stream copy (lossless)
-or smart cut (partial re-encode for non-keyframe-aligned cuts).
+Detection extracts scene boundaries, then materializes previews by method.
+Keyframe detection uses fast stream copy because its boundaries are keyframes;
+TransNetV2 re-encodes at the detected boundary so previews are frame-accurate.
 
 ---
 

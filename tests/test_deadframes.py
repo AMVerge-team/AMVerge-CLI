@@ -226,11 +226,11 @@ class TestBuildFfmpegCmd:
     def test_h264_output_cfr(self):
         from amverge.core.deadframes.engine import _build_ffmpeg_cmd
 
-        segments = [(0.0, 0.5), (1.0, 2.0)]
+        frame_ranges = [(0, 15), (30, 60)]
         cmd = _build_ffmpeg_cmd(
             input_path="test.mp4",
             output_path="out.mp4",
-            segments=segments,
+            frame_ranges=frame_ranges,
             fps=30.0,
             pix_fmt="yuv420p",
             prores=False,
@@ -250,11 +250,11 @@ class TestBuildFfmpegCmd:
     def test_10bit_uses_hevc(self):
         from amverge.core.deadframes.engine import _build_ffmpeg_cmd
 
-        segments = [(0.0, 1.0)]
+        frame_ranges = [(0, 24)]
         cmd = _build_ffmpeg_cmd(
             input_path="test.mp4",
             output_path="out.mp4",
-            segments=segments,
+            frame_ranges=frame_ranges,
             fps=24.0,
             pix_fmt="yuv420p10le",
             prores=False,
@@ -267,11 +267,11 @@ class TestBuildFfmpegCmd:
     def test_prores_encoder(self):
         from amverge.core.deadframes.engine import _build_ffmpeg_cmd
 
-        segments = [(0.0, 1.0)]
+        frame_ranges = [(0, 30)]
         cmd = _build_ffmpeg_cmd(
             input_path="test.mp4",
             output_path="out.mov",
-            segments=segments,
+            frame_ranges=frame_ranges,
             fps=30.0,
             pix_fmt="yuv420p",
             prores=True,

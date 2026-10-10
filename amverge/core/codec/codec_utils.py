@@ -34,7 +34,8 @@ VALID_CODECS = {
     "prores_422_lt", "prores_422", "prores_422_hq", "prores_4444", "prores_4444_xq",
 }
 VALID_AUDIO = {"copy", "aac", "aac_320", "pcm16", "pcm24", "flac", "alac", "opus", "mp3", "none"}
-VALID_CONTAINERS = {"mp4", "mkv", "mov"}
+
+VALID_CONTAINERS = {"avi", "mp4", "mov"}
 VALID_HARDWARE = {"auto", "gpu", "cpu"}
 
 CODEC_ALIASES: dict[str, str] = {

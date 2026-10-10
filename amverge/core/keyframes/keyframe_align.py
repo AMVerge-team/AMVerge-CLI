@@ -1,23 +1,28 @@
 from __future__ import annotations
 
-"""Keyframe extraction and scene-to-keyframe alignment.
+"""Keyframe timestamp extraction.
 
-Extracts keyframe timestamps via PyAV packet demux (no frame decode) and
-classifies scenes by whether their boundaries align with a keyframe. This
-determines which scenes can use lossless copy vs. need re-encoding.
+Extracts keyframe timestamps via PyAV packet demux (no frame decode).
+``cutting.smart_cut.snap_range_to_keyframes`` uses this list directly to
+widen a scene's cut outward to its enclosing keyframes.
+
+.. warning::
+    Do not set ``stream.discard`` on the demuxed stream, however tempting the
+    "skip non-key packets" framing looks. On B-frame streams it corrupts the
+    ``pts`` PyAV reports for the packets it does keep -- confirmed against
+    ffprobe ground truth off by whole frames in either direction (a keyframe
+    at the true 2.100s came back as 2.07, one at 1.500s as 1.57). Downstream,
+    ``smart_cut`` trusts this list to name the exact keyframe a stream-copy
+    should snap to; an undercut value sends ffmpeg's backward-snapping
+    ``-ss`` to the *previous* real keyframe instead, silently dragging the
+    prior scene's frames into the cut. See the ``02_forward_match_bleed_BUG``
+    / ``06_head_forward_match_bleed_BUG`` fixtures in
+    ``examples/cutting/synthetic/fixtures``.
 
 Usage:
-    >>> from amverge.core.keyframes.keyframe_align import (
-    ...     get_keyframe_timestamps_pyav,
-    ...     classify_scenes_by_keyframe_alignment,
-    ... )
+    >>> from amverge.core.keyframes.keyframe_align import get_keyframe_timestamps_pyav
     >>> keyframes = get_keyframe_timestamps_pyav("episode.mp4")
-    >>> scenes = [(0.0, 5.0), (5.2, 10.0)]
-    >>> copy, reencode = classify_scenes_by_keyframe_alignment(scenes, keyframes)
-    >>> print(f"{len(copy)} lossless, {len(reencode)} re-encode")
 """
-
-from bisect import bisect_left, bisect_right
 
 import av
 
@@ -25,12 +30,16 @@ import av
 def get_keyframe_timestamps_pyav(video_path: str) -> list[float]:
     """Extract keyframe timestamps using PyAV packet demux.
 
-    Uses ``stream.discard = nonkey`` to skip non-keyframe packets at the
-    demux level - no frame decoding occurs. Returns deduplicated, sorted
-    timestamps in seconds rounded to 2 decimal places.
+    Demuxes every packet (no frame decode occurs either way -- decode only
+    happens on ``.decode()``, never on plain iteration) and keeps the ones
+    flagged as keyframes. Returns deduplicated, sorted timestamps in seconds
+    kept at their packet-level precision.
 
-    Uses ``av.Discard.nonkey`` enum (PyAV 17.x) with fallback to older
-    ``"NONKEY"`` string for backward compatibility.
+    Deliberately does NOT set ``stream.discard`` to skip non-key packets:
+    that corrupts the ``pts`` PyAV reports for the packets it keeps on
+    B-frame streams (see the module warning above). Demuxing everything is
+    still cheap -- it is header/index parsing, not decoding -- and it is the
+    only way to get timestamps that agree with ffprobe.
 
     Args:
         video_path: Path to the source video file.
@@ -45,107 +54,43 @@ def get_keyframe_timestamps_pyav(video_path: str) -> list[float]:
     keyframe_times: list[float] = []
     with av.open(video_path) as container:
         stream = container.streams.video[0]
-        try:
-            stream.discard = type(stream.discard).nonkey
-        except (AttributeError, KeyError):
-            pass
         for packet in container.demux(stream):
             if not packet.is_keyframe:
                 continue
             ts = packet.pts if packet.pts is not None else packet.dts
             if ts is None:
                 continue
-            keyframe_times.append(round(float(ts * packet.time_base), 2))
+            keyframe_times.append(float(ts * packet.time_base))
     return sorted(set(keyframe_times))
 
 
-def _nearest_within_threshold(
-    sorted_keyframes: list[float], ts: float, threshold: float
-) -> tuple[float | None, float | None]:
-    i = bisect_left(sorted_keyframes, ts)
-    candidates = []
-    if i < len(sorted_keyframes):
-        candidates.append(sorted_keyframes[i])
-    if i > 0:
-        candidates.append(sorted_keyframes[i - 1])
-    if not candidates:
-        return None, None
-    nearest = min(candidates, key=lambda k: abs(k - ts))
-    diff = abs(nearest - ts)
-    if diff <= threshold:
-        return nearest, diff
-    return None, diff
+def get_open_gop_keyframes(video_path: str) -> list[float]:
+    """Timestamps of the keyframes that have leading pictures: pictures
+    stored after the keyframe that display before it. In HEVC those are the
+    RASL pictures of an open-GOP CRA, which also reference the GOP before
+    it, so a decoder that starts at the CRA discards them. A stream copy
+    split at such a keyframe loses those frames from both clips.
 
+    x265 (open GOP by default) gives them only to keyframes it places by
+    interval in the middle of a long shot; one at a scene change ends the
+    previous mini-GOP on a P-frame and has none. On a real 24-minute x265
+    episode that was 13 of 321 keyframes. Keyframe detection skips these
+    (see ``generate_keyframes(skip_open_gop=True)``).
 
-def classify_scenes_by_keyframe_alignment(
-    scenes_secs: list[tuple[float, float]],
-    keyframe_timestamps: list[float],
-    threshold: float = 0.2,
-) -> tuple[list[dict], list[dict]]:
-    """Partition scenes into lossless-copy and re-encode candidates.
-
-    A scene is a copy candidate if its start time aligns with a keyframe
-    within ``threshold`` seconds (default 0.2s).
-
-    Args:
-        scenes_secs: List of ``(start, end)`` tuples in seconds.
-        keyframe_timestamps: Sorted keyframe timestamps from
-            :func:`get_keyframe_timestamps_pyav`.
-        threshold: Max allowed gap between scene start and nearest keyframe
-            for copy eligibility.
-
-    Returns:
-        Tuple of ``(copy_candidates, reencode_candidates)``. Each candidate
-        dict contains:
-        - ``scene_id``: int, index in input list
-        - ``orig_start``: float, original scene start
-        - ``orig_end``: float, original scene end
-        - ``start``: float, snapped or original start
-        - ``start_snapped``: bool, whether start was aligned
-        - ``start_diff_sec``: float, gap to nearest keyframe
-        - ``mode``: ``"copy_candidate"`` or ``"reencode_candidate"``
-
-    Example:
-        >>> scenes = [(0.0, 5.0), (5.2, 10.0), (10.0, 15.0)]
-        >>> kf = [0.0, 5.0, 10.0, 15.0]
-        >>> copy, reencode = classify_scenes_by_keyframe_alignment(scenes, kf)
-        >>> len(copy)     # scenes 0 and 2 start on keyframes
-        2
-        >>> len(reencode) # scene 1 starts at 5.2s, no keyframe within 0.2s
-        1
+    Also matches RADL pictures, which are decodable from the keyframe alone;
+    treating those as unsafe only costs a cut point, never a wrong clip.
     """
-    if threshold < 0:
-        raise ValueError(f"Cannot have negative threshold ({threshold})")
-
-    kf = sorted(float(x) for x in keyframe_timestamps)
-    copy_candidates: list[dict] = []
-    reencode_candidates: list[dict] = []
-
-    for idx, scene in enumerate(scenes_secs):
-        scene_start = float(scene[0])
-        scene_end = float(scene[1])
-
-        snapped_start, start_diff = _nearest_within_threshold(kf, scene_start, threshold)
-        snapped_end, end_diff = _nearest_within_threshold(kf, scene_end, threshold)
-
-        mode = "copy_candidate" if snapped_start is not None else "reencode_candidate"
-
-        record = {
-            "scene_id": idx,
-            "orig_start": scene_start,
-            "orig_end": scene_end,
-            "start": snapped_start if snapped_start is not None else scene_start,
-            "end": snapped_end if snapped_end is not None else scene_end,
-            "start_snapped": snapped_start is not None,
-            "end_snapped": snapped_end is not None,
-            "start_diff_sec": start_diff,
-            "end_diff_sec": end_diff,
-            "mode": mode,
-        }
-
-        if mode == "copy_candidate":
-            copy_candidates.append(record)
-        else:
-            reencode_candidates.append(record)
-
-    return copy_candidates, reencode_candidates
+    open_gop: list[float] = []
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        last_key = None
+        for packet in container.demux(stream):
+            if packet.pts is None:
+                continue
+            if packet.is_keyframe:
+                last_key = packet.pts
+                continue
+            if last_key is not None and packet.pts < last_key:
+                open_gop.append(float(last_key * stream.time_base))
+                last_key = None
+    return open_gop

@@ -144,18 +144,21 @@ class AmvergeVideo:
         end: float,
         output: str | Path,
         *,
+        mode: str = "copy",
         use_cuda: bool | None = None,
     ) -> tuple[str, str]:
         """Cut a time range from the video. Returns ``(path, mode)``.
 
-        Mode is one of ``"copy"``, ``"snapped_copy"``, ``"smartcut"``,
-        or ``"reencode"``.
+        ``mode`` is ``"copy"`` (a true stream copy, widened outward to the
+        nearest keyframes -- see ``cutting.smart_cut`` for what that costs)
+        or ``"reencode"`` (exact boundaries, a real encode).
 
         Args:
             start: Start time in seconds.
             end: End time in seconds.
             output: Output file path.
-            use_cuda: Enable GPU encode for re-encode fallback.
+            mode: ``"copy"`` or ``"reencode"``.
+            use_cuda: Enable GPU encode when ``mode == "reencode"``.
                 Auto-detected from CUDA availability if None.
 
         Example:
@@ -171,14 +174,14 @@ class AmvergeVideo:
 
         out_path = Path(output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        result_path, mode = _cut(
+        result_path, result_mode, _poster_offset_sec = _cut(
             self._path, start, end, 0, out_path.parent,
-            self.keyframes, use_cuda, self.is_hevc,
+            self.keyframes, mode, use_cuda,
         )
         if Path(result_path) != out_path:
             import shutil
             shutil.move(result_path, out_path)
-        return str(out_path), mode
+        return str(out_path), result_mode
 
     def copy_segment(
         self,

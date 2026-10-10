@@ -33,6 +33,28 @@ def scenes_frames_to_seconds(scenes: np.ndarray, fps: float) -> np.ndarray:
     return np.round(scenes / fps, 2)
 
 
+def transnet_scenes_to_seconds(scenes: np.ndarray, fps: float) -> np.ndarray:
+    """Convert TransNetV2 frame ranges to contiguous ``[start_sec, end_sec)``.
+
+    ``predictions_to_scenes`` returns *inclusive* end frames (a scene covering
+    frames 0-89 is ``[0, 89]``), so the exclusive end is the frame after it:
+    ``end_sec`` is the next scene's ``start_sec``, and the last scene ends at
+    the video's duration. Kept to microsecond precision; rounding to
+    centiseconds (what :func:`scenes_frames_to_seconds` does) moves the end
+    boundary by up to 5 ms, enough to drop or add a frame at 60 fps.
+
+    Args:
+        scenes: ``(N, 2)`` ndarray of ``[start_frame, end_frame_inclusive]``.
+        fps: Video frame rate.
+
+    Returns:
+        ``(N, 2)`` float ndarray of ``[start_sec, end_sec]``.
+    """
+    frames = np.asarray(scenes, dtype=np.float64).reshape(-1, 2)
+    exclusive = frames + np.array([0.0, 1.0])
+    return np.round(exclusive / fps, 6)
+
+
 def convert_scenes_to_timestamps(
     src_video: str, scenes: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:

@@ -24,7 +24,7 @@ from .nelux_runtime import _get_nelux_video_reader
 from ..video.probe_utils import probe_video_fps, probe_video_duration, probe_video_total_frames
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
-from ..video.scene_utils import scenes_frames_to_seconds
+from ..video.scene_utils import transnet_scenes_to_seconds
 from ..transnet.transnet_constants import (
     FRAME_BYTES,
     FRAME_CHANNELS,
@@ -242,7 +242,7 @@ def decode_and_detect_scenes(
 
     scores_arr = scorer.finish()
     scenes_frames = _scores_to_scenes(model, scores_arr, threshold)
-    scenes_secs = scenes_frames_to_seconds(scenes_frames, video_fps)
+    scenes_secs = transnet_scenes_to_seconds(scenes_frames, video_fps)
 
     return scenes_secs, scenes_frames
 
@@ -353,7 +353,7 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
     pix_fmt = (probe_video(input_video).get("pix_fmt") or "").lower()
     if pix_fmt and pix_fmt not in NVDEC_SAFE_PIX_FMTS:
         raise RuntimeError(
-            f"NVDEC decoding is unreliable for {pix_fmt}; use the FFmpeg decoder"
+            f"Unreliable for {pix_fmt}"
         )
 
     VideoReader = _get_nelux_video_reader()
@@ -493,5 +493,5 @@ def run_model_one_pass(
     scenes_frames = _scores_to_scenes(model, final_scores, threshold)
     emit_progress(75, f"TransNetV2 complete ({num_frames}/{_safe_total(num_frames)} frames)")
 
-    scenes_secs = scenes_frames_to_seconds(scenes_frames, video_fps)
+    scenes_secs = transnet_scenes_to_seconds(scenes_frames, video_fps)
     return scenes_secs, scenes_frames
