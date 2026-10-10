@@ -7,6 +7,9 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v0.8.1"), [
+        "Fixed broken imports"
+    ],
     ("v0.8.0"), [
         "Added scenescout"
     ],

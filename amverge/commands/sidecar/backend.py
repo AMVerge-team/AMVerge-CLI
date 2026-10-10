@@ -33,11 +33,9 @@ def backend(
     from ...core.thumbnails import make_thumbnail
     from ...core.detection.keyframe import detect_scenes_by_keyframe
     from ...core.video.probe_utils import probe_video_duration, probe_video_fps, probe_video_dimensions
-    from ...core.video.scene_utils import scenes_to_objects
+    from ...core.video.scene_utils import scenes_to_objects, transnet_scenes_to_seconds
     from ...core.detection.short_scenes import merge_short_scenes
-    from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, classify_scenes_by_keyframe_alignment
-    from ...core.codec.codec_utils import check_if_hevc
-    from ...core.cutting.smart_cut import cut_all_scenes
+    from ...core.cutting.smart_cut import cut_all_scenes, exact_copy_supported, split_exact_copy_scenes
     from ...core.cutting.segmenter import run_ffmpeg_segment_streaming
 
     input_video = Path(video_path)
