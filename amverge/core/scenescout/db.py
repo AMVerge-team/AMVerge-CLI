@@ -58,6 +58,19 @@ CREATE TABLE IF NOT EXISTS index_queue (
 );
 """
 
+# AMVerge-only: upstream scene-scout ignores unknown tables, so adding this keeps
+# databases opening in both tools. user_version stays 3 for the same reason.
+# raw numbers per boundary, not tags: tags are derived on read (motion.tags_for)
+MOTION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS scene_motion (
+    scene_id INTEGER PRIMARY KEY,
+    motion_version INTEGER NOT NULL,
+    start_raw TEXT,
+    end_raw TEXT,
+    FOREIGN KEY (scene_id) REFERENCES scene_embeddings(id) ON DELETE CASCADE
+);
+"""
+
 
 @contextmanager
 def connect(path: str | Path, timeout: float = 10.0) -> Iterator[sqlite3.Connection]:
@@ -83,8 +96,15 @@ def create_database(name: str, root: str | Path | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        conn.executescript(MOTION_SCHEMA)
         conn.execute("PRAGMA user_version = 3")
     return path
+
+
+def has_motion_table(conn: sqlite3.Connection) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='scene_motion'"
+    ).fetchone() is not None
 
 
 def database_info(path: str | Path) -> DatabaseInfo:
@@ -225,6 +245,7 @@ def migrate_database(path: str | Path) -> bool:
             finally:
                 conn.execute("PRAGMA foreign_keys = ON")
 
+        conn.executescript(MOTION_SCHEMA)
         conn.execute("PRAGMA user_version = 3")
         return True
 
@@ -368,3 +389,56 @@ def insert_scenes(path: str | Path, video_id: int, scenes: list[tuple[int, int, 
 def mark_video_complete(path: str | Path, video_id: int) -> None:
     with connect(path) as conn:
         conn.execute("UPDATE processed_videos SET status = 'completed' WHERE id = ?", (video_id,))
+
+
+def insert_scene_motion(
+    path: str | Path,
+    video_id: int,
+    motion: dict[int, tuple[Optional[dict], Optional[dict]]],
+    version: int,
+) -> int:
+    """Store ``{scene_index: (start_raw, end_raw)}`` for one video. Returns rows written."""
+    import json
+
+    with connect(path) as conn:
+        conn.executescript(MOTION_SCHEMA)
+        ids = dict(conn.execute(
+            "SELECT scene_index, id FROM scene_embeddings WHERE video_id = ?", (video_id,)
+        ).fetchall())
+        rows = [
+            (ids[index], version, json.dumps(start) if start else None, json.dumps(end) if end else None)
+            for index, (start, end) in motion.items()
+            if index in ids
+        ]
+        conn.executemany(
+            "INSERT OR REPLACE INTO scene_motion (scene_id, motion_version, start_raw, end_raw) VALUES (?, ?, ?, ?)",
+            rows,
+        )
+        return len(rows)
+
+
+def videos_missing_motion(path: str | Path, version: int) -> list[tuple[int, str, list[tuple[int, int, int]]]]:
+    """Completed videos with scenes lacking current motion: ``(video_id, filepath, [(scene_index, start_ms, end_ms)])``."""
+    with connect(path) as conn:
+        conn.executescript(MOTION_SCHEMA)
+        rows = conn.execute(
+            """
+            SELECT v.id, v.filepath, s.scene_index, s.start_time_ms, s.end_time_ms,
+                   (m.scene_id IS NOT NULL AND m.motion_version = ?) AS current
+            FROM processed_videos v
+            JOIN scene_embeddings s ON s.video_id = v.id
+            LEFT JOIN scene_motion m ON m.scene_id = s.id
+            WHERE v.status = 'completed'
+            ORDER BY v.id, s.start_time_ms
+            """,
+            (version,),
+        ).fetchall()
+
+    by_video: dict[int, tuple[str, list[tuple[int, int, int]], bool]] = {}
+    for video_id, filepath, index, start, end, current in rows:
+        entry = by_video.setdefault(video_id, (filepath, [], False))
+        entry[1].append((index, start, end))
+        if not current:
+            by_video[video_id] = (entry[0], entry[1], True)
+    # a video is re-measured whole: its scenes come from one sequential decode anyway
+    return [(vid, fp, scenes) for vid, (fp, scenes, stale) in by_video.items() if stale]

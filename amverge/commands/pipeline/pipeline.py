@@ -334,7 +334,6 @@ def pipeline(
     Run interactively with arrow-key navigation. Save presets with --save <name>.
     Load saved presets with --load <name>.
     """
-    # questionary is slow to import and only the interactive flow needs it
     from ...ui.interactive import checkboxes, confirm, text_input
 
     ops = available_ops()

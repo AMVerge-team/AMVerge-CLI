@@ -156,20 +156,33 @@ def run_daemon(
                 device=search_device,
                 databases=targets,
                 video_paths=raw_videos,
+                start_subjects=list(req.get("start_subjects") or []),
+                include_unclear=bool(req.get("include_unclear", False)),
             )
+            # {"path", "start_ms"?, "end_ms"?}: continue this clip's ending motion
+            flow = req.get("flow_from")
 
             if not embedding.is_model_loaded():
                 _reply({"id": req_id, "status": "progress", "stage": "loading_model", "done": 0, "total": 1})
 
             try:
                 started = time.perf_counter()
-                hits = (
-                    scoutsearch.search_image(str(image), options)
-                    if image
-                    else scoutsearch.search_text(query or "", options)
-                )
+                reply: dict = {"id": req_id, "status": "ok"}
+                if flow:
+                    hits, reply["flow"] = scoutsearch.search_flow(
+                        str(flow["path"]),
+                        options,
+                        text=query or None,
+                        start_ms=flow.get("start_ms"),
+                        end_ms=flow.get("end_ms"),
+                    )
+                elif image:
+                    hits = scoutsearch.search_image(str(image), options)
+                else:
+                    hits = scoutsearch.search_text(query or "", options)
                 log(f"[diag] daemon search: {len(hits)} results in {time.perf_counter() - started:.3f}s")
-                _reply({"id": req_id, "status": "ok", "results": [h.to_json() for h in hits]})
+                reply["results"] = [h.to_json() for h in hits]
+                _reply(reply)
             except Exception as exc:
                 _reply({"id": req_id, "status": "error", "error": str(exc)})
             continue
@@ -182,6 +195,7 @@ def run_daemon(
             max_patches = int(req.get("max_patches", 256))
             batch_size = int(req.get("batch_size", 16))
             no_thumbnails = bool(req.get("no_thumbnails", False))
+            motion = bool(req.get("motion", True))
             add_device = req.get("device") or resolved_device
 
             path = db_path(database, root)
@@ -202,6 +216,7 @@ def run_daemon(
                     accurate=accurate,
                     method=detector,
                     generate_thumbnails=not no_thumbnails,
+                    motion=motion,
                     on_progress=on_progress,
                 )
                 _reply({"id": req_id, "status": "ok", "done": True, "scenes": count, "video": video})

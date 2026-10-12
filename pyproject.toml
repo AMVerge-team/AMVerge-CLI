@@ -63,7 +63,7 @@ depth         = ["depth-anything-v2>=0.1", "opencv-python-headless>=4.9"]
 deadframes    = ["opencv-python-headless>=4.9"]
 # Scene Scout: SigLIP 2 embeddings. transformers pulls the model, pillow encodes
 # the scene thumbnails stored in the database
-scout         = ["torch>=2.0", "transformers>=4.35", "pillow>=10.0", "numpy>=1.24"]
+scout         = ["torch>=2.0", "transformers>=4.35", "pillow>=10.0", "numpy>=1.24", "opencv-python-headless>=4.9"]
 # NVDEC decode. own extra, out of `all`: needs Python 3.13+, torch pinned to
 # 2.13.*, and the CUDA 13 index, which drops every GPU before Turing
 nelux         = ["nelux>=0.18"]
