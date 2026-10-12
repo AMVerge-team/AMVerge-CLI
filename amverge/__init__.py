@@ -14,7 +14,10 @@ Usage::
 from __future__ import annotations
 
 import importlib
+import os
 from typing import Any
+
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 from .__version__ import __version__
 
