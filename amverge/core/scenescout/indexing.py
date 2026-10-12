@@ -143,7 +143,7 @@ def sample_frames(
         return []
 
     total = len(scenes)
-    step = max(1, total // 100)
+    step = max(1, total // 100) # for progress bar % updates
     last_reported = 0
 
     def report(done: int) -> None:
@@ -152,14 +152,14 @@ def sample_frames(
             last_reported = done
             on_progress(done, total)
 
-    targets = [(s + e) // 2 for s, e in scenes]
+    midpoints_ms = [(start_ms + end_ms) // 2 for start_ms, end_ms in scenes]
 
     container = av.open(str(video), options={"err_detect": "ignore_err"})
     stream = container.streams.video[0]
     stream.thread_type = "AUTO"
 
     out: list = []
-    target_idx = 0
+    next_midpoint = 0
     # kept raw: converting is the expensive part, and only the end-of-video padding needs it
     last_raw = None
 
@@ -175,27 +175,27 @@ def sample_frames(
                 boundary.add(current_ms, frame)
 
             # middle frames are done; keep decoding only while the last scene's end still matters
-            if target_idx >= len(targets):
+            if next_midpoint >= len(midpoints_ms):
                 if boundary is None or current_ms >= scenes[-1][1]:
                     break
                 continue
 
             # only a frame that reaches the next scene's midpoint is converted to rgb;
             # every other decoded frame is skipped untouched
-            if current_ms < targets[target_idx]:
+            if current_ms < midpoints_ms[next_midpoint]:
                 continue
             try:
                 nd = frame.to_ndarray(format="rgb24")
             except (av.FFmpegError, ValueError):
-                # an unconvertible frame leaves the target pending for the next one
+                # an unconvertible frame leaves the midpoint pending for the next one
                 continue
 
-            while target_idx < len(targets) and current_ms >= targets[target_idx]:
+            while next_midpoint < len(midpoints_ms) and current_ms >= midpoints_ms[next_midpoint]:
                 out.append(nd)
-                target_idx += 1
-            report(target_idx)
+                next_midpoint += 1
+            report(next_midpoint)
 
-            if target_idx >= len(targets) and boundary is None:
+            if next_midpoint >= len(midpoints_ms) and boundary is None:
                 break
     finally:
         container.close()
