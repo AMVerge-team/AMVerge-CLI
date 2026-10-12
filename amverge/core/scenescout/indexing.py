@@ -112,6 +112,7 @@ def sample_frames(
     video: str | Path,
     scenes: list[tuple[int, int]],
     on_progress: Optional[Callable[[int, int], None]] = None,
+    boundary=None,
 ) -> list:
     """One representative frame per scene.
 
@@ -132,6 +133,9 @@ def sample_frames(
 
     ``on_progress(done, total)`` fires as frames are collected, about once per
     percent, so a caller can show how far the decode has got.
+
+    ``boundary`` is an optional :class:`motion.BoundaryCollector`. It sees every
+    decoded frame, so motion tags ride on this decode instead of needing another.
     """
     import av
 
@@ -167,6 +171,15 @@ def sample_frames(
                 continue
             last_raw = frame
 
+            if boundary is not None and boundary.wants(current_ms):
+                boundary.add(current_ms, frame)
+
+            # middle frames are done; keep decoding only while the last scene's end still matters
+            if target_idx >= len(targets):
+                if boundary is None or current_ms >= scenes[-1][1]:
+                    break
+                continue
+
             # only a frame that reaches the next scene's midpoint is converted to rgb;
             # every other decoded frame is skipped untouched
             if current_ms < targets[target_idx]:
@@ -182,7 +195,7 @@ def sample_frames(
                 target_idx += 1
             report(target_idx)
 
-            if target_idx >= len(targets):
+            if target_idx >= len(targets) and boundary is None:
                 break
     finally:
         container.close()
@@ -223,6 +236,7 @@ def index_video(
     accurate: bool = False,
     method: str = DETECTOR_KEYFRAME,
     generate_thumbnails: bool = True,
+    motion: bool = True,
     on_progress: Optional[ProgressCallback] = None,
 ) -> int:
     """Index one video into a database. Returns the number of scenes written.
@@ -230,6 +244,10 @@ def index_video(
     The video row is written with ``status='indexing'`` up front and only flipped
     to ``completed`` at the end, so a run interrupted halfway leaves a row that
     is visibly incomplete rather than one that looks finished but has no scenes.
+
+    ``motion`` also measures each scene's start/end movement during the same
+    decode (see :mod:`motion`). Skipped with a log line when OpenCV is missing,
+    so indexing never fails over the optional part.
     """
     from ..infra.ipc import log
     from .embedding import embed_frames, is_model_loaded, pack_embedding
@@ -250,8 +268,14 @@ def index_video(
         return 0
 
     log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes")
+    collector = _motion_collector(scenes, video_path.name) if motion else None
     report("sampling", 0, len(scenes))
-    frames = sample_frames(video_path, scenes, on_progress=lambda done, total: report("sampling", done, total))
+    frames = sample_frames(
+        video_path,
+        scenes,
+        on_progress=lambda done, total: report("sampling", done, total),
+        boundary=collector,
+    )
     log(f"[diag] scene scout {video_path.name} | sampled {len(frames)} frames")
 
     if not is_model_loaded():
@@ -288,11 +312,74 @@ def index_video(
         rows.append((index, start_ms, end_ms, pack_embedding(vector), thumbnail))
 
     scoutdb.insert_scenes(database, video_id, rows)
+
+    if collector is not None:
+        from .motion import MOTION_VERSION
+
+        report("motion", 0, len(scenes))
+        measured = collector.finish(on_progress=lambda done, total: report("motion", done, total))
+        written = scoutdb.insert_scene_motion(database, video_id, measured, MOTION_VERSION)
+        log(f"[diag] scene scout {video_path.name} | motion measured for {written} scenes")
+
     scoutdb.mark_video_complete(database, video_id)
     report("done", len(rows), len(rows))
     log(f"[diag] scene scout {video_path.name} | indexed {len(rows)} scenes successfully")
 
     return len(rows)
+
+
+def _motion_collector(scenes: list[tuple[int, int]], name: str):
+    from ..infra.ipc import log
+
+    try:
+        from .motion import BoundaryCollector
+
+        import cv2  # noqa: F401 - checked here so a missing install skips motion instead of failing mid-decode
+    except ImportError:
+        log(f"[diag] scene scout {name} | opencv not installed, skipping motion tags")
+        return None
+    return BoundaryCollector(scenes)
+
+
+def backfill_motion(
+    database: str | Path,
+    on_progress: Optional[ProgressCallback] = None,
+) -> int:
+    """Measures motion for every indexed video that lacks it. Returns scenes written.
+
+    Needs no model, only the source videos still on disk; a moved or deleted
+    source is skipped with a log line.
+    """
+    from ..infra.ipc import log
+    from .motion import MOTION_VERSION, collect_scene_motion
+
+    pending = scoutdb.videos_missing_motion(database, MOTION_VERSION)
+    total_scenes = sum(len(scenes) for _, _, scenes in pending)
+    done_scenes = written = 0
+    if on_progress:
+        on_progress("motion", 0, total_scenes)
+
+    for video_id, filepath, scenes in pending:
+        if not Path(filepath).is_file():
+            log(f"[diag] scene scout motion | source missing, skipped: {Path(filepath).name}")
+            done_scenes += len(scenes)
+            continue
+        ranges = [(start, end) for _, start, end in scenes]
+        measured = collect_scene_motion(
+            filepath,
+            ranges,
+            on_progress=(lambda d, _t, base=done_scenes: on_progress("motion", base + d, total_scenes))
+            if on_progress
+            else None,
+        )
+        by_scene_index = {scenes[i][0]: value for i, value in measured.items()}
+        written += scoutdb.insert_scene_motion(database, video_id, by_scene_index, MOTION_VERSION)
+        done_scenes += len(scenes)
+        log(f"[diag] scene scout motion | {Path(filepath).name}: {len(by_scene_index)} scenes")
+
+    if on_progress:
+        on_progress("done", total_scenes, total_scenes)
+    return written
 
 
 def model_version() -> str:

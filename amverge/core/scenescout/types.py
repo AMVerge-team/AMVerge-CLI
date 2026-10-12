@@ -31,6 +31,9 @@ class SceneHit:
     # over a large database returns hundreds of rows and the images dwarf
     # everything else in the payload
     thumbnail_b64: Optional[str] = None
+    # {"start": tags, "end": tags} (see motion.tags_for); None when the scene was
+    # indexed without motion
+    motion: Optional[dict[str, Any]] = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -43,6 +46,7 @@ class SceneHit:
             "score": round(self.score, 6),
             "database": self.database,
             "thumbnailB64": self.thumbnail_b64,
+            "motion": self.motion,
         }
 
 
@@ -109,6 +113,13 @@ class SearchOptions:
     device: Optional[str] = None
     databases: list[str] = field(default_factory=list)
     video_paths: list[str] = field(default_factory=list)
+    # keep only scenes whose start subject moves one of these ways (motion.SUBJECT_TAGS)
+    start_subjects: list[str] = field(default_factory=list)
+    # whether a scene with no readable motion survives the start_subjects filter
+    include_unclear: bool = False
+    # (video path, start_ms, end_ms) to leave out: the clip a flow search
+    # continues, when it is itself an indexed scene, would match itself first
+    exclude_range: Optional[tuple[str, int, int]] = None
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)

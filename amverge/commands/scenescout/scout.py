@@ -280,6 +280,7 @@ def add(
         help="Scene detector: keyframe_detection or transnetv2_gpu",
     ),
     no_thumbnails: bool = typer.Option(False, "--no-thumbnails", help="Skip thumbnail generation"),
+    no_motion: bool = typer.Option(False, "--no-motion", help="Skip start/end motion tags"),
     as_json: bool = typer.Option(False, "--json", help="Emit progress and result as JSON lines"),
 ) -> None:
     """Index a video into a database.
@@ -337,6 +338,7 @@ def add(
             accurate=accurate,
             method=detector,
             generate_thumbnails=not no_thumbnails,
+            motion=not no_motion,
             on_progress=on_progress,
         )
     except (NotImplementedError, SceneScoutModelUnavailable) as exc:
@@ -365,17 +367,31 @@ def search(
     device: Optional[str] = typer.Option(None, "--device", help="cuda, mps or cpu"),
     max_patches: int = typer.Option(256, "--max-patches", help="Model patch budget"),
     no_thumbnails: bool = typer.Option(False, "--no-thumbnails", help="Omit thumbnails from output"),
+    flow_from: Optional[Path] = typer.Option(
+        None, "--flow-from", help="Find scenes that flow out of this clip: most similar to its last frame", exists=True
+    ),
+    flow_start_ms: Optional[int] = typer.Option(None, "--flow-start-ms", help="Range start inside --flow-from"),
+    flow_end_ms: Optional[int] = typer.Option(None, "--flow-end-ms", help="Range end inside --flow-from"),
+    start_subject: list[str] = typer.Option(
+        [], "--start-subject", help="Keep scenes whose subject starts moving this way (repeatable)"
+    ),
+    include_unclear: bool = typer.Option(False, "--include-unclear", help="Keep scenes with unreadable motion"),
     as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
-    """Search indexed scenes by description, or by reference image."""
+    """Search indexed scenes by description, reference image, or a clip to continue."""
     from ...core.scenescout import search as scoutsearch
     from ...core.scenescout.embedding import SceneScoutModelUnavailable
+    from ...core.scenescout.motion import SUBJECT_TAGS
     from ...core.scenescout.paths import db_path, list_db_paths
     from ...core.scenescout.types import SearchOptions
     from ...core.infra.ipc import log
 
-    if not query and not image:
-        fail("Give a search query, or --image")
+    if not query and not image and not flow_from:
+        fail("Give a search query, --image, or --flow-from")
+        raise typer.Exit(1)
+    unknown = [s for s in start_subject if s not in SUBJECT_TAGS]
+    if unknown:
+        fail(f"Unknown --start-subject {unknown}; use one of {', '.join(SUBJECT_TAGS)}")
         raise typer.Exit(1)
 
     targets = [str(db_path(name, root)) for name in database] if database else [
@@ -389,7 +405,9 @@ def search(
         raise typer.Exit(1)
 
     started = time.perf_counter()
-    focus = query if query else f"image={Path(image).name}"
+    focus = query if query else (f"image={Path(image).name}" if image else "")
+    if flow_from:
+        focus = f"{focus} flow-from={Path(flow_from).name}".strip()
     log(
         f"[diag] scene scout search | {focus} databases={len(targets)} "
         f"top_k={top_k} threshold={threshold}"
@@ -403,15 +421,21 @@ def search(
         device=device,
         databases=targets,
         video_paths=video,
+        start_subjects=start_subject,
+        include_unclear=include_unclear,
     )
 
+    flow_tags = None
     try:
-        hits = (
-            scoutsearch.search_image(str(image), options)
-            if image
-            else scoutsearch.search_text(query or "", options)
-        )
-    except (NotImplementedError, SceneScoutModelUnavailable) as exc:
+        if flow_from:
+            hits, flow_tags = scoutsearch.search_flow(
+                str(flow_from), options, text=query, start_ms=flow_start_ms, end_ms=flow_end_ms
+            )
+        elif image:
+            hits = scoutsearch.search_image(str(image), options)
+        else:
+            hits = scoutsearch.search_text(query or "", options)
+    except (NotImplementedError, SceneScoutModelUnavailable, ValueError) as exc:
         if as_json:
             _emit({"results": [], "error": str(exc)}, True)
             raise typer.Exit(1)
@@ -420,8 +444,15 @@ def search(
     log(f"[diag] scene scout search done: {len(hits)} results in {time.perf_counter() - started:.2f}s")
 
     if as_json:
-        _emit({"results": [h.to_json() for h in hits]}, True)
+        payload: dict = {"results": [h.to_json() for h in hits]}
+        if flow_tags is not None:
+            payload["flow"] = flow_tags
+        _emit(payload, True)
         return
+
+    if flow_tags is not None:
+        end = flow_tags["end"]
+        console.print(f"Clip ends: subject {end['subject']} {end['speed'] or ''} / camera {end['camera']}")
 
     banner("scout search")
     if not hits:
@@ -433,14 +464,17 @@ def search(
         ("Video", "bold", {}),
         ("Scene", None, {"justify": "right"}),
         ("Start", None, {"justify": "right"}),
+        ("Starts moving", None, {}),
         ("Database", "bright_black", {}),
     )
     for hit in hits:
+        start = hit.motion["start"] if hit.motion else None
         table.add_row(
             f"{hit.score:.3f}",
             Path(hit.video_path).name,
             str(hit.scene_index),
             f"{hit.start_ms / 1000:.1f}s",
+            f"{start['subject']} / {start['camera']}" if start else "-",
             hit.database,
         )
     console.print(table)
@@ -505,6 +539,76 @@ def daemon(
     from .daemon import run_daemon
 
     run_daemon(root=root, device=device, idle_seconds=idle_seconds)
+
+
+@scout.command("motion")
+def motion_cmd(
+    database: str = typer.Option(..., "--db", help="Database name or path"),
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    as_json: bool = typer.Option(False, "--json", help="Emit progress and result as JSON lines"),
+) -> None:
+    """Measure start/end motion for indexed scenes that lack it (no model needed)."""
+    from ...core.scenescout import indexing
+    from ...core.scenescout.paths import db_path
+    from ...core.infra.ipc import log
+
+    path = db_path(database, root)
+    if not path.is_file():
+        if as_json:
+            _emit({"error": f"database not found at {path}"}, True)
+            raise typer.Exit(1)
+        fail(f"Database does not exist: {path}")
+        raise typer.Exit(1)
+
+    def on_progress(stage: str, done: int, total: int) -> None:
+        if as_json:
+            print(json.dumps({"stage": stage, "done": done, "total": total}, separators=(",", ":")), flush=True)
+
+    started = time.perf_counter()
+    try:
+        count = indexing.backfill_motion(path, on_progress=on_progress)
+    except ImportError as exc:
+        if as_json:
+            _emit({"error": f"Motion tags need OpenCV: {exc}"}, True)
+            raise typer.Exit(1)
+        fail(f"Motion tags need OpenCV: {exc}")
+        raise typer.Exit(1)
+    log(f"[diag] scene scout motion | {path.name}: {count} scenes in {time.perf_counter() - started:.1f}s")
+
+    if as_json:
+        _emit({"done": True, "scenes": count, "database": str(path)}, True)
+        return
+    banner("scout motion")
+    console.print(f"Measured motion for [bold]{count}[/bold] scenes in {path.name}")
+
+
+@scout.command("clip-motion")
+def clip_motion(
+    clip: Path = typer.Argument(..., help="Clip, or a video with --start-ms/--end-ms", exists=True),
+    start_ms: Optional[int] = typer.Option(None, "--start-ms", help="Range start"),
+    end_ms: Optional[int] = typer.Option(None, "--end-ms", help="Range end"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Start/end motion tags of one clip, for the app's flow chip (no model needed)."""
+    from ...core.scenescout import motion
+
+    try:
+        measured = motion.measure_clip(str(clip), start_ms, end_ms)
+    except (ValueError, ImportError) as exc:
+        if as_json:
+            _emit({"error": str(exc)}, True)
+            raise typer.Exit(1)
+        fail(str(exc))
+        raise typer.Exit(1)
+    tags = motion.scene_tags(measured["start"], measured["end"])
+
+    if as_json:
+        _emit({"motion": tags}, True)
+        return
+    banner("scout clip-motion")
+    for side in ("start", "end"):
+        t = tags[side]
+        console.print(f"{side:<5}: subject {t['subject']} {t['speed'] or ''} / camera {t['camera']}")
 
 
 @scout.command("generate-thumbnails")
