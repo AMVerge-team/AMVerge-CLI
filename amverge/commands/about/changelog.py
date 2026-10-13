@@ -7,6 +7,9 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v0.8.3"), [
+        "Fixed thumbnail generation for scene scout"
+    ],
     ("v0.8.2"), [
         "Added stream copying where possible in materialize_clips if the user resumes video processing"
     ],
