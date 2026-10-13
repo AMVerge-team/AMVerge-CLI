@@ -640,5 +640,5 @@ def generate_thumbnails_cmd(
         return
 
     banner("scout generate-thumbnails")
-    console.print(f"[green]> Generated {count} missing thumbnails for {path.name}[/green]")
+    console.print(f"[green]> Generated {count} missing or low-resolution thumbnails for {path.name}[/green]")
 

@@ -386,11 +386,33 @@ def model_version() -> str:
     return EMBEDDING_MODEL_VERSION
 
 
+def thumbnail_needs_redo(thumbnail: Optional[bytes]) -> bool:
+    """True for a missing thumbnail, or one smaller than this version stores.
+
+    Databases from older tools (scene-scout-dev) stored 160x90 thumbnails, which
+    look blurry stretched over a result tile; regenerating them is the upgrade.
+    An unreadable blob counts as missing.
+    """
+    if thumbnail is None:
+        return True
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(thumbnail)) as image:
+            return image.width < THUMBNAIL_WIDTH
+    except Exception:
+        return True
+
+
 def generate_missing_thumbnails(
     database: str | Path,
     *,
     on_progress: Optional[ProgressCallback] = None,
 ) -> int:
+    """Fill in missing thumbnails and redo low-resolution ones.
+
+    Returns how many thumbnails were written.
+    """
     from ..infra.ipc import log
 
     db_path = scoutdb.resolve_db_path(database)
@@ -398,46 +420,56 @@ def generate_missing_thumbnails(
         raise FileNotFoundError(f"Database does not exist: {db_path}")
 
     with scoutdb.connect(db_path) as conn:
-        video_rows = conn.execute(
+        # the blobs are small; reading them all is what lets old low-res ones be found
+        todo_by_video: dict[int, list[tuple[int, int, int]]] = {}
+        for scene_id, video_id, start_ms, end_ms, thumbnail in conn.execute(
             """
-            SELECT pv.id, pv.filepath, COUNT(se.id)
-            FROM processed_videos pv
-            JOIN scene_embeddings se ON pv.id = se.video_id
-            WHERE se.thumbnail IS NULL
-            GROUP BY pv.id
+            SELECT id, video_id, start_time_ms, end_time_ms, thumbnail
+            FROM scene_embeddings
+            ORDER BY video_id, scene_index
             """
-        ).fetchall()
+        ):
+            if thumbnail_needs_redo(thumbnail):
+                todo_by_video.setdefault(video_id, []).append((scene_id, start_ms, end_ms))
 
-        total_missing = sum(row[2] for row in video_rows)
+        total_missing = sum(len(rows) for rows in todo_by_video.values())
         if total_missing == 0:
             return 0
 
+        filepaths = dict(conn.execute("SELECT id, filepath FROM processed_videos"))
         updated_count = 0
+        # scenes dealt with so far, written or skipped, so the bar always reaches the end
+        handled = 0
+        log(
+            f"[diag] scene scout generate-thumbnails | {total_missing} thumbnails to make "
+            f"across {len(todo_by_video)} videos"
+        )
+        if on_progress:
+            on_progress("thumbnails", 0, total_missing)
 
-        for video_id, filepath, _ in video_rows:
-            v_path = Path(filepath)
-            if not v_path.is_file():
+        for video_id, scene_rows in todo_by_video.items():
+            filepath = filepaths.get(video_id)
+            v_path = Path(filepath) if filepath else None
+            if v_path is None or not v_path.is_file():
                 log(f"[diag] scene scout generate-thumbnails | skipping missing video file: {filepath}")
+                handled += len(scene_rows)
+                if on_progress:
+                    on_progress("thumbnails", handled, total_missing)
                 continue
 
-            scene_rows = conn.execute(
-                """
-                SELECT id, start_time_ms, end_time_ms
-                FROM scene_embeddings
-                WHERE video_id = ? AND thumbnail IS NULL
-                ORDER BY scene_index
-                """,
-                (video_id,),
-            ).fetchall()
+            log(f"[diag] scene scout generate-thumbnails | {v_path.name}: {len(scene_rows)} thumbnails")
 
-            if not scene_rows:
-                continue
+            # decoding is the slow part, so progress follows the frames as they come
+            def report_frames(done: int, _total: int, offset: int = handled) -> None:
+                if on_progress:
+                    on_progress("thumbnails", offset + done, total_missing)
 
             scenes = [(row[1], row[2]) for row in scene_rows]
             try:
-                frames = sample_frames(v_path, scenes)
+                frames = sample_frames(v_path, scenes, on_progress=report_frames)
             except Exception as e:
                 log(f"[diag] scene scout generate-thumbnails | decode error on {v_path.name}: {e}")
+                handled += len(scene_rows)
                 continue
 
             batch_updates = []
@@ -452,7 +484,8 @@ def generate_missing_thumbnails(
             conn.commit()
 
             updated_count += len(batch_updates)
+            handled += len(scene_rows)
             if on_progress:
-                on_progress("thumbnails", updated_count, total_missing)
+                on_progress("thumbnails", handled, total_missing)
 
         return updated_count
