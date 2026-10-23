@@ -196,6 +196,8 @@ def run_daemon(
             batch_size = int(req.get("batch_size", 16))
             no_thumbnails = bool(req.get("no_thumbnails", False))
             motion = bool(req.get("motion", True))
+            # an episode the app already cut: its ranges, so detection is skipped
+            precut = indexing.precut_scenes(req.get("scenes")) or None
             add_device = req.get("device") or resolved_device
 
             path = db_path(database, root)
@@ -217,6 +219,7 @@ def run_daemon(
                     method=detector,
                     generate_thumbnails=not no_thumbnails,
                     motion=motion,
+                    scenes=precut,
                     on_progress=on_progress,
                 )
                 _reply({"id": req_id, "status": "ok", "done": True, "scenes": count, "video": video})

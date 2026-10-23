@@ -281,9 +281,18 @@ def add(
     ),
     no_thumbnails: bool = typer.Option(False, "--no-thumbnails", help="Skip thumbnail generation"),
     no_motion: bool = typer.Option(False, "--no-motion", help="Skip start/end motion tags"),
+    scenes_json: Optional[Path] = typer.Option(
+        None,
+        "--scenes-json",
+        help="JSON [[start_ms, end_ms], ...] to index instead of detecting scenes",
+        exists=True,
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit progress and result as JSON lines"),
 ) -> None:
     """Index a video into a database.
+
+    ``--scenes-json`` skips detection and indexes the given ranges, for an episode
+    the app has already imported and cut (its manifest's scene times).
 
     With ``--json`` this emits one JSON object per line: ``{"stage":...}``
     progress lines followed by a final ``{"done":true,...}``. The app reads it
@@ -324,9 +333,17 @@ def add(
         banner("scout add")
 
     started = time.perf_counter()
+    precut = indexing.load_precut_scenes(scenes_json) if scenes_json else None
+    if scenes_json and not precut:
+        message = f"no usable scene ranges in {scenes_json}"
+        if as_json:
+            print(json.dumps({"error": message}), flush=True)
+            raise typer.Exit(1)
+        fail(message)
+        raise typer.Exit(1)
     log(
         f"[diag] scene scout add | db={Path(database).name} video={Path(video).name} "
-        f"detector={detector} accurate={accurate}"
+        + (f"precut={len(precut)} scenes" if precut else f"detector={detector} accurate={accurate}")
     )
     try:
         count = indexing.index_video(
@@ -339,6 +356,7 @@ def add(
             method=detector,
             generate_thumbnails=not no_thumbnails,
             motion=not no_motion,
+            scenes=precut,
             on_progress=on_progress,
         )
     except (NotImplementedError, SceneScoutModelUnavailable) as exc:

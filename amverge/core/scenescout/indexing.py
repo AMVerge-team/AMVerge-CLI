@@ -226,6 +226,32 @@ def encode_thumbnail(frame) -> bytes:
     return buffer.getvalue()
 
 
+def precut_scenes(raw) -> list[tuple[int, int]]:
+    """Scene ranges handed in by the caller instead of detected, as ``(start_ms, end_ms)``.
+
+    The app passes these for an episode it has already imported and cut, read from
+    that episode's manifest, so the database's scenes match the clips exactly and
+    detection is skipped. Accepts ``[[start_ms, end_ms], ...]``; ranges that are
+    not numbers or are empty are dropped, and the rest are sorted by start.
+    """
+    scenes: list[tuple[int, int]] = []
+    for item in raw or []:
+        try:
+            start_ms, end_ms = int(item[0]), int(item[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if start_ms >= 0 and end_ms > start_ms:
+            scenes.append((start_ms, end_ms))
+    return sorted(scenes)
+
+
+def load_precut_scenes(path: str | Path) -> list[tuple[int, int]]:
+    """:func:`precut_scenes` from a JSON file (``scout add --scenes-json``)."""
+    import json
+
+    return precut_scenes(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
 def index_video(
     database: str | Path,
     video: str | Path,
@@ -237,6 +263,7 @@ def index_video(
     method: str = DETECTOR_KEYFRAME,
     generate_thumbnails: bool = True,
     motion: bool = True,
+    scenes: Optional[list[tuple[int, int]]] = None,
     on_progress: Optional[ProgressCallback] = None,
 ) -> int:
     """Index one video into a database. Returns the number of scenes written.
@@ -244,6 +271,9 @@ def index_video(
     The video row is written with ``status='indexing'`` up front and only flipped
     to ``completed`` at the end, so a run interrupted halfway leaves a row that
     is visibly incomplete rather than one that looks finished but has no scenes.
+
+    ``scenes`` (from :func:`precut_scenes`) skips detection and indexes exactly
+    those ranges, for an episode the app already cut; ``method`` is then unused.
 
     ``motion`` also measures each scene's start/end movement during the same
     decode (see :mod:`motion`). Skipped with a log line when OpenCV is missing,
@@ -260,14 +290,16 @@ def index_video(
         if on_progress:
             on_progress(stage, done, total)
 
-    report("detecting", 0, 1)
-    log(f"[diag] scene scout {video_path.name} | detecting scenes using {method}...")
-    scenes = detect_scenes(video_path, method=method, accurate=accurate)
-    if not scenes:
-        log(f"[diag] scene scout {video_path.name} | no scenes detected")
-        return 0
-
-    log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes")
+    if scenes:
+        log(f"[diag] scene scout {video_path.name} | using {len(scenes)} pre-cut scenes, detection skipped")
+    else:
+        report("detecting", 0, 1)
+        log(f"[diag] scene scout {video_path.name} | detecting scenes using {method}...")
+        scenes = detect_scenes(video_path, method=method, accurate=accurate)
+        if not scenes:
+            log(f"[diag] scene scout {video_path.name} | no scenes detected")
+            return 0
+        log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes")
     collector = _motion_collector(scenes, video_path.name) if motion else None
     report("sampling", 0, len(scenes))
     frames = sample_frames(
