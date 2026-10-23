@@ -56,21 +56,23 @@ def probe_video_dimensions(input_video: str | Path) -> tuple[int, int]:
 
     Returns:
         ``(width, height)`` tuple in pixels.
+
+    Read as json by name: csv output appends an empty field per side-data block
+    (a Dolby Vision stream prints ``3840x2160x``), which broke positional parsing.
     """
     cmd = [
         get_ffprobe(),
         "-v", "error",
         "-select_streams", "v:0",
         "-show_entries", "stream=width,height",
-        "-of", "csv=s=x:p=0",
+        "-of", "json",
         str(input_video),
     ]
     result = subprocess.run(
         cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
     )
-    raw = result.stdout.strip().splitlines()[0].strip()
-    width, height = map(int, raw.split("x"))
-    return width, height
+    stream = json.loads(result.stdout)["streams"][0]
+    return int(stream["width"]), int(stream["height"])
 
 
 def probe_video_duration(input_video: str | Path) -> float:
