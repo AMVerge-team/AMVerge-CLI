@@ -8,6 +8,9 @@ from ...ui import banner, console
 
 _CLI_ENTRIES = [
     ("v0.9.5"), [
+        "Fixed WEBP imports"
+    ],
+    ("v0.9.5"), [
         "Fixed GPU decoding"
     ],
     ("v0.8.3"), [
