@@ -42,10 +42,6 @@ except ImportError:
 
 DEFAULT_THRESHOLD = 0.5
 
-# 8-bit 4:2:0 only. Nelux's NVDEC path decodes anything deeper into frames that
-# are the right shape and the wrong pixels, which detection cannot notice
-NVDEC_SAFE_PIX_FMTS = {"yuv420p", "yuvj420p", "nv12"}
-
 
 def _safe_total(total_frames: int) -> int:
     return max(1, int(total_frames) if total_frames else 1)
@@ -61,9 +57,11 @@ def _emit_loop_progress(
 ) -> int:
     fraction = min(1.0, max(0.0, processed / _safe_total(total)))
     current = int(base + fraction * span)
-    if current > last:
-        emit_progress(current, f"{prefix} ({processed}/{_safe_total(total)} frames)")
-        return current
+    # long episodes move a whole percent only every few thousand frames, so the
+    # frame count is refreshed on its own or the bar looks stalled between steps
+    if current > last or processed % 500 == 0:
+        emit_progress(max(current, last), f"{prefix} ({processed}/{_safe_total(total)} frames)")
+        return max(current, last)
     return last
 
 
@@ -343,19 +341,6 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
 
     import torch
 
-    # NVDEC through Nelux returns frames of the right shape but the wrong pixels
-    # for anything deeper than 8-bit, so detection degrades silently instead of
-    # failing. Measured on one 10-bit HEVC source: 23x the inter-frame noise of
-    # the FFmpeg path, and a fraction of the real cuts. 8-bit H.264 and 8-bit
-    # HEVC both match FFmpeg closely, so the gate is bit depth, not codec.
-    from ..preview.proxy import probe_video
-
-    pix_fmt = (probe_video(input_video).get("pix_fmt") or "").lower()
-    if pix_fmt and pix_fmt not in NVDEC_SAFE_PIX_FMTS:
-        raise RuntimeError(
-            f"Unreliable for {pix_fmt}"
-        )
-
     VideoReader = _get_nelux_video_reader()
     # labelled separately because Nelux silently drops to CPU without CUDA
     decode_accelerator = "nvdec" if torch.cuda.is_available() else "cpu"
@@ -383,9 +368,16 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
             break
 
         if isinstance(frame, torch.Tensor):
-            frame_np = frame.detach().to("cpu").numpy().astype(np.uint8, copy=False)
+            frame_np = frame.detach().to("cpu").numpy()
         else:
-            frame_np = np.asarray(frame, dtype=np.uint8)
+            frame_np = np.asarray(frame)
+
+        # sources deeper than 8-bit come back as full-range uint16 (0-65535). a
+        # plain uint8 cast keeps only the low byte, which turned 10-bit decodes
+        # into noise; the high byte is the 8-bit value FFmpeg would give
+        if frame_np.dtype == np.uint16:
+            frame_np = frame_np >> 8
+        frame_np = frame_np.astype(np.uint8, copy=False)
 
         if frame_np.ndim != 3:
             raise ValueError(f"Unexpected frame rank from nelux: {frame_np.ndim}")
