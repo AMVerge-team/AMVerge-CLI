@@ -149,6 +149,9 @@ def measure_boundary(frames: list[np.ndarray], times: list[float]) -> Optional[R
 
 _PLANAR_YUV = re.compile(r"^yuv(j?)4[024]{2}p(?:(\d+)(le|be))?$")
 
+# what gpu decoders hand back: luma first like planar yuv, 16-bit ones with the bits at the top
+_SEMI_PLANAR_SHIFT = {"nv12": 0, "p010le": 8, "p016le": 8}
+
 
 def frame_to_grey(frame, width: int, height: int) -> np.ndarray:
     """A decoded PyAV frame as a small 8-bit greyscale image.
@@ -161,18 +164,24 @@ def frame_to_grey(frame, width: int, height: int) -> np.ndarray:
     Anything else falls back to PyAV's converter.
     """
     cv2 = _cv2()
-    match = _PLANAR_YUV.match(frame.format.name)
-    if not match or match.group(3) == "be":
+    name = frame.format.name
+    match = _PLANAR_YUV.match(name)
+    if name in _SEMI_PLANAR_SHIFT:
+        # limited range, as the planar path assumes for any non-yuvj format, so both decodes read alike
+        full_range, wide_bits, shift = False, name != "nv12", _SEMI_PLANAR_SHIFT[name]
+    elif match and match.group(3) != "be":
+        full_range, bits = match.group(1) == "j", int(match.group(2) or 8)
+        wide_bits, shift = bits > 8, bits - 8
+    else:
         return frame.reformat(width=width, height=height, format="gray").to_ndarray()
 
-    full_range, bits = match.group(1) == "j", int(match.group(2) or 8)
     plane = frame.planes[0]
-    if bits == 8:
+    if not wide_bits:
         luma = np.frombuffer(plane, dtype=np.uint8).reshape(frame.height, plane.line_size)[:, : frame.width]
     else:
         stride = plane.line_size // 2
         wide = np.frombuffer(plane, dtype=np.uint16).reshape(frame.height, stride)[:, : frame.width]
-        luma = (wide >> (bits - 8)).astype(np.uint8)
+        luma = (wide >> shift).astype(np.uint8)
     small = cv2.resize(luma, (width, height), interpolation=cv2.INTER_AREA)
     if full_range:
         return small
@@ -319,7 +328,8 @@ class BoundaryCollector:
         """Store a decoded PyAV frame (only called when :meth:`wants` said yes)."""
         if self._size is None:
             self._size = _analysis_size(frame)
-        grey = frame_to_grey(frame, *self._size)
+        # converted on the pool (~5 ms a frame the decode used to wait on), queued ahead of its scene's measurement
+        grey = self._pool.submit(frame_to_grey, frame, *self._size)
         start, end = self.scenes[self._index]
         if t_ms < start + BOUNDARY_MS:
             self._starts.setdefault(self._index, []).append((grey, t_ms / 1000.0))
@@ -336,7 +346,7 @@ class BoundaryCollector:
 
     def _submit(self, index: int) -> None:
         starts, ends = self._starts.pop(index, []), self._ends.pop(index, [])
-        submit = lambda items: self._pool.submit(measure_boundary, [f for f, _ in items], [t for _, t in items])
+        submit = lambda items: self._pool.submit(_measure_converted, items)
         self._pending.append((index, submit(starts), submit(ends)))
         # backpressure: the decode never runs far ahead of the measurement
         while len(self._pending) > self._max_pending:
@@ -363,6 +373,11 @@ class BoundaryCollector:
         return self.results
 
 
+def _measure_converted(items: list[tuple[Future, float]]) -> Optional[Raw]:
+    """:func:`measure_boundary` over frames still being converted to grey on the pool."""
+    return measure_boundary([grey.result() for grey, _ in items], [t for _, t in items])
+
+
 def _safe(future: Future) -> Optional[Raw]:
     try:
         return future.result()
@@ -376,10 +391,10 @@ def collect_scene_motion(
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> dict[int, tuple[Optional[Raw], Optional[Raw]]]:
     """Decodes ``video`` once and measures every scene's boundaries (used by backfill)."""
-    import av
+    from .decode import open_video
 
     collector = BoundaryCollector(scenes)
-    container = av.open(str(video), options={"err_detect": "ignore_err"})
+    container = open_video(video)
     stream = container.streams.video[0]
     stream.thread_type = "AUTO"
     step = max(1, len(scenes) // 100)

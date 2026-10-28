@@ -51,7 +51,7 @@ def backend(
         use_cuda = False
         detector_tag = "keyframe"
         detector_name = "detect_scenes_by_keyframe"
-        log("[diag] scene backend via AMVerge CLI | method=keyframe_detection (torch not loaded)")
+        log("[diag] scene backend via AMVerge CLI | method=keyframe_detection")
     else:
         try:
             import torch

@@ -46,6 +46,8 @@ write correct rows and to report progress.
 from __future__ import annotations
 
 import io
+import queue
+import threading
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -108,11 +110,26 @@ def detect_scenes(
     return [(int(s * 1000), int(e * 1000)) for s, e in keyframe_scenes]
 
 
+def _sample_size(width: int, height: int, max_patches: int) -> tuple[int, int]:
+    """The size a sampled frame is shrunk to: never bigger than the source.
+
+    SigLIP 2 resizes every frame onto a grid of at most ``max_patches`` 16 px
+    patches, so a full-resolution frame only costs CPU time and memory. Four times
+    the grid's pixels keeps the resize quality, and a thumbnail is never narrower
+    than :data:`THUMBNAIL_WIDTH`.
+    """
+    target_area = max_patches * 16 * 16 * 4
+    scale = min(1.0, max((target_area / (width * height)) ** 0.5, THUMBNAIL_WIDTH / width))
+    return max(1, round(width * scale)), max(1, round(height * scale))
+
+
 def sample_frames(
     video: str | Path,
     scenes: list[tuple[int, int]],
     on_progress: Optional[Callable[[int, int], None]] = None,
     boundary=None,
+    max_patches: Optional[int] = None,
+    on_frame: Optional[Callable] = None,
 ) -> list:
     """One representative frame per scene.
 
@@ -136,6 +153,12 @@ def sample_frames(
 
     ``boundary`` is an optional :class:`motion.BoundaryCollector`. It sees every
     decoded frame, so motion tags ride on this decode instead of needing another.
+
+    ``max_patches`` shrinks each frame to what that SigLIP patch budget can use
+    (see :func:`_sample_size`) during the RGB conversion; ``None`` keeps full size.
+
+    ``on_frame(frame)`` sees each frame the moment it is sampled, in output order,
+    so embedding can start while the decode is still running.
     """
     import av
 
@@ -154,11 +177,26 @@ def sample_frames(
 
     midpoints_ms = [(start_ms + end_ms) // 2 for start_ms, end_ms in scenes]
 
-    container = av.open(str(video), options={"err_detect": "ignore_err"})
+    from .decode import open_video
+
+    container = open_video(video)
     stream = container.streams.video[0]
     stream.thread_type = "AUTO"
 
+    def to_rgb(frame):
+        if max_patches is None:
+            return frame.to_ndarray(format="rgb24")
+        # scaled in the same swscale pass as the rgb conversion, so the full-size frame is never built
+        width, height = _sample_size(frame.width, frame.height, max_patches)
+        return frame.reformat(width=width, height=height, format="rgb24", interpolation="AREA").to_ndarray()
+
     out: list = []
+
+    def keep(nd) -> None:
+        out.append(nd)
+        if on_frame is not None:
+            on_frame(nd)
+
     next_midpoint = 0
     # kept raw: converting is the expensive part, and only the end-of-video padding needs it
     last_raw = None
@@ -185,13 +223,13 @@ def sample_frames(
             if current_ms < midpoints_ms[next_midpoint]:
                 continue
             try:
-                nd = frame.to_ndarray(format="rgb24")
+                nd = to_rgb(frame)
             except (av.FFmpegError, ValueError):
                 # an unconvertible frame leaves the midpoint pending for the next one
                 continue
 
             while next_midpoint < len(midpoints_ms) and current_ms >= midpoints_ms[next_midpoint]:
-                out.append(nd)
+                keep(nd)
                 next_midpoint += 1
             report(next_midpoint)
 
@@ -202,11 +240,12 @@ def sample_frames(
 
     if len(out) < len(scenes) and last_raw is not None:
         try:
-            last_frame = last_raw.to_ndarray(format="rgb24")
+            last_frame = to_rgb(last_raw)
         except (av.FFmpegError, ValueError):
             last_frame = None
         if last_frame is not None:
-            out.extend([last_frame] * (len(scenes) - len(out)))
+            for _ in range(len(scenes) - len(out)):
+                keep(last_frame)
     report(len(out))
 
     return out
@@ -280,7 +319,7 @@ def index_video(
     so indexing never fails over the optional part.
     """
     from ..infra.ipc import log
-    from .embedding import embed_frames, is_model_loaded, pack_embedding
+    from .embedding import is_model_loaded, pack_embedding
 
     video_path = Path(video).resolve()
     if not video_path.is_file():
@@ -301,20 +340,28 @@ def index_video(
             return 0
         log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes")
     collector = _motion_collector(scenes, video_path.name) if motion else None
+    # embeds batches as they are sampled, so the gpu works while the decode runs
+    embedder = _BackgroundEmbedder(device=device, max_patches=max_patches, batch_size=batch_size)
     report("sampling", 0, len(scenes))
-    frames = sample_frames(
-        video_path,
-        scenes,
-        on_progress=lambda done, total: report("sampling", done, total),
-        boundary=collector,
-    )
+    try:
+        frames = sample_frames(
+            video_path,
+            scenes,
+            on_progress=lambda done, total: report("sampling", done, total),
+            boundary=collector,
+            max_patches=max_patches,
+            on_frame=embedder.add,
+        )
+    except BaseException:
+        embedder.abandon()
+        raise
     log(f"[diag] scene scout {video_path.name} | sampled {len(frames)} frames")
 
+    # announced only now: mid-decode it would take the sampling bar over
     if not is_model_loaded():
         report("loading_model", 0, 1)
         log(f"[diag] scene scout {video_path.name} | loading SigLIP 2 model weights...")
 
-    report("embedding", 0, len(frames))
     last_log_pct = -1
 
     def on_embed_progress(done: int, total: int) -> None:
@@ -326,13 +373,7 @@ def index_video(
                 last_log_pct = pct
                 log(f"[diag] scene scout {video_path.name} | embedding {done}/{total} ({pct}%)")
 
-    vectors = embed_frames(
-        frames,
-        device=device,
-        max_patches=max_patches,
-        batch_size=batch_size,
-        on_progress=on_embed_progress,
-    )
+    vectors = embedder.finish(len(frames), on_embed_progress)
 
     video_id = scoutdb.upsert_video(
         database, str(video_path), video_path.stat().st_mtime, status="indexing"
@@ -358,6 +399,72 @@ def index_video(
     log(f"[diag] scene scout {video_path.name} | indexed {len(rows)} scenes successfully")
 
     return len(rows)
+
+
+_END = object()
+
+
+class _BackgroundEmbedder:
+    """Embeds sampled frames on a worker thread, a batch at a time, while the decode runs.
+
+    The vectors are exactly what one :func:`embedding.embed_frames` call over the
+    whole list gives: same frames, same order, same batches. The model loads on
+    the worker too, so that wait overlaps the decode as well.
+    """
+
+    def __init__(self, *, device: Optional[str], max_patches: int, batch_size: int):
+        self._queue: queue.Queue = queue.Queue()
+        self._rows: list = []
+        self._done = 0
+        self._error: Optional[BaseException] = None
+        self._abandoned = False
+        self._thread = threading.Thread(target=self._run, args=(device, max_patches, batch_size), daemon=True)
+        self._thread.start()
+
+    def add(self, frame) -> None:
+        self._queue.put(frame)
+
+    def _run(self, device: Optional[str], max_patches: int, batch_size: int) -> None:
+        from .embedding import embed_frames
+
+        batch: list = []
+        try:
+            while True:
+                item = self._queue.get()
+                if self._abandoned:
+                    return
+                if item is not _END:
+                    batch.append(item)
+                if batch and (item is _END or len(batch) >= batch_size):
+                    self._rows.append(embed_frames(batch, device=device, max_patches=max_patches, batch_size=batch_size))
+                    self._done += len(batch)
+                    batch = []
+                if item is _END:
+                    return
+        except BaseException as exc:  # noqa: BLE001 - handed to the caller in finish()
+            self._error = exc
+
+    def finish(self, total: int, on_progress: Callable[[int, int], None]):
+        """Waits for the rest, reporting progress, and returns the ``(N, D)`` vectors."""
+        import numpy as np
+
+        self._queue.put(_END)
+        reported = -1
+        while self._thread.is_alive():
+            self._thread.join(timeout=0.2)
+            if self._done != reported:
+                reported = self._done
+                on_progress(reported, total)
+        if self._error is not None:
+            raise self._error
+        if reported != self._done:
+            on_progress(self._done, total)
+        return np.vstack(self._rows) if self._rows else np.empty((0, 0), dtype=np.float32)
+
+    def abandon(self) -> None:
+        """Stops the worker after a failed decode: frames still queued are dropped, not embedded."""
+        self._abandoned = True
+        self._queue.put(_END)
 
 
 def _motion_collector(scenes: list[tuple[int, int]], name: str):
@@ -498,7 +605,8 @@ def generate_missing_thumbnails(
 
             scenes = [(row[1], row[2]) for row in scene_rows]
             try:
-                frames = sample_frames(v_path, scenes, on_progress=report_frames)
+                # thumbnails only: the default patch budget already keeps every frame thumbnail-wide
+                frames = sample_frames(v_path, scenes, on_progress=report_frames, max_patches=256)
             except Exception as e:
                 log(f"[diag] scene scout generate-thumbnails | decode error on {v_path.name}: {e}")
                 handled += len(scene_rows)
