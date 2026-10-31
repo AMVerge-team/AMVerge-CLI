@@ -476,10 +476,13 @@ def _encode_segment(
     grid the cut is a frame selection (see
     :func:`~amverge.core.export.params.frame_cut_args`), immune to the float
     rounding of ``start``/``end``; off-grid (VFR) it falls back to plain
-    time-based seeking."""
+    time-based seeking, resampled to the average rate so a scene that falls in a
+    gap between frames (a frozen screen recording) still gets the held frame
+    instead of a clip with no video."""
     rate = probe_video_rate(input_file)
     origin = probe_seek_origin(input_file)
     frames = frame_grid_range(start, end, rate)
+    video_chain = "setpts=PTS-STARTPTS"
     if frames:
         cut = frame_cut_args(*frames, rate, origin)
         in_args = cut.input_args
@@ -490,6 +493,8 @@ def _encode_segment(
         in_args = ["-ss", f"{pre_seek + float(origin):.9f}"] if pre_seek > 0.0 else []
         out_args = ["-ss", f"{start - pre_seek:.9f}", "-t", f"{end - start:.9f}"]
         audio_chain = "asetpts=PTS-STARTPTS"
+        if rate:
+            video_chain += f",fps={rate.numerator}/{rate.denominator}"
     ten_bit = _is_10bit(input_file)
 
     def _build_cmd(gpu: bool) -> list[str]:
@@ -502,7 +507,7 @@ def _encode_segment(
         pix_fmt = "yuv420p10le" if (ten_bit and not gpu) else "yuv420p"
         c = [get_ffmpeg(), "-y", *in_args, "-i", str(input_file), *out_args]
         c += ["-map", "0:v:0", "-map", "0:a?", "-pix_fmt", pix_fmt]
-        c += ["-vf", "setpts=PTS-STARTPTS", "-af", audio_chain]
+        c += ["-vf", video_chain, "-af", audio_chain]
         c += enc
         c += ["-c:a", "aac", "-b:a", "128k", str(out_path)]
         return c

@@ -30,8 +30,13 @@ def detect_cuts_by_keyframe(
         progress_cb: Optional ``(percent, message)`` callback.
 
     Returns:
-        Sorted list of cut-point timestamps, not including 0.0.
+        Sorted list of cut-point timestamps, not including 0.0, counted from
+        the first video frame. Sources whose timestamps start late (MPEG-TS)
+        are shifted back; a zero or negative start (MKV audio priming) is left
+        as is, since everything downstream already expects those.
     """
+    from ..video.probe_utils import probe_video_start
+
     keyframes = generate_keyframes(
         video_path,
         progress_cb=progress_cb,
@@ -43,7 +48,8 @@ def detect_cuts_by_keyframe(
     if not keyframes:
         return []
 
-    cut_points = sorted(keyframes[1:])
+    offset = max(0.0, probe_video_start(video_path))
+    cut_points = sorted(k - offset for k in keyframes[1:])
     cut_points = merge_short_scenes([0.0] + cut_points, min_duration=min_duration)[1:]
 
     return cut_points

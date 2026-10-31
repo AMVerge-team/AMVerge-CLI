@@ -21,7 +21,7 @@ import numpy as np
 
 from ..infra.ipc import emit_progress, log
 from .nelux_runtime import _get_nelux_video_reader
-from ..video.probe_utils import probe_video_fps, probe_video_duration, probe_video_total_frames
+from ..video.probe_utils import probe_video_codec, probe_video_fps, probe_video_duration, probe_video_total_frames
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 from ..video.scene_utils import transnet_scenes_to_seconds
@@ -41,6 +41,8 @@ except ImportError:
     TRANSNET_AVAILABLE = False
 
 DEFAULT_THRESHOLD = 0.5
+
+NVDEC_CODECS = frozenset({"h264", "hevc", "av1", "vp9"})
 
 
 def _safe_total(total_frames: int) -> int:
@@ -332,7 +334,10 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
             PyTorch version it will not load with.
         RuntimeError: If NVDEC cannot decode this particular file. 10-bit H.264
             is the common case, and the hardware simply does not support it, so
-            callers should fall back to :func:`decode_video_frames_ffmpeg`.
+            callers should fall back to :func:`decode_video_frames_ffmpeg`. Codecs
+            outside :data:`NVDEC_CODECS` raise up front: NVDEC hands back frames for
+            MPEG-4 Part 2 (XviD) and MPEG-2 that are unusable, so TransNetV2 sees a
+            single scene.
 
     Example:
         >>> frames = decode_video_frames_nelux("episode.mp4")
@@ -340,6 +345,10 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
     """
 
     import torch
+
+    codec = probe_video_codec(input_video)
+    if codec not in NVDEC_CODECS:
+        raise RuntimeError(f"NVDEC does not decode {codec or 'this video'} reliably")
 
     VideoReader = _get_nelux_video_reader()
     # labelled separately because Nelux silently drops to CPU without CUDA

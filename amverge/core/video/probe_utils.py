@@ -51,6 +51,17 @@ def probe_video_fps(input_video: str | Path) -> float:
     return float(raw)
 
 
+def probe_video_codec(input_video: str | Path) -> str | None:
+    """Codec name of the first video stream (``"h264"``, ``"mpeg4"``...), or None
+    when the file has no readable video stream."""
+    try:
+        with av.open(str(input_video)) as container:
+            stream = next(iter(container.streams.video), None)
+            return stream.codec_context.name if stream else None
+    except Exception:
+        return None
+
+
 def probe_video_dimensions(input_video: str | Path) -> tuple[int, int]:
     """Get the width and height of the first video stream.
 
@@ -136,6 +147,27 @@ def probe_seek_origin(input_video: str | Path) -> Fraction:
     except Exception:
         return Fraction(0)
     return video - first
+
+
+@lru_cache(maxsize=64)
+def probe_video_start(input_video: str | Path) -> float:
+    """Raw timestamp of the first video frame, in seconds, or 0.0 when unknown.
+
+    Cut times count from the video's start, but PyAV packet timestamps are
+    raw: an MPEG-TS stream starts around 1.4 s, so its keyframes need this
+    subtracted before they line up with ffmpeg's clock and the app's.
+    """
+    cmd = [
+        get_ffprobe(), "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=start_time", "-of", "default=nk=1:nw=1", str(input_video),
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
+        )
+        return float(result.stdout.strip().splitlines()[0])
+    except Exception:
+        return 0.0
 
 
 @lru_cache(maxsize=64)
