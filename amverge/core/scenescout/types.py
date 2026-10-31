@@ -11,9 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-# Bumped whenever the embedding model or its preprocessing changes. Rows carry
-# it so a database built by an older version can be detected and re-indexed
-# rather than silently compared against embeddings from a different space.
+# bump when the model or preprocessing changes, so older databases are re-indexed, not compared across spaces
 EMBEDDING_MODEL_VERSION = "google/siglip2-so400m-patch16-naflex"
 
 
@@ -27,12 +25,9 @@ class SceneHit:
     end_ms: int
     score: float
     database: str
-    # base64 JPEG, only populated when the caller asks for thumbnails; a search
-    # over a large database returns hundreds of rows and the images dwarf
-    # everything else in the payload
+    # base64 jpeg, only when thumbnails are asked for
     thumbnail_b64: Optional[str] = None
-    # {"start": tags, "end": tags} (see motion.tags_for); None when the scene was
-    # indexed without motion
+    # {"start": tags, "end": tags}; None when indexed without motion
     motion: Optional[dict[str, Any]] = None
 
     def to_json(self) -> dict[str, Any]:
@@ -104,8 +99,7 @@ class SearchOptions:
     """
 
     top_k: int = 24
-    # -1 disables the cut entirely, which is what "show everything" means in the
-    # app's settings dropdown
+    # -1 disables the cut ("show everything" in the app)
     similarity_threshold: float = -1.0
     include_thumbnails: bool = True
     max_patches: int = 256
@@ -117,8 +111,7 @@ class SearchOptions:
     start_subjects: list[str] = field(default_factory=list)
     # whether a scene with no readable motion survives the start_subjects filter
     include_unclear: bool = False
-    # (video path, start_ms, end_ms) to leave out: the clip a flow search
-    # continues, when it is itself an indexed scene, would match itself first
+    # (video path, start_ms, end_ms) left out so a flow clip that is itself indexed can't match itself
     exclude_range: Optional[tuple[str, int, int]] = None
 
     def to_json(self) -> dict[str, Any]:

@@ -28,9 +28,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-# bumped when the measurement itself changes; rows from an older version are
-# re-measured by `scout motion` instead of being compared against new ones
-# back at 2: the v2 measurement is restored, so v3 rows read as stale and are re-measured
+# bumped when the measurement changes so older rows are re-measured (back at 2: v3 rows read as stale)
 MOTION_VERSION = 2
 
 # mean grey-level difference below which a frame is a held drawing, not a new one
@@ -65,9 +63,6 @@ def _cv2():
     return cv2
 
 
-# ---------------------------------------------------------------------------
-# measurement
-# ---------------------------------------------------------------------------
 
 
 def measure_boundary(frames: list[np.ndarray], times: list[float]) -> Optional[Raw]:
@@ -109,8 +104,7 @@ def measure_boundary(frames: list[np.ndarray], times: list[float]) -> Optional[R
         if matrix is None:
             break
         pairs += 1
-        # pan is how far the frame centre moves: the matrix's own translation is about
-        # the top-left corner, so a centred zoom would otherwise read as a pan
+        # pan is the frame centre's motion; the matrix translation is about the corner, so a zoom would read as a pan
         cx, cy = width / 2, height / 2
         moved_x = matrix[0, 0] * cx + matrix[0, 1] * cy + matrix[0, 2] - cx
         moved_y = matrix[1, 0] * cx + matrix[1, 1] * cy + matrix[1, 2] - cy
@@ -227,9 +221,6 @@ def _r(value: float) -> float:
     return round(float(value), 4)
 
 
-# ---------------------------------------------------------------------------
-# tags
-# ---------------------------------------------------------------------------
 
 
 def direction8(vx: float, vy: float) -> str:
@@ -290,9 +281,6 @@ def scene_tags(start: Optional[Raw], end: Optional[Raw]) -> dict[str, Any]:
     return {"start": tags_for(start), "end": tags_for(end)}
 
 
-# ---------------------------------------------------------------------------
-# collecting boundary frames during a decode that already happens
-# ---------------------------------------------------------------------------
 
 
 class BoundaryCollector:
@@ -417,9 +405,6 @@ def collect_scene_motion(
     return collector.finish()
 
 
-# ---------------------------------------------------------------------------
-# a single query clip
-# ---------------------------------------------------------------------------
 
 
 def measure_clip(path: str, start_ms: Optional[int] = None, end_ms: Optional[int] = None) -> dict[str, Any]:

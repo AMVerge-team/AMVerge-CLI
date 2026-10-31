@@ -58,9 +58,7 @@ CREATE TABLE IF NOT EXISTS index_queue (
 );
 """
 
-# AMVerge-only: upstream scene-scout ignores unknown tables, so adding this keeps
-# databases opening in both tools. user_version stays 3 for the same reason.
-# raw numbers per boundary, not tags: tags are derived on read (motion.tags_for)
+# AMVerge-only table upstream scene-scout ignores (user_version stays 3); raw numbers, tags derived on read
 MOTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS scene_motion (
     scene_id INTEGER PRIMARY KEY,
@@ -345,9 +343,6 @@ def find_video(path: str | Path, filepath: str) -> Optional[IndexedVideo]:
     return IndexedVideo(id=row[0], filepath=row[1], status=row[2], modified_at=row[3], scene_count=row[4])
 
 
-# --------------------------------------------------------------------------
-# Write path, used by indexing.py
-# --------------------------------------------------------------------------
 
 def upsert_video(path: str | Path, filepath: str, modified_at: float, status: str = "indexing") -> int:
     """Insert or reset a video row and return its id.

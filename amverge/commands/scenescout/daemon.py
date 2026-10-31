@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from ...core.infra.ipc import log
 from ...core.scenescout import embedding
@@ -13,6 +13,82 @@ from ...core.scenescout import indexing
 from ...core.scenescout import search as scoutsearch
 from ...core.scenescout.paths import db_path, list_db_paths
 from ...core.scenescout.types import SearchOptions
+
+
+def _reply(data: dict) -> None:
+    sys.stdout.write(json.dumps(data, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def _as_list(value) -> list:
+    if not value:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
+def _search(req: dict, root: Optional[Path], device: str) -> dict:
+    raw_dbs = _as_list(req.get("databases") or req.get("database"))
+    targets = [str(db_path(name, root)) for name in raw_dbs] if raw_dbs else [str(p) for p in list_db_paths(root)]
+    if not targets:
+        return {"status": "error", "error": "No databases found"}
+
+    options = SearchOptions(
+        top_k=int(req.get("top_k", 24)),
+        similarity_threshold=float(req.get("threshold", -1.0)),
+        include_thumbnails=bool(req.get("include_thumbnails", True)),
+        max_patches=int(req.get("max_patches", 256)),
+        device=req.get("device") or device,
+        databases=targets,
+        video_paths=_as_list(req.get("videos") or req.get("video")),
+        start_subjects=list(req.get("start_subjects") or []),
+        include_unclear=bool(req.get("include_unclear", False)),
+    )
+
+    if not embedding.is_model_loaded():
+        _reply({"id": req.get("id"), "status": "progress", "stage": "loading_model", "done": 0, "total": 1})
+
+    query = req.get("query")
+    image = req.get("image")
+    flow = req.get("flow_from")
+    started = time.perf_counter()
+    reply: dict = {"status": "ok"}
+    if flow:
+        hits, reply["flow"] = scoutsearch.search_flow(
+            str(flow["path"]),
+            options,
+            text=query or None,
+            start_ms=flow.get("start_ms"),
+            end_ms=flow.get("end_ms"),
+        )
+    elif image:
+        hits = scoutsearch.search_image(str(image), options)
+    else:
+        hits = scoutsearch.search_text(query or "", options)
+    log(f"[diag] daemon search: {len(hits)} results in {time.perf_counter() - started:.3f}s")
+    reply["results"] = [h.to_json() for h in hits]
+    return reply
+
+
+def _add(req: dict, root: Optional[Path], device: str, on_progress: Callable[[str, int, int], None]) -> dict:
+    video = req.get("video")
+    path = db_path(req.get("database"), root)
+    if not path.is_file():
+        return {"status": "error", "error": f"Database not found at {path}"}
+
+    count = indexing.index_video(
+        path,
+        video,
+        device=req.get("device") or device,
+        max_patches=int(req.get("max_patches", 256)),
+        batch_size=int(req.get("batch_size", 16)),
+        accurate=bool(req.get("accurate", False)),
+        method=req.get("detector", "keyframe_detection"),
+        generate_thumbnails=not bool(req.get("no_thumbnails", False)),
+        motion=bool(req.get("motion", True)),
+        scenes=indexing.precut_scenes(req.get("scenes")) or None,
+        on_progress=on_progress,
+    )
+    return {"status": "ok", "done": True, "scenes": count, "video": video}
 
 
 def run_daemon(
@@ -25,8 +101,6 @@ def run_daemon(
 
     last_active = time.time()
     in_standby = False
-    # a request is running; indexing outlasts idle_seconds, and moving the model to cpu
-    # mid-request leaves its inputs on cuda and crashes the forward pass
     busy = False
     lock = threading.Lock()
     stop_event = threading.Event()
@@ -43,15 +117,9 @@ def run_daemon(
                         embedding.standby_model()
                         in_standby = True
 
-    idle_thread = threading.Thread(target=_idle_checker, daemon=True)
-    idle_thread.start()
-
-    def _reply(data: dict) -> None:
-        sys.stdout.write(json.dumps(data, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
+    threading.Thread(target=_idle_checker, daemon=True).start()
 
     while True:
-        # back here means the previous request finished, so idle time counts from now
         with lock:
             busy = False
             last_active = time.time()
@@ -59,7 +127,6 @@ def run_daemon(
         line = sys.stdin.readline()
         if not line:
             break
-
         line = line.strip()
         if not line:
             continue
@@ -80,154 +147,53 @@ def run_daemon(
                 embedding.activate_model()
                 in_standby = False
 
-        if action == "ping":
-            _reply({"id": req_id, "status": "ok", "action": "pong"})
-            continue
-
-        if action == "standby":
-            with lock:
-                embedding.standby_model()
-                in_standby = True
-            _reply({"id": req_id, "status": "ok", "state": "standby"})
-            continue
-
-        if action == "activate":
-            with lock:
-                embedding.activate_model()
-                in_standby = False
-            _reply({"id": req_id, "status": "ok", "state": "active"})
-            continue
-
-        if action == "unload":
-            with lock:
-                embedding.unload_model()
-                in_standby = False
-            _reply({"id": req_id, "status": "ok", "state": "unloaded"})
-            continue
-
-        if action == "status":
-            _reply(
-                {
-                    "id": req_id,
-                    "status": "ok",
-                    "loaded": embedding.is_model_loaded(),
-                    "standby": in_standby,
-                    "device": resolved_device,
-                }
-            )
-            continue
-
         if action == "shutdown":
             _reply({"id": req_id, "status": "ok", "state": "shutdown"})
             stop_event.set()
             break
 
-        if action == "search":
-            query = req.get("query")
-            image = req.get("image")
-            raw_dbs = req.get("databases") or req.get("database") or []
-            if isinstance(raw_dbs, str):
-                raw_dbs = [raw_dbs]
-            raw_videos = req.get("videos") or req.get("video") or []
-            if isinstance(raw_videos, str):
-                raw_videos = [raw_videos]
-
-            top_k = int(req.get("top_k", 24))
-            threshold = float(req.get("threshold", -1.0))
-            include_thumbnails = bool(req.get("include_thumbnails", True))
-            max_patches = int(req.get("max_patches", 256))
-            search_device = req.get("device") or resolved_device
-
-            targets = (
-                [str(db_path(name, root)) for name in raw_dbs]
-                if raw_dbs
-                else [str(p) for p in list_db_paths(root)]
-            )
-
-            if not targets:
-                _reply({"id": req_id, "status": "error", "error": "No databases found"})
-                continue
-
-            options = SearchOptions(
-                top_k=top_k,
-                similarity_threshold=threshold,
-                include_thumbnails=include_thumbnails,
-                max_patches=max_patches,
-                device=search_device,
-                databases=targets,
-                video_paths=raw_videos,
-                start_subjects=list(req.get("start_subjects") or []),
-                include_unclear=bool(req.get("include_unclear", False)),
-            )
-            # {"path", "start_ms"?, "end_ms"?}: continue this clip's ending motion
-            flow = req.get("flow_from")
-
-            if not embedding.is_model_loaded():
-                _reply({"id": req_id, "status": "progress", "stage": "loading_model", "done": 0, "total": 1})
-
-            try:
-                started = time.perf_counter()
-                reply: dict = {"id": req_id, "status": "ok"}
-                if flow:
-                    hits, reply["flow"] = scoutsearch.search_flow(
-                        str(flow["path"]),
-                        options,
-                        text=query or None,
-                        start_ms=flow.get("start_ms"),
-                        end_ms=flow.get("end_ms"),
-                    )
-                elif image:
-                    hits = scoutsearch.search_image(str(image), options)
-                else:
-                    hits = scoutsearch.search_text(query or "", options)
-                log(f"[diag] daemon search: {len(hits)} results in {time.perf_counter() - started:.3f}s")
-                reply["results"] = [h.to_json() for h in hits]
-                _reply(reply)
-            except Exception as exc:
-                _reply({"id": req_id, "status": "error", "error": str(exc)})
-            continue
-
-        if action == "add":
-            video = req.get("video")
-            database = req.get("database")
-            detector = req.get("detector", "keyframe_detection")
-            accurate = bool(req.get("accurate", False))
-            max_patches = int(req.get("max_patches", 256))
-            batch_size = int(req.get("batch_size", 16))
-            no_thumbnails = bool(req.get("no_thumbnails", False))
-            motion = bool(req.get("motion", True))
-            # an episode the app already cut: its ranges, so detection is skipped
-            precut = indexing.precut_scenes(req.get("scenes")) or None
-            add_device = req.get("device") or resolved_device
-
-            path = db_path(database, root)
-            if not path.is_file():
-                _reply({"id": req_id, "status": "error", "error": f"Database not found at {path}"})
-                continue
-
-            def on_progress(stage: str, done: int, total: int) -> None:
-                _reply({"id": req_id, "status": "progress", "stage": stage, "done": done, "total": total})
-
-            try:
-                count = indexing.index_video(
-                    path,
-                    video,
-                    device=add_device,
-                    max_patches=max_patches,
-                    batch_size=batch_size,
-                    accurate=accurate,
-                    method=detector,
-                    generate_thumbnails=not no_thumbnails,
-                    motion=motion,
-                    scenes=precut,
-                    on_progress=on_progress,
+        try:
+            if action == "ping":
+                reply = {"status": "ok", "action": "pong"}
+            elif action == "standby":
+                with lock:
+                    embedding.standby_model()
+                    in_standby = True
+                reply = {"status": "ok", "state": "standby"}
+            elif action == "activate":
+                with lock:
+                    embedding.activate_model()
+                    in_standby = False
+                reply = {"status": "ok", "state": "active"}
+            elif action == "unload":
+                with lock:
+                    embedding.unload_model()
+                    in_standby = False
+                reply = {"status": "ok", "state": "unloaded"}
+            elif action == "status":
+                reply = {
+                    "status": "ok",
+                    "loaded": embedding.is_model_loaded(),
+                    "standby": in_standby,
+                    "device": resolved_device,
+                }
+            elif action == "search":
+                reply = _search(req, root, resolved_device)
+            elif action == "add":
+                reply = _add(
+                    req,
+                    root,
+                    resolved_device,
+                    lambda stage, done, total: _reply(
+                        {"id": req_id, "status": "progress", "stage": stage, "done": done, "total": total}
+                    ),
                 )
-                _reply({"id": req_id, "status": "ok", "done": True, "scenes": count, "video": video})
-            except Exception as exc:
-                _reply({"id": req_id, "status": "error", "error": str(exc)})
-            continue
+            else:
+                reply = {"status": "error", "error": f"Unknown action: {action}"}
+        except Exception as exc:
+            reply = {"status": "error", "error": str(exc)}
 
-        _reply({"id": req_id, "status": "error", "error": f"Unknown action: {action}"})
+        _reply({"id": req_id, **reply})
 
     stop_event.set()
     embedding.unload_model()

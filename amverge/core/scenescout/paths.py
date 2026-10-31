@@ -22,9 +22,7 @@ import os
 import re
 from pathlib import Path
 
-# The folder name is shared with the app's Rust side
-# (`resolve_scene_scout_storage_dir`). Changing it here orphans every database
-# the app already wrote, so change both together.
+# shared with the app's `resolve_scene_scout_storage_dir`; changing one side orphans every database
 STORAGE_DIR_NAME = "amverge-scene-scout"
 
 DB_SUFFIX = ".scoutdb"

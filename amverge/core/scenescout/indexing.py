@@ -56,14 +56,12 @@ from .types import EMBEDDING_MODEL_VERSION
 
 ProgressCallback = Callable[[str, int, int], None]
 
-# Frames are stored as small JPEGs so a database over a whole season stays in
-# the tens of MB rather than the hundreds
+# small jpegs keep a season's database in the tens of MB
 THUMBNAIL_WIDTH = 320
 THUMBNAIL_QUALITY = 80
 
 
-# the app's Settings values, passed straight through so the CLI never has to
-# know how the setting is spelled in the UI
+# the app's settings values, passed straight through
 DETECTOR_AI = "transnetv2_gpu"
 DETECTOR_KEYFRAME = "keyframe_detection"
 
@@ -218,8 +216,7 @@ def sample_frames(
                     break
                 continue
 
-            # only a frame that reaches the next scene's midpoint is converted to rgb;
-            # every other decoded frame is skipped untouched
+            # only the frame reaching the next scene's midpoint is converted to rgb
             if current_ms < midpoints_ms[next_midpoint]:
                 continue
             try:
