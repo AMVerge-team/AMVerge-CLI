@@ -177,7 +177,7 @@ def get_versions() -> dict:
         except ImportError:
             versions[name] = None
 
-    optional = ["torch", "transnetv2_pytorch", "cv2", "pypresence", "depth_anything_v2",
+    optional = ["torch", "torchvision", "transnetv2_pytorch", "cv2", "pypresence",
                  "spandrel", "onnxruntime", "scipy"]
     for name in optional:
         try:
@@ -267,7 +267,7 @@ def check_environment() -> EnvironmentCheck:
         ("tqdm", "tqdm", "[ml]"),
         ("opencv", "cv2", "[edge]"),
         ("pypresence", "pypresence", "[discord]"),
-        ("depth-anything-v2", "depth_anything_v2", "[depth]"),
+        ("torchvision", "torchvision", "[depth]"),
         ("spandrel", "spandrel", "[upscale]"),
         ("onnxruntime", "onnxruntime", "[upscale]"),
         ("scipy", "scipy", "[interpolation]"),

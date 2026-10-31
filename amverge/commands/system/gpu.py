@@ -93,11 +93,11 @@ def gpu() -> None:
     try:
         from ...core.depth import DEPTH_AVAILABLE
         if DEPTH_AVAILABLE:
-            t3.add_row("depth-anything-v2", "[accent]installed[/]")
+            t3.add_row("depth (Depth Anything V2)", "[accent]installed[/]")
         else:
-            t3.add_row("depth-anything-v2", "[muted]not installed[/]  pip install amverge[depth]")
+            t3.add_row("depth (Depth Anything V2)", "[muted]not installed[/]  pip install amverge[depth]")
     except ImportError:
-        t3.add_row("depth-anything-v2", "[muted]not installed[/]  pip install amverge[depth]")
+        t3.add_row("depth (Depth Anything V2)", "[muted]not installed[/]  pip install amverge[depth]")
 
     try:
         from ...core.upscaling import UPSCALE_AVAILABLE

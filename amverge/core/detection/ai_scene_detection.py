@@ -15,6 +15,8 @@ Usage:
 import contextlib
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +45,8 @@ except ImportError:
 DEFAULT_THRESHOLD = 0.5
 
 NVDEC_CODECS = frozenset({"h264", "hevc", "av1", "vp9"})
+
+NELUX_STALL_SECONDS = 10.0
 
 
 def _safe_total(total_frames: int) -> int:
@@ -337,7 +341,14 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
             callers should fall back to :func:`decode_video_frames_ffmpeg`. Codecs
             outside :data:`NVDEC_CODECS` raise up front: NVDEC hands back frames for
             MPEG-4 Part 2 (XviD) and MPEG-2 that are unusable, so TransNetV2 sees a
-            single scene.
+            single scene. Also raised when Nelux stops returning frames for
+            :data:`NELUX_STALL_SECONDS`: its native ``read_frame`` deadlocks at
+            random on some long 10-bit HEVC files (3 runs in 5 on one episode),
+            so reads run on a daemon thread the caller can walk away from.
+            Nelux 0.21 fixed that deadlock; it also made ``len(reader)`` an
+            exact count that decodes the whole file first, so the reader opens
+            with ``seek_mode="approximate"`` (metadata count). 0.18 has no such
+            argument and raises TypeError, which falls back to the plain call.
 
     Example:
         >>> frames = decode_video_frames_nelux("episode.mp4")
@@ -356,11 +367,11 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
     label = "Nelux NVDEC" if decode_accelerator == "nvdec" else "Nelux CPU"
 
     log(f"Running {label} video decode...")
-    reader = VideoReader(
-        str(input_video),
-        decode_accelerator=decode_accelerator,
-        resize=(FRAME_WIDTH, FRAME_HEIGHT),
-    )
+    options = {"decode_accelerator": decode_accelerator, "resize": (FRAME_WIDTH, FRAME_HEIGHT)}
+    try:
+        reader = VideoReader(str(input_video), seek_mode="approximate", **options)
+    except TypeError:
+        reader = VideoReader(str(input_video), **options)
 
     total_frames = len(reader)
     frames = np.empty(
@@ -368,50 +379,76 @@ def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
         dtype=np.uint8,
     )
 
-    actual_frames = 0
-    last_progress = 19
+    state = {"count": 0, "error": None, "done": False}
 
-    for i in range(total_frames):
-        frame = reader.read_frame()
-        if frame is None:
-            break
+    def read_all() -> None:
+        try:
+            for i in range(total_frames):
+                frame = reader.read_frame()
+                if frame is None:
+                    break
+                frames[i] = _nelux_frame_to_array(frame, torch)
+                state["count"] = i + 1
+        except BaseException as exc:
+            state["error"] = exc
+        finally:
+            state["done"] = True
 
-        if isinstance(frame, torch.Tensor):
-            frame_np = frame.detach().to("cpu").numpy()
-        else:
-            frame_np = np.asarray(frame)
+    worker = threading.Thread(target=read_all, name="nelux-decode", daemon=True)
+    worker.start()
 
-        # sources deeper than 8-bit come back as full-range uint16 (0-65535). a
-        # plain uint8 cast keeps only the low byte, which turned 10-bit decodes
-        # into noise; the high byte is the 8-bit value FFmpeg would give
-        if frame_np.dtype == np.uint16:
-            frame_np = frame_np >> 8
-        frame_np = frame_np.astype(np.uint8, copy=False)
-
-        if frame_np.ndim != 3:
-            raise ValueError(f"Unexpected frame rank from nelux: {frame_np.ndim}")
-
-        if frame_np.shape[0] == FRAME_CHANNELS and frame_np.shape[-1] != FRAME_CHANNELS:
-            frame_np = np.transpose(frame_np, (1, 2, 0))
-
-        if frame_np.shape != (FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS):
-            raise ValueError(
-                f"Unexpected frame shape from nelux. Got {frame_np.shape}, "
-                f"expected ({FRAME_HEIGHT}, {FRAME_WIDTH}, {FRAME_CHANNELS})."
+    last_count, last_change, last_progress = 0, time.monotonic(), 19
+    while not state["done"]:
+        worker.join(timeout=0.5)
+        count = state["count"]
+        if count != last_count:
+            last_count, last_change = count, time.monotonic()
+            last_progress = max(last_progress, int(20 + 35 * count / _safe_total(total_frames)))
+            emit_progress(last_progress, f"Decoding video ({label})... ({count}/{_safe_total(total_frames)} frames)")
+        elif not state["done"] and time.monotonic() - last_change > NELUX_STALL_SECONDS:
+            raise RuntimeError(
+                f"Nelux stopped returning frames at {count}/{total_frames} "
+                f"(no frame for {NELUX_STALL_SECONDS:.0f}s)"
             )
 
-        frames[i] = frame_np
-        actual_frames += 1
-        if actual_frames % 10 == 0:
-            last_progress = _emit_loop_progress(
-                actual_frames, total_frames, 20, 35, f"Decoding video ({label})...", last_progress
-            )
+    if state["error"] is not None:
+        raise state["error"]
 
+    actual_frames = state["count"]
     if actual_frames < total_frames:
         frames = frames[:actual_frames]
 
     emit_progress(55, f"Decoding video ({label})... ({actual_frames}/{_safe_total(total_frames)})")
     return frames
+
+
+def _nelux_frame_to_array(frame, torch) -> np.ndarray:
+    """One Nelux frame as a ``(27, 48, 3)`` uint8 array."""
+    if isinstance(frame, torch.Tensor):
+        frame_np = frame.detach().to("cpu").numpy()
+    else:
+        frame_np = np.asarray(frame)
+
+    # sources deeper than 8-bit come back as full-range uint16 (0-65535). a
+    # plain uint8 cast keeps only the low byte, which turned 10-bit decodes
+    # into noise; the high byte is the 8-bit value FFmpeg would give
+    if frame_np.dtype == np.uint16:
+        frame_np = frame_np >> 8
+    frame_np = frame_np.astype(np.uint8, copy=False)
+
+    if frame_np.ndim != 3:
+        raise ValueError(f"Unexpected frame rank from nelux: {frame_np.ndim}")
+
+    if frame_np.shape[0] == FRAME_CHANNELS and frame_np.shape[-1] != FRAME_CHANNELS:
+        frame_np = np.transpose(frame_np, (1, 2, 0))
+
+    if frame_np.shape != (FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS):
+        raise ValueError(
+            f"Unexpected frame shape from nelux. Got {frame_np.shape}, "
+            f"expected ({FRAME_HEIGHT}, {FRAME_WIDTH}, {FRAME_CHANNELS})."
+        )
+
+    return frame_np
 
 
 def run_model_one_pass(

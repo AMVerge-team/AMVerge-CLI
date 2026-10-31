@@ -30,7 +30,7 @@ try:
     import numpy as np
     import torch
     import cv2
-    from depth_anything_v2.dpt import DepthAnythingV2
+    from ...vendor.depth_anything_v2.dpt import DepthAnythingV2
     DEPTH_AVAILABLE = True
 except ImportError:
     pass
