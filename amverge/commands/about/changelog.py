@@ -7,6 +7,9 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v1.1.0", [
+        "Merging clips of different sizes keeps each one's aspect ratio: the largest size becomes the frame, the rest get black bars",
+    ]),
     ("v0.9.6"), [
         "Fixed WEBP imports"
     ],

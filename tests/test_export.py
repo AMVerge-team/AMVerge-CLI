@@ -220,6 +220,98 @@ class TestAudioModes:
         assert_av_in_sync(outputs[0])
 
 
+def sized_clip(tmp_path, name, width, height, sar="1") -> str:
+    """A bright clip on a black-free source, so any black in a merge is a bar."""
+    path = tmp_path / name
+    subprocess.run(
+        [get_ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", f"color=white:s={width}x{height}:r=24:d=1",
+         "-f", "lavfi", "-i", "sine=d=1", "-vf", f"setsar={sar}", "-c:v", "libx264", "-preset", "ultrafast",
+         "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(path)],
+        check=True,
+    )
+    return str(path)
+
+
+def whole_jobs(*paths: str) -> list[ExportJob]:
+    return [ExportJob(scene_index=i, input=path) for i, path in enumerate(paths)]
+
+
+def coded_sizes(path: str) -> set[tuple[int, int]]:
+    return {(frame.shape[1], frame.shape[0]) for frame in read_frames_rgb(path)}
+
+
+def read_frames_rgb(path: str):
+    import av
+
+    with av.open(path) as container:
+        for frame in container.decode(video=0):
+            yield frame.to_ndarray(format="rgb24")
+
+
+def bars_of(frame) -> tuple[int, int]:
+    """Black columns on the left and black rows on top."""
+    row, column = frame[frame.shape[0] // 2], frame[:, frame.shape[1] // 2]
+    return int((row.max(axis=1) > 128).argmax()), int((column.max(axis=1) > 128).argmax())
+
+
+class TestMixedSizeMerge:
+    @pytest.mark.parametrize("codec", ["h264_high", "copy"])
+    def test_narrow_clip_is_pillarboxed_not_stretched(self, tmp_path, codec):
+        narrow = sized_clip(tmp_path, "narrow.mp4", 1440, 1080)
+        wide = sized_clip(tmp_path, "wide.mp4", 1920, 1080)
+        [merged] = run_export(tmp_path, whole_jobs(narrow, wide), codec=codec, merge=True)
+        assert coded_sizes(merged) == {(1920, 1080)}
+        frames = list(read_frames_rgb(merged))
+        assert abs(bars_of(frames[0])[0] - 240) <= 4
+        assert bars_of(frames[-1]) == (0, 0)
+
+    def test_each_axis_takes_the_largest_size(self, tmp_path):
+        tall = sized_clip(tmp_path, "tall.mp4", 1440, 1080)
+        flat = sized_clip(tmp_path, "flat.mp4", 1920, 800)
+        [merged] = run_export(tmp_path, whole_jobs(tall, flat), codec="h264_high", merge=True)
+        assert coded_sizes(merged) == {(1920, 1080)}
+        frames = list(read_frames_rgb(merged))
+        assert abs(bars_of(frames[0])[0] - 240) <= 4
+        assert abs(bars_of(frames[-1])[1] - 140) <= 4
+
+    def test_smaller_clip_of_the_same_shape_scales_up_without_bars(self, tmp_path):
+        small = sized_clip(tmp_path, "small.mp4", 1280, 720)
+        large = sized_clip(tmp_path, "large.mp4", 1920, 1080)
+        [merged] = run_export(tmp_path, whole_jobs(small, large), codec="h264_high", merge=True)
+        assert coded_sizes(merged) == {(1920, 1080)}
+        assert bars_of(next(read_frames_rgb(merged))) == (0, 0)
+
+    def test_anamorphic_clip_uses_its_display_shape(self, tmp_path):
+        anamorphic = sized_clip(tmp_path, "anamorphic.mp4", 1440, 1080, sar="4/3")
+        wide = sized_clip(tmp_path, "wide.mp4", 1920, 1080)
+        [merged] = run_export(tmp_path, whole_jobs(anamorphic, wide), codec="h264_high", merge=True)
+        assert coded_sizes(merged) == {(1920, 1080)}
+        assert bars_of(next(read_frames_rgb(merged))) == (0, 0)
+
+    def test_copy_ranges_of_mixed_sources_are_cut_exactly(self, tmp_path):
+        narrow = sized_clip(tmp_path, "narrow.mp4", 640, 480)
+        wide = sized_clip(tmp_path, "wide.mp4", 1280, 480)
+        jobs = [ExportJob(scene_index=0, input=narrow, seek_ms=0, dur_ms=500),
+                ExportJob(scene_index=1, input=wide, seek_ms=0, dur_ms=500)]
+        [merged] = run_export(tmp_path, jobs, codec="copy", merge=True)
+        assert coded_sizes(merged) == {(1280, 480)}
+        assert len(list(read_frames_rgb(merged))) == 24
+
+    def test_matching_clips_stay_a_stream_copy(self, tmp_path):
+        first = sized_clip(tmp_path, "first.mp4", 640, 480)
+        second = sized_clip(tmp_path, "second.mp4", 640, 480)
+        events: list[str] = []
+        export_scenes(whole_jobs(first, second), str(tmp_path / "out"), "clip",
+                      ExportSettings(hardware="cpu", codec="copy", merge=True), on_event=events.append)
+        assert events[-1].endswith("|copy")
+
+    def test_merge_canvas_needs_every_size(self):
+        size = (1920, 1080, Fraction(1))
+        assert params.merge_canvas([size, size]) is None
+        assert params.merge_canvas([size, None]) is None
+        assert params.merge_canvas([size, (1441, 1081, Fraction(1))]) == (1920, 1082)
+
+
 class TestCopyExport:
     @pytest.mark.parametrize(
         ("video_spec", "audio_codec"),

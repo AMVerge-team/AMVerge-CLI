@@ -166,6 +166,28 @@ def _probe_stream(ffprobe: str, path: str, kind: str) -> Optional[str]:
         return None
 
 
+def probe_frame_geometry(ffprobe: str, path: str) -> Optional[tuple[int, int, Fraction]]:
+    """``(width, height, sample aspect ratio)`` as decoded, so a rotated video
+    reports its upright size. None when the file can't be read."""
+    try:
+        r = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height,sample_aspect_ratio:stream_side_data=rotation",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+        )
+        stream = json.loads(r.stdout or "{}")["streams"][0]
+        width, height = int(stream["width"]), int(stream["height"])
+        num, _, den = str(stream.get("sample_aspect_ratio", "")).partition(":")
+        sar = Fraction(int(num), int(den)) if num.isdigit() and den.isdigit() and int(num) and int(den) else Fraction(1)
+        rotation = next((int(side["rotation"]) for side in stream.get("side_data_list", []) if "rotation" in side), 0)
+        if rotation % 180:
+            width, height, sar = height, width, 1 / sar
+        return width, height, sar
+    except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError):
+        return None
+
+
 def _all_same_video_codec(ffprobe: str, inputs: list[str]) -> bool:
     """True if every input shares one (known) video codec — required for a clean
     direct concat stream-copy."""
@@ -339,6 +361,7 @@ def _export_one(
     active: set,
     audio_count: Optional[int] = None,
     audio_languages: Optional[list[str]] = None,
+    video_filter: Optional[str] = None,
 ) -> str:
     """Export one scene to ``out_path``, returning the mode used ("copy" or
     "reencode"). Copy remains a copy; re-encode may fall back from GPU to CPU."""
@@ -364,7 +387,7 @@ def _export_one(
         return params.build_reencode_args(job.input, out_path, codec, settings.audio, gpu,
                                           job.seek_ms, job.dur_ms, track, audio_count,
                                           settings.audio_single, source_frame_rate,
-                                          frames, grid_rate, seek_origin)
+                                          frames, grid_rate, seek_origin, video_filter)
 
     if settings.codec == "copy":
         _run_ffmpeg(ffmpeg, copy_args(), total_ms, on_frac, abort, active)
@@ -580,8 +603,14 @@ def export_scenes(
     gpu_encoders = detect_gpu_encoders(ffmpeg)
     use_gpu = resolve_use_gpu(settings, gpu_encoders)
 
+    geometry = {}
+    canvas = None
+    if settings.merge:
+        geometry = {src: probe_frame_geometry(ffprobe, src) for src in dict.fromkeys(j.input for j in jobs)}
+        canvas = params.merge_canvas(list(geometry.values()))
+
     smartcut_tmp = None
-    if settings.codec == "copy" and any(j.seek_ms is not None for j in jobs):
+    if settings.codec == "copy" and canvas is None and any(j.seek_ms is not None for j in jobs):
         smartcut_tmp = tempfile.TemporaryDirectory()
         progress(5, "Cutting source ranges...")
         jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), dedupe=settings.merge,
@@ -598,7 +627,8 @@ def export_scenes(
     try:
         if settings.merge:
             out = _merge(jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
-                         source_video_codec, source_is_10bit, source_frame_rate, progress, event, abort, active, audio_count)
+                         source_video_codec, source_is_10bit, source_frame_rate, progress, event, abort, active, audio_count,
+                         canvas, geometry)
             progress(100, "Export complete")
             return [out]
 
@@ -658,6 +688,7 @@ def _individual(
 def _merge(
     jobs, out_dir, file_stem, settings, ffmpeg, ffprobe, use_gpu,
     source_video_codec, source_is_10bit, source_frame_rate, progress, event, abort, active, audio_count=None,
+    canvas=None, geometry=None,
 ) -> str:
     ext = settings.container
     merged_stem = file_stem.replace("_####", "").replace("####", "").strip("_") or "merged"
@@ -666,7 +697,10 @@ def _merge(
     has_ranges = any(j.seek_ms is not None for j in jobs)
     force_reencode = settings.codec != "copy"  # encode workflow always re-encodes
 
-    if settings.codec == "copy" and not has_ranges:
+    if canvas:
+        progress(20, f"Clips differ in size; fitting them to {canvas[0]}x{canvas[1]} with black bars")
+
+    if settings.codec == "copy" and not has_ranges and not canvas:
         inputs = [j.input for j in jobs]
         # Each clip is probed before deciding, which is several ffprobe calls
         # and visibly slow on a long selection. Without this the UI sits on the
@@ -690,7 +724,7 @@ def _merge(
             "or do not begin on a keyframe; export the clips individually or choose a re-encode codec"
         )
 
-    seg_copy = settings.codec == "copy" and not force_reencode and not has_ranges
+    seg_copy = settings.codec == "copy" and not force_reencode and not has_ranges and not canvas
     fallback_codec = "h264_high10" if source_is_10bit else "h264_high"
     seg_codec = "copy" if seg_copy else (settings.codec if settings.codec != "copy" else fallback_codec)
     # Copied audio keeps its original timestamps while the re-encoded video is
@@ -728,7 +762,8 @@ def _merge(
             _export_one(job, seg, seg_settings, ffmpeg,
                         resolve_use_gpu(seg_settings, detect_gpu_encoders(ffmpeg)),
                         source_video_codec, source_is_10bit, source_frame_rate, total_ms, None, abort, active,
-                        seg_audio_count, seg_languages[i] if seg_languages else None)
+                        seg_audio_count, seg_languages[i] if seg_languages else None,
+                        params.fit_filter(geometry[job.input], canvas) if canvas else None)
             segments.append(seg)
             progress(30 + int((i + 1) / total * 55), f"{verb} {i + 1}/{total} segments")
 

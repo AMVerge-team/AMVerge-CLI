@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+from math import ceil
 from pathlib import Path
 
 _CODEC_ALIASES = {
@@ -209,6 +210,40 @@ def stream_copy_bsf(source_video_codec: str | None, target_container: str) -> st
     return None
 
 
+# -- mixed-size merges -------------------------------------------------------
+
+def _round_even(value: Fraction) -> int:
+    """Nearest even integer: yuv420 encoders reject odd dimensions."""
+    return max(2, round(value / 2) * 2)
+
+
+def merge_canvas(geometries: list[tuple[int, int, Fraction] | None]) -> tuple[int, int] | None:
+    """The frame a merge of mixed ``(width, height, sar)`` clips has to fit in:
+    the largest display width by the largest height. None when every clip
+    already matches, or when a clip's size is unknown and nothing can be fitted."""
+    if None in geometries or len(set(geometries)) <= 1:
+        return None
+    width = max(ceil(w * sar / 2) * 2 for w, _, sar in geometries)
+    height = max(ceil(Fraction(h, 2)) * 2 for _, h, _ in geometries)
+    return width, height
+
+
+def fit_filter(geometry: tuple[int, int, Fraction], canvas: tuple[int, int]) -> str:
+    """Video filters that fit a clip inside ``canvas`` without distorting it:
+    scaled until it touches the frame, the rest filled with centered black bars."""
+    width, height, sar = geometry
+    canvas_w, canvas_h = canvas
+    display_w = width * sar
+    fit = min(canvas_w / display_w, Fraction(canvas_h, height))
+    fit_w = min(canvas_w, _round_even(display_w * fit))
+    fit_h = min(canvas_h, _round_even(height * fit))
+    chain = [] if (fit_w, fit_h) == (width, height) else [f"scale={fit_w}:{fit_h}"]
+    chain.append("setsar=1")
+    if (fit_w, fit_h) != canvas:
+        chain.append(f"pad={canvas_w}:{canvas_h}:(ow-iw)/2:(oh-ih)/2")
+    return ",".join(chain)
+
+
 # -- frame-accurate ranges ---------------------------------------------------
 
 GRID_TOLERANCE_SEC = 0.001
@@ -380,6 +415,7 @@ def build_reencode_args(
     frames: tuple[int, int] | None = None,
     grid_rate: str | None = None,
     seek_origin: Fraction = Fraction(0),
+    video_filter: str | None = None,
 ) -> list[str]:
     """Re-encode the whole input (pre-cut clip) or a [seek, seek+dur] range.
 
@@ -387,7 +423,8 @@ def build_reencode_args(
     with an exact frame selection built by :func:`frame_cut_args`, on the
     input's own frame grid ``grid_rate`` (default ``frame_rate``).
     ``seek_origin`` is the input's
-    :func:`~amverge.core.video.probe_utils.probe_seek_origin`."""
+    :func:`~amverge.core.video.probe_utils.probe_seek_origin`.
+    ``video_filter`` is appended to the video chain (see :func:`fit_filter`)."""
     ext = Path(out).suffix.lstrip(".").lower()
     args = ["-y"]
     cut = None
@@ -403,7 +440,7 @@ def build_reencode_args(
         args += cut.output_args
     elif dur_ms and dur_ms > 0:
         args += ["-t", _time_str(dur_ms)]
-    args += ["-vf", "setpts=PTS-STARTPTS"]
+    args += ["-vf", f"setpts=PTS-STARTPTS,{video_filter}" if video_filter else "setpts=PTS-STARTPTS"]
     if audio not in ("none", "copy"):
         # aresample pins the first sample to 0 and fills or trims to keep audio
         # against video. Without it a segment whose audio starts a fraction late
