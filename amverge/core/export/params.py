@@ -122,6 +122,22 @@ def codec_container_compatible(codec: str, container: str) -> bool:
     }.get(container, True)
 
 
+def exact_copy_codec(source_codec: str | None, is_10bit: bool, container: str) -> str | None:
+    """The codec that re-encodes a scene a stream copy cannot cut exactly, so a
+    batch keeps the source's look: its codec and bit depth where an encoder
+    exists, else H.264. None when ``container`` cannot hold it (AVI is copy only)."""
+    source = (source_codec or "").strip().lower()
+    if source in ("hevc", "h265"):
+        codec = "h265_main10" if is_10bit else "h265_main"
+    elif source == "av1":
+        codec = "av1_main"
+    elif source == "prores":
+        codec = "prores_422_hq"
+    else:
+        codec = "h264_high10" if is_10bit else "h264_high"
+    return codec if codec_container_compatible(codec, container) else None
+
+
 def recommended_container(codec: str) -> str:
     return "mov" if codec_family(codec) == "prores" else "mp4"
 
@@ -451,6 +467,9 @@ def build_reencode_args(
         args += ["-r:v:0", frame_rate]
     args += video_encode_args(codec, use_gpu)
     args += audio_args(audio)
+    if audio == "copy":
+        # a copied stream otherwise keeps every packet back to the keyframe the seek landed on
+        args += ["-copypriorss", "0"]
     args += disposition_args(audio, audio_track, audio_count, audio_single)
     args += ["-fps_mode:v:0", "cfr"]
     if ext in ("mp4", "mov"):

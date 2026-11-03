@@ -42,6 +42,7 @@ def _search(req: dict, root: Optional[Path], device: str) -> dict:
         video_paths=_as_list(req.get("videos") or req.get("video")),
         start_subjects=list(req.get("start_subjects") or []),
         include_unclear=bool(req.get("include_unclear", False)),
+        skip_edges_ms=int(req.get("skip_edges_ms", 0)),
     )
 
     if not embedding.is_model_loaded():
@@ -84,7 +85,6 @@ def _add(req: dict, root: Optional[Path], device: str, on_progress: Callable[[st
         accurate=bool(req.get("accurate", False)),
         method=req.get("detector", "keyframe_detection"),
         generate_thumbnails=not bool(req.get("no_thumbnails", False)),
-        motion=bool(req.get("motion", True)),
         scenes=indexing.precut_scenes(req.get("scenes")) or None,
         on_progress=on_progress,
     )

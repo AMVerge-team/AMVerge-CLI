@@ -280,7 +280,6 @@ def add(
         help="Scene detector: keyframe_detection or transnetv2_gpu",
     ),
     no_thumbnails: bool = typer.Option(False, "--no-thumbnails", help="Skip thumbnail generation"),
-    no_motion: bool = typer.Option(False, "--no-motion", help="Skip start/end motion tags"),
     scenes_json: Optional[Path] = typer.Option(
         None,
         "--scenes-json",
@@ -355,7 +354,6 @@ def add(
             accurate=accurate,
             method=detector,
             generate_thumbnails=not no_thumbnails,
-            motion=not no_motion,
             scenes=precut,
             on_progress=on_progress,
         )
@@ -394,6 +392,7 @@ def search(
         [], "--start-subject", help="Keep scenes whose subject starts moving this way (repeatable)"
     ),
     include_unclear: bool = typer.Option(False, "--include-unclear", help="Keep scenes with unreadable motion"),
+    skip_edges_ms: int = typer.Option(0, "--skip-edges-ms", help="Leave out scenes this close to their video's start or end"),
     as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Search indexed scenes by description, reference image, or a clip to continue."""
@@ -441,6 +440,7 @@ def search(
         video_paths=video,
         start_subjects=start_subject,
         include_unclear=include_unclear,
+        skip_edges_ms=max(0, skip_edges_ms),
     )
 
     flow_tags = None

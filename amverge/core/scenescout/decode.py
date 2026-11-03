@@ -1,7 +1,6 @@
-"""Opening a video for Scene Scout's whole-episode decodes, on the GPU when it can.
+"""Opening and closing a video for Scene Scout's decodes, on the GPU when it can.
 
-Sampling frames and measuring motion both decode every frame of an episode, and
-decoding is nearly all of their time. PyAV's hardware decoders produce the same
+Decoding is nearly all of the time spent sampling frames and measuring motion. PyAV's hardware decoders produce the same
 pixels as the CPU (checked on 10-bit HEVC: zero difference) about a third
 faster, and leave the CPU free. A file the GPU cannot decode (10-bit H.264, an
 unusual codec) falls back to the CPU on its own.
@@ -52,3 +51,19 @@ def open_video(path: str | Path):
         except Exception:  # noqa: BLE001 - a device that will not start leaves the CPU decode
             pass
     return av.open(str(path), options=options)
+
+
+def close_video(container, stream) -> None:
+    """Closes a decode, safe to call partway through the video.
+
+    Freeing a frame-threaded decoder that still has packets in flight deadlocks
+    (PyAV 17.1, CPU and GPU alike), so a decode that stops early has to drain first.
+    """
+    import av
+
+    try:
+        for _ in stream.codec_context.decode(None):
+            pass
+    except (av.FFmpegError, ValueError):
+        pass
+    container.close()

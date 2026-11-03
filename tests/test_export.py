@@ -398,6 +398,73 @@ class TestCopyExport:
         assert numbers(out) == list(spec.copy_frames(*spec.scene_frames[1]))
 
 
+class TestExactCopyExport:
+    @pytest.mark.parametrize("spec", media_params("h264_2997_gop", "h265_24_opengop", "h264_23976_mkv"))
+    def test_every_clip_is_exactly_its_scene(self, media_files, tmp_path, spec):
+        indices = list(range(len(spec.segments)))
+        outputs = run_export(tmp_path, range_jobs(spec, media_files[spec.name], indices),
+                             codec="copy", container=spec.export_container, exact_copy=True)
+        source = video_stream(media_files[spec.name])
+        for out, idx in zip(outputs, indices):
+            assert numbers(out) == list(range(*spec.scene_frames[idx])), f"scene {idx}"
+            v = video_stream(out)
+            assert (v["codec_name"], v["pix_fmt"]) == (source["codec_name"], source["pix_fmt"])
+            if spec.audio:
+                assert_av_in_sync(out, tolerance=0.1)
+
+    def test_neighbours_inside_one_keyframe_interval_stay_separate(self, media_files, tmp_path):
+        spec = BY_NAME["h264_2997_gop"]
+        rate, gop = spec.rate, 30
+        cut = gop // 2
+        jobs = [
+            ExportJob(scene_index=i, input=str(media_files[spec.name]),
+                      seek_ms=round(float(a / rate) * 1000), dur_ms=round(float((b - a) / rate) * 1000))
+            for i, (a, b) in enumerate(((1, cut), (cut, gop - 1)))
+        ]
+        snapped = run_export(tmp_path / "snapped", jobs, codec="copy", container=spec.export_container)
+        assert numbers(snapped[0]) == numbers(snapped[1])
+        exact = run_export(tmp_path / "exact", jobs, codec="copy", container=spec.export_container, exact_copy=True)
+        assert numbers(exact[0]) == list(range(1, cut))
+        assert numbers(exact[1]) == list(range(cut, gop - 1))
+        assert all(e.endswith("|reencode") for e in run_export.events)
+
+    def test_keyframe_scenes_stay_stream_copied(self, media_files, tmp_path):
+        spec = BY_NAME["h264_24_cuts"]
+        indices = list(range(len(spec.segments)))
+        outputs = run_export(tmp_path, range_jobs(spec, media_files[spec.name], indices),
+                             codec="copy", container=spec.export_container, exact_copy=True)
+        assert all(e.endswith("|copy") for e in run_export.events), run_export.events
+        for out, idx in zip(outputs, indices):
+            assert numbers(out) == list(range(*spec.scene_frames[idx]))
+
+    def test_merge_ignores_it(self, media_files, tmp_path):
+        spec = BY_NAME["h264_2997_gop"]
+        (out,) = run_export(tmp_path, range_jobs(spec, media_files[spec.name], [1, 2]),
+                            codec="copy", container=spec.export_container, merge=True, exact_copy=True)
+        assert [e.rsplit("|", 1)[1] for e in run_export.events] == ["copy"]
+        assert set(expected_frames(spec, [1, 2])) <= set(numbers(out))
+
+    def test_avi_is_copy_only_so_it_keeps_snapping(self, media_files, tmp_path):
+        spec = BY_NAME["h264_2997_gop"]
+        outputs = run_export(tmp_path, range_jobs(spec, media_files[spec.name], [1]),
+                             codec="copy", container="avi", exact_copy=True)
+        assert numbers(outputs[0]) == list(spec.copy_frames(*spec.scene_frames[1]))
+        assert all(e.endswith("|copy") for e in run_export.events)
+
+    @pytest.mark.parametrize("source, ten_bit, container, codec", [
+        ("hevc", True, "mkv", "h265_main10"),
+        ("hevc", False, "mp4", "h265_main"),
+        ("h264", False, "mp4", "h264_high"),
+        ("h264", True, "mkv", "h264_high10"),
+        ("av1", False, "mp4", "av1_main"),
+        ("prores", True, "mov", "prores_422_hq"),
+        ("mpeg2video", False, "mkv", "h264_high"),
+        ("h264", False, "avi", None),
+    ])
+    def test_reencode_codec_follows_the_source(self, source, ten_bit, container, codec):
+        assert params.exact_copy_codec(source, ten_bit, container) == codec
+
+
 class TestAviCopyExport:
     TAGS = {"h264": "H264", "hevc": "HEVC"}
 

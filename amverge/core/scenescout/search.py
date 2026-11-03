@@ -50,6 +50,15 @@ def _passes_motion(motion: Optional[dict[str, Any]], options: SearchOptions) -> 
 
 _CHUNK_ROWS = 4096
 
+_EDGE_JOIN = """
+            JOIN (SELECT video_id, MAX(end_time_ms) AS total_ms FROM scene_embeddings GROUP BY video_id) lengths
+              ON lengths.video_id = s.video_id
+"""
+_EDGE_FILTER = """
+              AND (lengths.total_ms <= 2 * :skip
+                   OR (s.start_time_ms >= :skip AND s.end_time_ms <= lengths.total_ms - :skip))
+"""
+
 
 def _motion_columns(motion_join: bool) -> str:
     return "m.start_raw, m.end_raw, m.scene_id IS NOT NULL" if motion_join else "NULL, NULL, 0"
@@ -81,6 +90,7 @@ def _search_one(
     with scoutdb.connect(path) as conn:
         motion_join = scoutdb.has_motion_table(conn)
         join_motion = filter_motion and motion_join
+        skip = options.skip_edges_ms
         cursor = conn.execute(
             f"""
             SELECT s.id, s.start_time_ms, s.end_time_ms, s.embedding, v.filepath,
@@ -88,8 +98,11 @@ def _search_one(
             FROM scene_embeddings s
             JOIN processed_videos v ON v.id = s.video_id
             {"LEFT JOIN scene_motion m ON m.scene_id = s.id" if join_motion else ""}
+            {_EDGE_JOIN if skip > 0 else ""}
             WHERE v.status = 'completed'
-            """
+            {_EDGE_FILTER if skip > 0 else ""}
+            """,
+            {"skip": skip} if skip > 0 else {},
         )
 
         while rows := cursor.fetchmany(_CHUNK_ROWS):

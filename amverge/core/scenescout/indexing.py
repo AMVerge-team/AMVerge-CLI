@@ -3,27 +3,26 @@
 Feel free to create this in however way you want, what I have here
 is something to get you started.
 
-Pipeline: detect scene boundaries, sample a representative frame per scene,
-embed the frames, write scenes plus thumbnails.
+Pipeline: detect scene boundaries, sample a representative frame per scene
+without decoding the rest, embed the frames, write scenes plus thumbnails.
 
 Scene detection uses AMVerge's own detectors rather than PySceneDetect, so a
 scene found here lines up with the clips the user already has from importing
 that episode. Which detector runs follows the user's Settings choice; see
 :func:`detect_scenes`.
 
-Only two functions below need writing: :func:`detect_scenes` and
-:func:`sample_frames`. :func:`index_video` already orchestrates them and does
-all the database work, so it is worth reading first to see what it expects back.
+:func:`index_video` orchestrates these steps and does all the database work, so
+it is worth reading first.
 
 The data, start to finish::
 
-    detect_scenes(video, method)   -> [(start_ms, end_ms), ...]        N scenes
-    sample_frames(video, scenes)   -> [uint8 (H, W, 3) RGB, ...]       N frames
-    embed_frames(frames)           -> float32 (N, D), rows normalised  N vectors
-    encode_thumbnail(frame)        -> JPEG bytes                       N thumbs
-                                      |
-                                      v
-                              one scene_embeddings row per scene
+    detect_scenes(video, method)       -> [(start_ms, end_ms), ...]        N scenes
+    sample_scene_frames(video, scenes) -> [uint8 (H, W, 3) RGB, ...]       N frames
+    embed_frames(frames)               -> float32 (N, D), rows normalised  N vectors
+    encode_thumbnail(frame)            -> JPEG bytes                       N thumbs
+                                          |
+                                          v
+                                  one scene_embeddings row per scene
 
 All four stay the same length and the same order. `index_video` zips them
 together, so one dropped frame shifts every scene after it onto the wrong
@@ -45,6 +44,7 @@ write correct rows and to report progress.
 
 from __future__ import annotations
 
+import bisect
 import io
 import queue
 import threading
@@ -59,6 +59,10 @@ ProgressCallback = Callable[[str, int, int], None]
 # small jpegs keep a season's database in the tens of MB
 THUMBNAIL_WIDTH = 320
 THUMBNAIL_QUALITY = 80
+
+KEYFRAME_SNAP_FRAMES = 2
+BLANK_CHECK_WIDTH = 320
+BLANK_DETAIL_THRESHOLD = 1.5
 
 
 # the app's settings values, passed straight through
@@ -125,22 +129,16 @@ def sample_frames(
     video: str | Path,
     scenes: list[tuple[int, int]],
     on_progress: Optional[Callable[[int, int], None]] = None,
-    boundary=None,
     max_patches: Optional[int] = None,
-    on_frame: Optional[Callable] = None,
 ) -> list:
-    """One representative frame per scene.
+    """The middle frame of each scene, decoding the video in full.
+
+    Used for thumbnails, where a midpoint reads better than a scene's opening. Indexing
+    uses the much faster :func:`sample_scene_frames` instead.
 
     In:  the video path, and the scene list :func:`detect_scenes` returned.
     Out: a list of exactly ``len(scenes)`` frames, in the same order. Each frame
          is ``np.uint8`` of shape ``(H, W, 3)`` in **RGB** order.
-
-    The length and order both matter: :func:`index_video` zips this against
-    ``scenes`` and against the embeddings, so a dropped frame silently shifts
-    every later scene onto the wrong timestamp.
-
-    Take the middle frame of each scene, as upstream does. The first frame of a
-    scene often lands in the fade out of the previous one.
 
     Decode with PyAV (``av``), which is already a base dependency. Do not add
     OpenCV for this, and if you use it anyway remember it returns BGR while the
@@ -149,14 +147,8 @@ def sample_frames(
     ``on_progress(done, total)`` fires as frames are collected, about once per
     percent, so a caller can show how far the decode has got.
 
-    ``boundary`` is an optional :class:`motion.BoundaryCollector`. It sees every
-    decoded frame, so motion tags ride on this decode instead of needing another.
-
     ``max_patches`` shrinks each frame to what that SigLIP patch budget can use
     (see :func:`_sample_size`) during the RGB conversion; ``None`` keeps full size.
-
-    ``on_frame(frame)`` sees each frame the moment it is sampled, in output order,
-    so embedding can start while the decode is still running.
     """
     import av
 
@@ -175,7 +167,7 @@ def sample_frames(
 
     midpoints_ms = [(start_ms + end_ms) // 2 for start_ms, end_ms in scenes]
 
-    from .decode import open_video
+    from .decode import close_video, open_video
 
     container = open_video(video)
     stream = container.streams.video[0]
@@ -189,12 +181,6 @@ def sample_frames(
         return frame.reformat(width=width, height=height, format="rgb24", interpolation="AREA").to_ndarray()
 
     out: list = []
-
-    def keep(nd) -> None:
-        out.append(nd)
-        if on_frame is not None:
-            on_frame(nd)
-
     next_midpoint = 0
     # kept raw: converting is the expensive part, and only the end-of-video padding needs it
     last_raw = None
@@ -207,15 +193,6 @@ def sample_frames(
                 continue
             last_raw = frame
 
-            if boundary is not None and boundary.wants(current_ms):
-                boundary.add(current_ms, frame)
-
-            # middle frames are done; keep decoding only while the last scene's end still matters
-            if next_midpoint >= len(midpoints_ms):
-                if boundary is None or current_ms >= scenes[-1][1]:
-                    break
-                continue
-
             # only the frame reaching the next scene's midpoint is converted to rgb
             if current_ms < midpoints_ms[next_midpoint]:
                 continue
@@ -226,14 +203,14 @@ def sample_frames(
                 continue
 
             while next_midpoint < len(midpoints_ms) and current_ms >= midpoints_ms[next_midpoint]:
-                keep(nd)
+                out.append(nd)
                 next_midpoint += 1
             report(next_midpoint)
 
-            if next_midpoint >= len(midpoints_ms) and boundary is None:
+            if next_midpoint >= len(midpoints_ms):
                 break
     finally:
-        container.close()
+        close_video(container, stream)
 
     if len(out) < len(scenes) and last_raw is not None:
         try:
@@ -241,9 +218,230 @@ def sample_frames(
         except (av.FFmpegError, ValueError):
             last_frame = None
         if last_frame is not None:
-            for _ in range(len(scenes) - len(out)):
-                keep(last_frame)
+            out.extend([last_frame] * (len(scenes) - len(out)))
     report(len(out))
+
+    return out
+
+
+def is_blank_frame(frame) -> bool:
+    """True for a frame with little to search for: a flash, black, or an empty background.
+
+    Measures fine detail rather than contrast, so a plain two-tone background still
+    counts as empty. A false positive only costs one extra decode.
+    """
+    import numpy as np
+
+    stride = max(1, frame.shape[1] // BLANK_CHECK_WIDTH)
+    gray = frame[::stride, ::stride].mean(axis=2)
+    detail = (np.abs(np.diff(gray, axis=1)).mean() + np.abs(np.diff(gray, axis=0)).mean()) / 2
+    return bool(detail < BLANK_DETAIL_THRESHOLD)
+
+
+def _packet_times(video: str | Path) -> tuple[list[int], list[int], float]:
+    """Keyframe times and all frame times in ms, sorted, plus the frame rate. Reads packets only, no decode."""
+    import av
+
+    keyframes: set[int] = set()
+    times: set[int] = set()
+    with av.open(str(video), options={"err_detect": "ignore_err"}) as container:
+        stream = container.streams.video[0]
+        rate = float(stream.average_rate or 0) or 24.0
+        for packet in container.demux(stream):
+            if packet.pts is None:
+                continue
+            time_ms = _frame_ms(packet.pts, stream.time_base)
+            times.add(time_ms)
+            if packet.is_keyframe:
+                keyframes.add(time_ms)
+    return sorted(keyframes), sorted(times), rate
+
+
+def _frame_ms(pts: int, time_base) -> int:
+    return int(float(pts * time_base) * 1000)
+
+
+def _scene_targets(scenes: list[tuple[int, int]], keyframes: list[int], times: list[int], rate: float) -> list[int]:
+    """The exact frame time to sample for each scene: its first frame, or the keyframe it sits on.
+
+    Detectors can be a frame or two off a cut, while an encoder puts its keyframe on
+    the cut itself, so a nearby keyframe is the better first frame and costs less.
+    """
+    tolerance = KEYFRAME_SNAP_FRAMES * 1000 / rate
+    targets = []
+    for start_ms, _ in scenes:
+        at = bisect.bisect_left(keyframes, start_ms)
+        near = [k for k in keyframes[max(0, at - 1) : at + 1] if abs(k - start_ms) <= tolerance]
+        if near:
+            targets.append(min(near, key=lambda k: abs(k - start_ms)))
+            continue
+        first = bisect.bisect_left(times, start_ms)
+        targets.append(times[min(first, len(times) - 1)] if times else start_ms)
+    return targets
+
+
+def sample_scene_frames(
+    video: str | Path,
+    scenes: list[tuple[int, int]],
+    on_progress: Optional[Callable[[int, int], None]] = None,
+    max_patches: Optional[int] = None,
+    on_frame: Optional[Callable] = None,
+) -> list:
+    """One representative frame per scene, without decoding the whole video.
+
+    Returns exactly ``len(scenes)`` RGB ``np.uint8`` frames in scene order:
+    :func:`index_video` zips them against ``scenes`` and the embeddings, so a dropped
+    frame would shift every later scene onto the wrong timestamp. Scenes past the last
+    decodable frame get that last frame; a video with no decodable frames raises.
+
+    Each scene gets its first frame, or its midpoint when that first frame is blank
+    (see :func:`is_blank_frame`).
+
+    Packets are dropped whenever no wanted frame remains before the next keyframe. A
+    wanted keyframe needs only its own packet; any other frame needs every packet up
+    to it, including leading pictures decoded after the following keyframe. Empty
+    packets flush the decoder's delayed frames, so they are always sent.
+
+    A decoder fed only some packets outputs frames out of order and can omit some, so
+    frames are matched to scenes by exact time, never by arrival. Frames that never
+    appear and the midpoints of blank scenes are then fetched with a seek each.
+
+    ``on_progress(done, total)`` fires about once per percent. ``max_patches`` is as in
+    :func:`sample_frames`. ``on_frame(index, frame)`` sees each frame as it is ready, so
+    embedding can start while the decode runs; blank scenes arrive after the rest, so it
+    is not in scene order.
+    """
+    import av
+
+    from .decode import close_video, open_video
+
+    if not scenes:
+        return []
+
+    total = len(scenes)
+    keyframes, times, rate = _packet_times(video)
+    keyframe_set = set(keyframes)
+    targets = _scene_targets(scenes, keyframes, times, rate)
+    wanted: dict[int, list[int]] = {}
+    for index, time_ms in enumerate(targets):
+        wanted.setdefault(time_ms, []).append(index)
+    between_keyframes = sorted(t for t in wanted if t not in keyframe_set)
+
+    step = max(1, total // 100)
+    out: list = [None] * total
+    blank: list[int] = []
+    done = reported = 0
+
+    def report() -> None:
+        nonlocal reported
+        if on_progress and done != reported and (done - reported >= step or done == total):
+            reported = done
+            on_progress(done, total)
+
+    def to_rgb(frame):
+        if max_patches is None:
+            return frame.to_ndarray(format="rgb24")
+        width, height = _sample_size(frame.width, frame.height, max_patches)
+        return frame.reformat(width=width, height=height, format="rgb24", interpolation="AREA").to_ndarray()
+
+    def keep(index: int, nd) -> None:
+        nonlocal done
+        out[index] = nd
+        done += 1
+        if on_frame is not None:
+            on_frame(index, nd)
+
+    def settle(index: int, nd) -> None:
+        if is_blank_frame(nd):
+            out[index] = nd
+            blank.append(index)
+        else:
+            keep(index, nd)
+
+    def take(frame, time_base) -> None:
+        if frame.pts is None:
+            return
+        indexes = wanted.get(_frame_ms(frame.pts, time_base))
+        if not indexes:
+            return
+        try:
+            nd = to_rgb(frame)
+        except (av.FFmpegError, ValueError):
+            return
+        del wanted[_frame_ms(frame.pts, time_base)]
+        for index in indexes:
+            settle(index, nd)
+        report()
+
+    def fetch(time_ms: int):
+        try:
+            container.seek(time_ms * 1000, backward=True)
+            for frame in container.decode(stream):
+                if frame.pts is not None and _frame_ms(frame.pts, stream.time_base) >= time_ms:
+                    return to_rgb(frame)
+        except (av.FFmpegError, ValueError):
+            pass
+        return None
+
+    container = open_video(video)
+    stream = container.streams.video[0]
+    stream.thread_type = "AUTO"
+    try:
+        decoding = True
+        next_key = float("inf")
+        previous_key = -1
+        pending = 0
+        last_raw = None
+
+        def between_keyframes_pending() -> bool:
+            nonlocal pending
+            while pending < len(between_keyframes) and (
+                between_keyframes[pending] not in wanted or between_keyframes[pending] < previous_key
+            ):
+                pending += 1
+            return pending < len(between_keyframes) and between_keyframes[pending] < next_key
+
+        for packet in container.demux(stream):
+            if not wanted:
+                break
+            send = decoding
+            if packet.is_keyframe and packet.pts is not None:
+                key_ms = _frame_ms(packet.pts, stream.time_base)
+                at = bisect.bisect_left(keyframes, key_ms)
+                previous_key = keyframes[at - 1] if at > 0 else -1
+                next_key = keyframes[at + 1] if at + 1 < len(keyframes) else float("inf")
+                decoding = between_keyframes_pending()
+                send = decoding or key_ms in wanted
+            if not send and packet.size:
+                continue
+            for frame in packet.decode():
+                last_raw = frame
+                take(frame, stream.time_base)
+            decoding = decoding and between_keyframes_pending()
+
+        for time_ms in sorted(wanted):
+            nd = fetch(time_ms)
+            for index in wanted[time_ms]:
+                if nd is not None:
+                    settle(index, nd)
+        report()
+
+        for index in sorted(blank):
+            start_ms, end_ms = scenes[index]
+            nd = fetch((start_ms + end_ms) // 2)
+            keep(index, nd if nd is not None else out[index])
+            report()
+
+        if done < total:
+            nd = to_rgb(last_raw) if last_raw is not None else None
+            if nd is None:
+                raise ValueError(f"No decodable frames in {video}")
+            for index in range(total):
+                if out[index] is None:
+                    keep(index, nd)
+            report()
+    finally:
+        close_video(container, stream)
 
     return out
 
@@ -298,7 +496,6 @@ def index_video(
     accurate: bool = False,
     method: str = DETECTOR_KEYFRAME,
     generate_thumbnails: bool = True,
-    motion: bool = True,
     scenes: Optional[list[tuple[int, int]]] = None,
     on_progress: Optional[ProgressCallback] = None,
 ) -> int:
@@ -311,9 +508,8 @@ def index_video(
     ``scenes`` (from :func:`precut_scenes`) skips detection and indexes exactly
     those ranges, for an episode the app already cut; ``method`` is then unused.
 
-    ``motion`` also measures each scene's start/end movement during the same
-    decode (see :mod:`motion`). Skipped with a log line when OpenCV is missing,
-    so indexing never fails over the optional part.
+    Motion tags need every scene's last frames, so they are not measured here;
+    ``amverge scout motion`` adds them afterward (see :func:`backfill_motion`).
     """
     from ..infra.ipc import log
     from .embedding import is_model_loaded, pack_embedding
@@ -336,16 +532,14 @@ def index_video(
             log(f"[diag] scene scout {video_path.name} | no scenes detected")
             return 0
         log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes")
-    collector = _motion_collector(scenes, video_path.name) if motion else None
     # embeds batches as they are sampled, so the gpu works while the decode runs
     embedder = _BackgroundEmbedder(device=device, max_patches=max_patches, batch_size=batch_size)
     report("sampling", 0, len(scenes))
     try:
-        frames = sample_frames(
+        frames = sample_scene_frames(
             video_path,
             scenes,
             on_progress=lambda done, total: report("sampling", done, total),
-            boundary=collector,
             max_patches=max_patches,
             on_frame=embedder.add,
         )
@@ -382,15 +576,6 @@ def index_video(
         rows.append((index, start_ms, end_ms, pack_embedding(vector), thumbnail))
 
     scoutdb.insert_scenes(database, video_id, rows)
-
-    if collector is not None:
-        from .motion import MOTION_VERSION
-
-        report("motion", 0, len(scenes))
-        measured = collector.finish(on_progress=lambda done, total: report("motion", done, total))
-        written = scoutdb.insert_scene_motion(database, video_id, measured, MOTION_VERSION)
-        log(f"[diag] scene scout {video_path.name} | motion measured for {written} scenes")
-
     scoutdb.mark_video_complete(database, video_id)
     report("done", len(rows), len(rows))
     log(f"[diag] scene scout {video_path.name} | indexed {len(rows)} scenes successfully")
@@ -404,22 +589,22 @@ _END = object()
 class _BackgroundEmbedder:
     """Embeds sampled frames on a worker thread, a batch at a time, while the decode runs.
 
-    The vectors are exactly what one :func:`embedding.embed_frames` call over the
-    whole list gives: same frames, same order, same batches. The model loads on
-    the worker too, so that wait overlaps the decode as well.
+    Frames may arrive in any order; :meth:`finish` returns their vectors in scene
+    order. The model loads on the worker too, so that wait overlaps the decode as well.
     """
 
     def __init__(self, *, device: Optional[str], max_patches: int, batch_size: int):
         self._queue: queue.Queue = queue.Queue()
         self._rows: list = []
+        self._order: list[int] = []
         self._done = 0
         self._error: Optional[BaseException] = None
         self._abandoned = False
         self._thread = threading.Thread(target=self._run, args=(device, max_patches, batch_size), daemon=True)
         self._thread.start()
 
-    def add(self, frame) -> None:
-        self._queue.put(frame)
+    def add(self, index: int, frame) -> None:
+        self._queue.put((index, frame))
 
     def _run(self, device: Optional[str], max_patches: int, batch_size: int) -> None:
         from .embedding import embed_frames
@@ -431,7 +616,8 @@ class _BackgroundEmbedder:
                 if self._abandoned:
                     return
                 if item is not _END:
-                    batch.append(item)
+                    self._order.append(item[0])
+                    batch.append(item[1])
                 if batch and (item is _END or len(batch) >= batch_size):
                     self._rows.append(embed_frames(batch, device=device, max_patches=max_patches, batch_size=batch_size))
                     self._done += len(batch)
@@ -456,25 +642,14 @@ class _BackgroundEmbedder:
             raise self._error
         if reported != self._done:
             on_progress(self._done, total)
-        return np.vstack(self._rows) if self._rows else np.empty((0, 0), dtype=np.float32)
+        if not self._rows:
+            return np.empty((0, 0), dtype=np.float32)
+        return np.vstack(self._rows)[np.argsort(self._order)]
 
     def abandon(self) -> None:
         """Stops the worker after a failed decode: frames still queued are dropped, not embedded."""
         self._abandoned = True
         self._queue.put(_END)
-
-
-def _motion_collector(scenes: list[tuple[int, int]], name: str):
-    from ..infra.ipc import log
-
-    try:
-        from .motion import BoundaryCollector
-
-        import cv2  # noqa: F401 - checked here so a missing install skips motion instead of failing mid-decode
-    except ImportError:
-        log(f"[diag] scene scout {name} | opencv not installed, skipping motion tags")
-        return None
-    return BoundaryCollector(scenes)
 
 
 def backfill_motion(

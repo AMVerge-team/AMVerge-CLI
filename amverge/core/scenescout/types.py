@@ -113,6 +113,8 @@ class SearchOptions:
     include_unclear: bool = False
     # (video path, start_ms, end_ms) left out so a flow clip that is itself indexed can't match itself
     exclude_range: Optional[tuple[str, int, int]] = None
+    # leaves out scenes this close to their video's start or end; a video too short to have a middle keeps all
+    skip_edges_ms: int = 0
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)

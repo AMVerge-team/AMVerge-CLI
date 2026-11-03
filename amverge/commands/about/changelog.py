@@ -7,6 +7,15 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v1.2.0", [
+        "Scene Scout indexing is several times faster: it decodes only the frames it needs instead of the whole episode",
+        "Each scene is now indexed by its first frame, or its midpoint when the first frame is blank",
+        "scout add no longer measures motion tags, and --no-motion is gone; run scout motion to add them",
+        "Fixed Scene Scout decodes hanging when they stopped before the end of a video",
+        "export --exact-copy: separate copy exports re-encode scenes a copy cannot cut exactly, so neighbouring scenes no longer export the same frames",
+        "Fixed re-encoded exports with copied audio keeping audio from before the clip",
+        "scout search --skip-edges-ms leaves out scenes near a video's start and end, where openings and endings usually sit",
+    ]),
     ("v1.1.0", [
         "Merging clips of different sizes keeps each one's aspect ratio: the largest size becomes the frame, the rest get black bars",
     ]),

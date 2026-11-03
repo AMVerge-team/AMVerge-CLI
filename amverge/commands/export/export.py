@@ -47,7 +47,8 @@ def _build_jobs(scenes: list[dict], video: Path) -> list[ExportJob]:
     ``cutting.smart_cut``): ``codec="copy"`` keyframe-snaps that range fresh
     (``engine._smartcut_ranges``, deduplicated into one continuous span per
     contiguous run for ``--merge``), and any other codec re-encodes it to
-    the exact boundary. A preview clip cut in ``copy`` mode is independently
+    the exact boundary. ``--exact-copy`` re-encodes the copy ranges that would
+    not land exactly (``engine._exact_copy_jobs``). A preview clip cut in ``copy`` mode is independently
     keyframe-snapped and can carry a few frames of bleed from its neighbor;
     reusing it directly for a re-encode export would bake that bleed into an
     output that's supposed to be exact.
@@ -86,6 +87,7 @@ def export(
     container: str = typer.Option("mp4", "--container", help="mp4 · mov · avi (avi: copy only)"),
     hardware: str = typer.Option("auto", "--hardware", help="auto · gpu · cpu"),
     workers: int = typer.Option(1, "--workers", help="Parallel clip exports"),
+    exact_copy: bool = typer.Option(False, "--exact-copy", help="With --codec copy and no --merge: re-encode scenes a copy cannot cut exactly, in the source's codec"),
     audio_track: int = typer.Option(-1, "--audio-track", help="0-based audio index to hoist to first (preview language); -1 = keep order"),
     audio_language: str = typer.Option("", "--audio-language", help="language tag to hoist (eng, jpn); resolved per clip, beats --audio-track"),
     ipc: bool = typer.Option(False, "--ipc", hidden=True, help="Emit IPC events for the Tauri app (no Rich UI)"),
@@ -182,6 +184,7 @@ def export(
         hardware=hardware, merge=merge, workers=max(1, workers),
         audio_track=(audio_track if audio_track >= 0 else None),
         audio_language=(audio_language.strip().lower() or None),
+        exact_copy=exact_copy,
     )
 
     abort = threading.Event()

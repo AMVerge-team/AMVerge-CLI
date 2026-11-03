@@ -379,7 +379,7 @@ def collect_scene_motion(
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> dict[int, tuple[Optional[Raw], Optional[Raw]]]:
     """Decodes ``video`` once and measures every scene's boundaries (used by backfill)."""
-    from .decode import open_video
+    from .decode import close_video, open_video
 
     collector = BoundaryCollector(scenes)
     container = open_video(video)
@@ -401,7 +401,7 @@ def collect_scene_motion(
             if collector._index >= len(scenes):
                 break
     finally:
-        container.close()
+        close_video(container, stream)
     return collector.finish()
 
 
@@ -416,10 +416,12 @@ def measure_clip(path: str, start_ms: Optional[int] = None, end_ms: Optional[int
     """
     import av
 
+    from .decode import close_video
+
     container = av.open(str(path), options={"err_detect": "ignore_err"})
+    stream = container.streams.video[0]
+    stream.thread_type = "AUTO"
     try:
-        stream = container.streams.video[0]
-        stream.thread_type = "AUTO"
         duration_ms = int(float(stream.duration * stream.time_base) * 1000) if stream.duration else None
         if duration_ms is None and container.duration:
             duration_ms = int(container.duration / 1000)
@@ -431,7 +433,7 @@ def measure_clip(path: str, start_ms: Optional[int] = None, end_ms: Optional[int
         start_frames = _read_window(container, stream, lo, min(hi, lo + BOUNDARY_MS))
         end_frames = _read_window(container, stream, max(lo, hi - BOUNDARY_MS), hi, keep_rgb_last=True)
     finally:
-        container.close()
+        close_video(container, stream)
 
     last_rgb = end_frames.pop("last_rgb", None)
     start_raw = measure_boundary([f for f, _ in start_frames["grey"]], [t for _, t in start_frames["grey"]])

@@ -9,13 +9,13 @@ import sys
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Callable, Optional
 
 from ..infra.binaries import get_ffmpeg, get_ffprobe
-from ..video.probe_utils import probe_seek_origin, probe_video_rate
+from ..video.probe_utils import probe_seek_origin, probe_video_duration, probe_video_rate
 from . import params
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -56,16 +56,21 @@ class ExportSettings:
     audio_track: Optional[int] = None  # 0-based audio index to hoist to first (preview language)
     audio_language: Optional[str] = None  # language tag to hoist; resolved per input
     audio_single: bool = False  # keep only the selected track (mixed-layout merges)
+    exact_copy: bool = False  # separate copy exports: re-encode ranges a copy cannot cut exactly
 
 
 @dataclass
 class ExportJob:
     """One scene to export. ``seek_ms``/``dur_ms`` set → cut that range from a
-    source episode; both None → ``input`` is a whole pre-cut clip file."""
+    source episode; both None → ``input`` is a whole pre-cut clip file.
+    ``codec`` overrides the export's codec for this scene, on the GPU when ``gpu``
+    (see :func:`_exact_copy_jobs`)."""
     scene_index: int
     input: str
     seek_ms: Optional[int] = None
     dur_ms: Optional[int] = None
+    codec: Optional[str] = None
+    gpu: bool = False
 
 
 # -- probing / gpu ---------------------------------------------------------
@@ -389,11 +394,12 @@ def _export_one(
                                           settings.audio_single, source_frame_rate,
                                           frames, grid_rate, seek_origin, video_filter)
 
-    if settings.codec == "copy":
+    codec = job.codec or settings.codec
+    if codec == "copy":
         _run_ffmpeg(ffmpeg, copy_args(), total_ms, on_frac, abort, active)
         return "copy"
     else:
-        return _reencode_with_fallback(job, out_path, settings.codec, settings, ffmpeg,
+        return _reencode_with_fallback(job, out_path, codec, settings, ffmpeg,
                                        use_gpu, total_ms, on_frac, abort, active, reencode_args)
 
 
@@ -435,20 +441,64 @@ def _contiguous_range_groups(jobs: list[ExportJob], eps: float = 0.05) -> list[l
     return groups
 
 
+def _exact_copy_jobs(
+    jobs: list[ExportJob], settings: ExportSettings, ffprobe: str, gpu_encoders: set[str],
+) -> list[ExportJob]:
+    """Marks every range a stream copy cannot cut exactly to re-encode instead.
+
+    Snapping a range outward to keyframes makes neighbours inside one keyframe
+    interval export the same frames, and overlap or run long otherwise, which
+    separate clips cannot hide the way a merge does. Each source's ranges go
+    through ``smart_cut.split_exact_copy_scenes``, the check import uses, so a
+    keyframe-detected episode stays entirely stream copied. A source whose codec
+    the container cannot hold re-encoded (AVI is copy only) keeps snapping.
+    """
+    from ..cutting.smart_cut import split_exact_copy_scenes
+    from ..keyframes.keyframe_align import get_keyframe_timestamps_pyav, get_open_gop_keyframes
+
+    by_source: dict[str, list[ExportJob]] = {}
+    for job in jobs:
+        if job.seek_ms is not None:
+            by_source.setdefault(job.input, []).append(job)
+
+    reencode: dict[int, ExportJob] = {}
+    for source, source_jobs in by_source.items():
+        codec = params.exact_copy_codec(
+            probe_video_codec(ffprobe, source), probe_is_10bit(ffprobe, source), settings.container,
+        )
+        if codec is None:
+            continue
+        gpu = resolve_use_gpu(replace(settings, codec=codec), gpu_encoders)
+        scenes = [
+            {"start_sec": job.seek_ms / 1000.0, "end_sec": (job.seek_ms + (job.dur_ms or 0)) / 1000.0, "job": job}
+            for job in sorted(source_jobs, key=lambda j: j.seek_ms)
+        ]
+        _, inexact = split_exact_copy_scenes(
+            scenes,
+            get_keyframe_timestamps_pyav(source),
+            get_open_gop_keyframes(source),
+            probe_video_rate(source),
+            probe_video_duration(source),
+        )
+        for scene in inexact:
+            reencode[id(scene["job"])] = replace(scene["job"], codec=codec, gpu=gpu)
+    return [reencode.get(id(job), job) for job in jobs]
+
+
 def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool, frame_timed: bool = False) -> list[ExportJob]:
     """For remux (copy) exports, cut each source range as a true,
     keyframe-snapped stream copy (see ``cutting.smart_cut``) so every
     boundary is guaranteed decodable. Whole-file jobs (already a pre-cut
-    clip, no range) pass through untouched. Returns jobs rewritten to point
-    at the cut temp clips (no range).
+    clip, no range) and jobs with their own ``codec`` pass through untouched.
+    Returns jobs rewritten to point at the cut temp clips (no range).
 
     ``dedupe`` groups consecutive ranges from the same source into one
     continuous span before snapping, instead of snapping each independently.
     Set it for merge jobs (see ``_merge``): two adjacent AI scenes whose
     shared cut isn't on a keyframe would otherwise each widen outward across
     it on their own, duplicating that whole span once concatenated back
-    together. Independent (non-merge) exports leave it unset -- each scene
-    is meant to stand alone, bleed and all.
+    together. Independent (non-merge) exports leave it unset -- without
+    ``ExportSettings.exact_copy`` each scene stands alone, bleed and all.
     """
     from ..cutting.smart_cut import copy_container_suffix, copy_range
     from ..keyframes.keyframe_align import get_keyframe_timestamps_pyav
@@ -460,7 +510,7 @@ def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool, frame_t
     groups = _contiguous_range_groups(jobs) if dedupe else [[job] for job in jobs]
     for group in groups:
         job = group[0]
-        if job.seek_ms is None:
+        if job.seek_ms is None or job.codec:
             out.append(job)
             continue
         src = job.input
@@ -609,8 +659,12 @@ def export_scenes(
         geometry = {src: probe_frame_geometry(ffprobe, src) for src in dict.fromkeys(j.input for j in jobs)}
         canvas = params.merge_canvas(list(geometry.values()))
 
+    if settings.codec == "copy" and settings.exact_copy and not settings.merge:
+        progress(2, "Checking scenes against keyframes...")
+        jobs = _exact_copy_jobs(jobs, settings, ffprobe, gpu_encoders)
+
     smartcut_tmp = None
-    if settings.codec == "copy" and canvas is None and any(j.seek_ms is not None for j in jobs):
+    if settings.codec == "copy" and canvas is None and any(j.seek_ms is not None and not j.codec for j in jobs):
         smartcut_tmp = tempfile.TemporaryDirectory()
         progress(5, "Cutting source ranges...")
         jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), dedupe=settings.merge,
@@ -665,7 +719,9 @@ def _individual(
         out_path = _out_name(out_dir, file_stem, job.scene_index, settings.container)
         total_ms = job.dur_ms or probe_duration_ms(ffprobe, job.input)
         langs = probe_audio_languages(ffprobe, job.input) if settings.audio_language else None
-        mode = _export_one(job, out_path, settings, ffmpeg, use_gpu, source_video_codec, source_is_10bit, source_frame_rate,
+        job_gpu = job.gpu if job.codec else use_gpu
+        job_rate = probe_video_frame_rate(ffprobe, job.input) if job.codec else source_frame_rate
+        mode = _export_one(job, out_path, settings, ffmpeg, job_gpu, source_video_codec, source_is_10bit, job_rate,
                            total_ms, None, abort, active, audio_count, langs)
         with done_lock:
             done += 1
