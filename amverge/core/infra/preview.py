@@ -4,8 +4,10 @@ from __future__ import annotations
 
 Writes throttled JPEG snapshots of in-progress frames and emits
 ``PREVIEW_FRAME|<tag>|<path>|<seq>`` events on stderr for a consuming app
-to display. Ping-pongs between two files per tag so a half-written JPEG is
-never read by the other side. No-op when OpenCV is unavailable.
+to display. Frames are written at full resolution, quality 95 with 4:4:4
+chroma, so the app can compare them against the source like the real output.
+Ping-pongs between two files per tag so a half-written JPEG is never read by
+the other side. No-op when OpenCV is unavailable.
 """
 
 import os
@@ -21,13 +23,15 @@ class PreviewEmitter:
         tag: str,
         out_dir: str | None = None,
         min_pct_delta: float = 2.0,
-        max_width: int = 640,
+        max_width: int | None = None,
+        quality: int = 95,
     ) -> None:
         self.tag = tag
         self.dir = out_dir or os.path.join(tempfile.gettempdir(), "amverge_preview")
         os.makedirs(self.dir, exist_ok=True)
         self.min_delta = min_pct_delta
         self.max_width = max_width
+        self.quality = quality
         self._last_pct = -1e9
         self._seq = 0
         self._slot = 0
@@ -53,13 +57,16 @@ class PreviewEmitter:
             try:
                 frame = frame_bgr
                 h, w = frame.shape[:2]
-                if w > self.max_width:
+                if self.max_width and w > self.max_width:
                     scale = self.max_width / float(w)
                     frame = cv2.resize(
                         frame, (self.max_width, max(1, int(h * scale))),
                         interpolation=cv2.INTER_AREA,
                     )
-                ok = cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
+                params = [cv2.IMWRITE_JPEG_QUALITY, self.quality]
+                if hasattr(cv2, "IMWRITE_JPEG_SAMPLING_FACTOR"):
+                    params += [cv2.IMWRITE_JPEG_SAMPLING_FACTOR, cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444]
+                ok = cv2.imwrite(path, frame, params)
             except Exception:
                 ok = False
             if ok:

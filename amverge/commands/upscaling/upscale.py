@@ -66,6 +66,41 @@ def _ensure_model_downloaded(model_key, auto_yes=False):
         raise typer.Exit(1)
 
 
+def _upscale_ipc(model, entry, input, output, scale, preset, mode, fit_w, fit_h):
+    from ...core.infra.ipc import emit_progress
+    from ...core.infra.preview import ipc_callbacks
+    from ...core.upscaling.engine import upscale_model
+    from ...core.upscaling.artcnn import is_artcnn_downloaded, download_artcnn
+    from ...core.upscaling.weight_loader import is_weight_downloaded, download_weights
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    progress_cb, preview_cb = ipc_callbacks("upscale")
+    method = entry["method"]
+    try:
+        if method == "ml" and not is_weight_downloaded(model):
+            if not download_weights(model, progress_cb=progress_cb):
+                raise RuntimeError(f"Could not download {entry.get('name', model)}")
+        elif method == "onnx" and not is_artcnn_downloaded(model):
+            download_artcnn(model, progress_cb=progress_cb)
+
+        upscale_model(
+            model_key=model,
+            input_path=str(input.resolve()),
+            output_path=str(output.resolve()),
+            scale=scale,
+            preset=preset,
+            fit_w=fit_w,
+            fit_h=fit_h,
+            mode=mode if method == "shader" else None,
+            progress_cb=progress_cb,
+            preview_cb=preview_cb,
+        )
+    except Exception as e:
+        emit_progress(100, f"Error: {e}")
+        raise typer.Exit(1)
+    emit_progress(100, f"Saved: {output}")
+
+
 def upscale(
     model: str = typer.Option("adore", "--model", "-m", help="Model key from registry (see --list-models)"),
     input: Path = typer.Argument(None, help="Input video file"),
@@ -79,6 +114,7 @@ def upscale(
     credits: bool = typer.Option(False, "--credits", help="Show credits for upscaling technologies"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm all download prompts"),
     no_monitor: bool = typer.Option(False, "--no-monitor", help="Disable system monitor during upscale"),
+    ipc: bool = typer.Option(False, "--ipc", hidden=True, help="Emit structured PROGRESS|/PREVIEW_FRAME| events on stderr (app mode)"),
 ) -> None:
     """Upscale video using AI super-resolution.
 
@@ -130,6 +166,10 @@ def upscale(
     if preset not in QUALITY_PRESETS:
         fail(f"Unknown preset '{preset}'. Valid: {', '.join(QUALITY_PRESETS.keys())}")
         raise typer.Exit(1)
+
+    if ipc:
+        _upscale_ipc(model, entry, input, output, scale, preset, mode, fit_w, fit_h)
+        return
 
     banner("upscale")
 

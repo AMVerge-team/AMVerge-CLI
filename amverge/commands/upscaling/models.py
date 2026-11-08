@@ -97,6 +97,7 @@ def models(
             download,
             depth=show_both or depth_only,
             interpolation=show_both or interpolation_only,
+            upscale=show_both or upscale_only,
         )
         return
 
@@ -241,7 +242,7 @@ def _do_interp_download(key):
     ok(f"Downloaded: {key}")
 
 
-def _models_json(delete, download, depth, interpolation):
+def _models_json(delete, download, depth, interpolation, upscale):
     import json
 
     if download:
@@ -249,7 +250,10 @@ def _models_json(delete, download, depth, interpolation):
     elif delete:
         result = {"result": _json_delete(delete)}
     else:
-        payload = {"depth": [], "interpolation": []}
+        payload = {"depth": [], "interpolation": [], "upscale": []}
+        if upscale:
+            for key, entry in UPSCALE_REGISTRY.items():
+                payload["upscale"].append(_upscale_json_entry(key, entry))
         if depth:
             from ...core.depth import MODEL_CONFIGS, is_model_downloaded
             for key, cfg in MODEL_CONFIGS.items():
@@ -294,8 +298,60 @@ def _interp_json_entry(key, entry):
     }
 
 
+def _upscale_json_entry(key, entry):
+    from ...core.upscaling.artcnn import get_artcnn_path
+
+    size = entry.get("size_bytes", 0)
+    method = entry.get("method")
+    if method == "ml" and os.path.exists(get_weight_path(key)):
+        size = os.path.getsize(get_weight_path(key))
+    elif method == "onnx" and os.path.exists(get_artcnn_path(key)):
+        size = os.path.getsize(get_artcnn_path(key))
+    return {
+        "key": key,
+        "name": entry.get("name", key),
+        "method": method,
+        "file": entry.get("file", ""),
+        "sizeBytes": size,
+        "downloaded": _upscale_is_downloaded_check(key),
+        "label": "/".join(f"{s}x" for s in entry.get("scales", [])),
+        "summary": entry.get("description", ""),
+        "scales": entry.get("scales", []),
+    }
+
+
+def _json_upscale_action(key, action):
+    from ...core.upscaling.artcnn import download_artcnn, get_artcnn_path
+
+    method = UPSCALE_REGISTRY[key].get("method")
+    if action == "download":
+        if method == "ml":
+            if not _upscale_download(key):
+                raise RuntimeError(f"Failed: {key}")
+        elif method == "onnx":
+            download_artcnn(key)
+        else:
+            download_anime4k_shaders()
+        return f"Downloaded: {key}"
+
+    if method == "shader":
+        raise RuntimeError(f"{key} cannot be deleted here")
+    path = get_weight_path(key) if method == "ml" else get_artcnn_path(key)
+    if not os.path.exists(path):
+        raise RuntimeError(f"Not on disk: {key}")
+    os.unlink(path)
+    return f"Deleted: {key}"
+
+
 def _json_download(key):
     from ...core.depth import MODEL_CONFIGS, download_model as _depth_download
+
+    if key in UPSCALE_REGISTRY:
+        try:
+            message = _json_upscale_action(key, "download")
+            return {"ok": True, "action": "download", "key": key, "message": message}
+        except Exception as exc:
+            return {"ok": False, "action": "download", "key": key, "message": str(exc)}
 
     if key in MODEL_CONFIGS:
         try:
@@ -318,6 +374,13 @@ def _json_download(key):
 
 def _json_delete(key):
     from ...core.depth import MODEL_CONFIGS
+
+    if key in UPSCALE_REGISTRY:
+        try:
+            message = _json_upscale_action(key, "delete")
+            return {"ok": True, "action": "delete", "key": key, "message": message}
+        except Exception as exc:
+            return {"ok": False, "action": "delete", "key": key, "message": str(exc)}
 
     if key in MODEL_CONFIGS:
         path = _depth_model_path(key)

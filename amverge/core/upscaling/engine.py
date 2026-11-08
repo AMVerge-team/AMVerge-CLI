@@ -58,7 +58,7 @@ def _frame_to_tensor(frame, device):
     return tensor.to(device)
 
 
-def _upscale_ml(input_path, output_path, model_key, entry, scale, preset, fit_w, fit_h, progress_cb):
+def _upscale_ml(input_path, output_path, model_key, entry, scale, preset, fit_w, fit_h, progress_cb, preview_cb=None):
     q = QUALITY_PRESETS.get(preset, QUALITY_PRESETS["high"])
     device = _get_device()
 
@@ -121,11 +121,19 @@ def _upscale_ml(input_path, output_path, model_key, entry, scale, preset, fit_w,
             del tensor
             result = _tensor_to_frame(upscaled, str(device))
             del upscaled
+            if result.shape[0] != out_h or result.shape[1] != out_w:
+                shrinking = result.shape[1] > out_w
+                result = cv2.resize(
+                    result, (out_w, out_h),
+                    interpolation=cv2.INTER_AREA if shrinking else cv2.INTER_LANCZOS4,
+                )
             if ffmpeg_proc.poll() is None:
                 try:
                     ffmpeg_proc.stdin.write(result.tobytes())
                 except (BrokenPipeError, OSError):
                     break
+            if preview_cb:
+                preview_cb(result, min(100, int(((frame_idx + 1) / total_frames) * 100)))
             del result
             frame_idx += 1
             if frame_idx % 5 == 0:
@@ -160,6 +168,7 @@ def upscale_model(
     mode: Optional[str] = None,
     progress_cb: Optional[Callable[[int, str], None]] = None,
     monitor: Optional[SystemMonitor] = None,
+    preview_cb: Optional[Callable[..., None]] = None,
 ) -> None:
     input_path = Path(input_path).resolve()
     output_path = Path(output_path).resolve()
@@ -176,7 +185,7 @@ def upscale_model(
     if method == "ml":
         if not UPSCALE_AVAILABLE:
             raise RuntimeError("ML upscaling requires torch and opencv. Run: pip install amverge[upscale]")
-        _upscale_ml(input_path, output_path, model_key, entry, scale, preset, fit_w, fit_h, progress_cb)
+        _upscale_ml(input_path, output_path, model_key, entry, scale, preset, fit_w, fit_h, progress_cb, preview_cb)
 
     elif method == "shader":
         if mode:

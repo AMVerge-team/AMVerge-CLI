@@ -15,6 +15,9 @@ _CLI_ENTRIES = [
         "export --exact-copy: separate copy exports re-encode scenes a copy cannot cut exactly, so neighbouring scenes no longer export the same frames",
         "Fixed re-encoded exports with copied audio keeping audio from before the clip",
         "scout search --skip-edges-ms leaves out scenes near a video's start and end, where openings and endings usually sit",
+        "upscale --ipc and upscale models in models --json, so the app can run upscaling as a post-export pass",
+        "Fixed upscaling garbling the output when a model's native scale differs from --scale",
+        "Upscales no longer encode with -tune animation, which broke bright, smooth frames into blocks",
     ]),
     ("v1.1.0", [
         "Merging clips of different sizes keeps each one's aspect ratio: the largest size becomes the frame, the rest get black bars",

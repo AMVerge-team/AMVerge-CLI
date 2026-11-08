@@ -5,11 +5,11 @@
     "artcnn": "https://github.com/Artoriuz/ArtCNN/releases/download/v1.6.2/"
   },
   "presets": {
-    "archival": {"crf": 14, "x264": "slow",      "tune": "animation"},
-    "high":     {"crf": 17, "x264": "slow",      "tune": "animation"},
-    "balanced": {"crf": 20, "x264": "medium",    "tune": "animation"},
-    "fast":     {"crf": 22, "x264": "veryfast",  "tune": "animation"},
-    "draft":    {"crf": 26, "x264": "ultrafast", "tune": "animation"}
+    "archival": {"crf": 14, "x264": "slow"},
+    "high":     {"crf": 17, "x264": "slow"},
+    "balanced": {"crf": 20, "x264": "medium"},
+    "fast":     {"crf": 22, "x264": "veryfast"},
+    "draft":    {"crf": 26, "x264": "ultrafast"}
   },
   "models": {
     "adore": {
@@ -19,7 +19,7 @@
       "credit": "based on AniSmooth by moongetsu",
       "description": "High quality anime upscaler",
       "category": "upscale",
-      "file": "adore.pth",
+      "file": "adore.pth", "size_bytes": 5657417,
       "hash": "443378bdc6db6cf4a75eea61ee7afc78b2c4b6a4d3b3981a40ff61f38bbc8f1a"
     },
     "shufflecugan": {
@@ -29,7 +29,7 @@
       "credit": "based on AniSmooth by moongetsu",
       "description": "General purpose anime upscaler",
       "category": "upscale",
-      "file": "sudo_shuffle_cugan_9.584.969.pth",
+      "file": "sudo_shuffle_cugan_9.584.969.pth", "size_bytes": 5657003,
       "hash": "88a6d89f04eaf27a9f7b60937857768a6bc04fb360670bd9951ef533acab0616"
     },
     "fallin_soft": {
@@ -39,7 +39,7 @@
       "credit": "based on AniSmooth by moongetsu",
       "description": "Soft anime upscaler, preserves fine details",
       "category": "upscale",
-      "file": "Fallin_soft.pth",
+      "file": "Fallin_soft.pth", "size_bytes": 5657145,
       "hash": "910aa56a9a1187df97c3284177da1bc66836679350b2613191340734937e9960"
     },
     "fallin_strong": {
@@ -49,7 +49,7 @@
       "credit": "based on AniSmooth by moongetsu",
       "description": "Strong anime upscaler with more sharpening",
       "category": "upscale",
-      "file": "Fallin_strong.pth",
+      "file": "Fallin_strong.pth", "size_bytes": 5657145,
       "hash": "14b8415199aa66a6507725408a66758ba2bff9286736f19f7f07524efd821a56"
     },
     "anime4k": {
@@ -150,7 +150,7 @@
       "scales": [2],
       "credit": "by xinntao",
       "description": "General purpose 2x upscaler (67M params)",
-      "file": "RealESRGAN_x2plus.pth",
+      "file": "RealESRGAN_x2plus.pth", "size_bytes": 67061725,
       "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"
     },
     "realesrgan-x4": {
@@ -159,7 +159,7 @@
       "scales": [4],
       "credit": "by xinntao",
       "description": "General purpose 4x upscaler (67M params)",
-      "file": "RealESRGAN_x4plus.pth",
+      "file": "RealESRGAN_x4plus.pth", "size_bytes": 67040989,
       "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
     },
     "realesrgan-anime": {
@@ -168,7 +168,7 @@
       "scales": [4],
       "credit": "by xinntao",
       "description": "Anime-optimized 4x upscaler (18M params, fast)",
-      "file": "RealESRGAN_x4plus_anime_6B.pth",
+      "file": "RealESRGAN_x4plus_anime_6B.pth", "size_bytes": 17938799,
       "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth"
     }
   }
