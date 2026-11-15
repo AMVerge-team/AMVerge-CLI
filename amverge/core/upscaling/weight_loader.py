@@ -1,12 +1,8 @@
 import os
-import hashlib
-import ssl
-import urllib.request
-import urllib.error
-from http.client import IncompleteRead
 
 from ..infra.config import get_models_dir
-from .registry import get_model, get_ml_models
+from ..infra.model_store import compute_sha256, download_with_resume
+from .registry import get_ml_models, get_model
 
 WEIGHTS_DIR = get_models_dir()
 
@@ -56,23 +52,12 @@ def is_weight_downloaded(model_key):
         return False
 
 
-def _compute_sha256(file_path):
-    sha256 = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        while True:
-            data = f.read(65536)
-            if not data:
-                break
-            sha256.update(data)
-    return sha256.hexdigest().lower()
-
-
 def verify_weight_hash(model_key, weight_path):
     entry = get_model(model_key)
     expected_hash = entry.get("hash") if entry else None
     if expected_hash is None:
         raise ValueError(f"No verified hash registered for {model_key}")
-    calculated_hash = _compute_sha256(weight_path)
+    calculated_hash = compute_sha256(weight_path)
     if calculated_hash != expected_hash:
         raise RuntimeError(
             f"Weight hash mismatch for {model_key}. "
@@ -87,100 +72,30 @@ def download_weights(model_key, force=False, retries=3, progress_cb=None):
         raise ValueError("Unknown model key: " + model_key)
 
     filename = entry["file"]
-    subdir = model_key
-    folder_path = os.path.join(WEIGHTS_DIR, subdir)
+    folder_path = os.path.join(WEIGHTS_DIR, model_key)
     dest = os.path.join(folder_path, filename)
 
     if os.path.exists(dest) and not force:
         return True
 
-    os.makedirs(folder_path, exist_ok=True)
     temp_folder = os.path.join(folder_path, "TEMP")
-    os.makedirs(temp_folder, exist_ok=True)
     temp_path = os.path.join(temp_folder, filename)
 
-    url = entry["url"]
-
-    for attempt in range(retries):
-        try:
-            existing = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
-
-            headers = {"User-Agent": "amverge/1.0"}
-            if existing > 0 and attempt > 0:
-                headers["Range"] = f"bytes={existing}-"
-            elif existing > 0:
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
-                existing = 0
-
-            req = urllib.request.Request(url, headers=headers)
-            resp = urllib.request.urlopen(
-                req, timeout=120, context=ssl._create_unverified_context()
-            )
-
-            code = resp.getcode()
-            if code not in (200, 206):
-                raise urllib.error.HTTPError(url, code, "", None, None)
-
-            total = int(resp.headers.get("Content-Length", 0))
-            file_mode = "ab" if code == 206 else "wb"
-            if code == 206:
-                downloaded = existing
-                total = existing + total
-            else:
-                downloaded = 0
-            chunk_size = 65536
-
-            with open(temp_path, file_mode) as f:
-                while True:
-                    chunk = resp.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress_cb and total > 0 and downloaded % (chunk_size * 8) < chunk_size:
-                        pct = min(99, int(downloaded * 100 / total))
-                        progress_cb(pct, f"Downloading {filename} {pct}%")
-
-            if progress_cb:
-                progress_cb(100, f"Downloading {filename} 100%")
-
-            if total > 0 and downloaded != total:
-                raise ConnectionError(
-                    f"Incomplete: received {downloaded} of {total} bytes"
-                )
-
-            os.rename(temp_path, dest)
-
-            expected_hash = entry.get("hash")
-            if expected_hash:
-                actual = _compute_sha256(dest)
-                if actual != expected_hash:
-                    os.unlink(dest)
-                    raise RuntimeError(
-                        f"Download hash mismatch for {model_key}. "
-                        f"Expected: {expected_hash[:12]}..., Got: {actual[:12]}..."
-                    )
-
-            try:
-                os.rmdir(temp_folder)
-            except OSError:
-                pass
-
-            return True
-
-        except (urllib.error.URLError, urllib.error.HTTPError, IncompleteRead,
-                ConnectionError, TimeoutError, RuntimeError) as e:
-            if attempt == retries - 1:
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
-                return False
-
-    return False
+    try:
+        return download_with_resume(
+            entry["url"],
+            dest,
+            temp_path=temp_path,
+            expected_hash=entry.get("hash"),
+            retries=retries,
+            progress_cb=progress_cb,
+            progress_formatter=lambda pct, _dl, _tot: f"Downloading {filename} {pct}%",
+            done_message=f"Downloading {filename} 100%",
+            cleanup_temp_dir=temp_folder,
+            remove_dest_on_hash_mismatch=True,
+        )
+    except Exception:
+        return False
 
 
 def _remap_state_dict_keys(state_dict, model):

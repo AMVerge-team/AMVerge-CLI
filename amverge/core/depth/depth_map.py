@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import gc
 import os
-import ssl
 import subprocess
 import sys
 import threading
-import urllib.error
-import urllib.request
 from typing import Callable, Optional
 
-from ..infra.config import get_amverge_config_dir
 from ..infra.binaries import get_ffmpeg, get_ffprobe
+from ..infra.config import get_amverge_config_dir
+from ..infra.model_store import download_with_resume
 # Re-exported: the registry is kept torch-free so listing models does not pay
 # for importing the ML stack.
 from .registry import (  # noqa: F401
@@ -58,59 +56,15 @@ def download_model(
         return
 
     dest = _get_model_path(encoder)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    temp = dest + ".part"
-    url = config["url"]
-    ctx = ssl._create_unverified_context()
-
-    for attempt in range(3):
-        try:
-            existing = os.path.getsize(temp) if os.path.exists(temp) else 0
-            headers: dict[str, str] = {"User-Agent": "amverge/1.0"}
-            if existing > 0 and attempt > 0:
-                headers["Range"] = f"bytes={existing}-"
-            elif existing > 0:
-                os.remove(temp)
-                existing = 0
-
-            req = urllib.request.Request(url, headers=headers)
-            resp = urllib.request.urlopen(req, timeout=120, context=ctx)
-            code = resp.getcode()
-            if code not in (200, 206):
-                raise urllib.error.HTTPError(url, code, "", None, None)
-
-            total = int(resp.headers.get("Content-Length", 0))
-            total = total + existing if total > 0 and code == 206 else total
-
-            file_mode = "ab" if code == 206 else "wb"
-            with open(temp, file_mode) as f:
-                downloaded = existing
-                while True:
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress_cb and total > 0:
-                        pct = min(99, int(downloaded / total * 99))
-                        size_mb = downloaded / 1024 / 1024
-                        total_mb = total / 1024 / 1024
-                        progress_cb(pct, f"Downloading Depth-Anything-V2-{encoder}... {size_mb:.0f}/{total_mb:.0f} MB")
-
-            if os.path.exists(temp) and os.path.getsize(temp) > 0:
-                os.replace(temp, dest)
-            return
-
-        except Exception:
-            if attempt >= 2:
-                if os.path.exists(temp):
-                    try:
-                        os.unlink(temp)
-                    except OSError:
-                        pass
-                raise
-
-    raise RuntimeError(f"Failed to download model {encoder}")
+    download_with_resume(
+        config["url"],
+        dest,
+        retries=3,
+        progress_cb=progress_cb,
+        progress_formatter=lambda _pct, dl, tot: (
+            f"Downloading Depth-Anything-V2-{encoder}... {dl / 1024 / 1024:.0f}/{tot / 1024 / 1024:.0f} MB"
+        ),
+    )
 
 
 def _mux_audio(video_path: str, audio_source_path: str) -> bool:

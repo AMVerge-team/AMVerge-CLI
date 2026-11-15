@@ -28,7 +28,7 @@ import av
 from ..export.params import frame_cut_args, frame_grid_range
 from ..infra.binaries import get_ffmpeg, get_ffprobe
 from ..video.probe_utils import probe_seek_origin, probe_video_rate
-from ..infra.ipc import emit_progress, log
+from ..infra.ipc import emit_event, emit_progress, log
 
 CutMode = Literal["copy", "reencode"]
 
@@ -671,3 +671,102 @@ def cut_all_scenes(
                 on_ready(result)
 
     return results
+
+
+def run_two_phase_cuts(
+    input_file: Path,
+    scenes_out_dir: Path,
+    phase1_scenes: list[dict],
+    phase2_scenes: list[dict],
+    keyframes: list[float],
+    use_cuda: bool = False,
+    *,
+    poster_path_fn: Callable[[int], Path | str] | None = None,
+    emit_ipc_events: bool = False,
+    phase1_runner: Callable[[Callable[[dict], None]], None] | None = None,
+    on_phase1_complete: Callable[[], None] | None = None,
+    on_phase2_start: Callable[[int], None] | None = None,
+    progress_range: tuple[int, int] = (82, 99),
+) -> dict[int, dict]:
+    cut_by_idx: dict[int, dict] = {}
+    thumb_pool = ThreadPoolExecutor(max_workers=4) if poster_path_fn else None
+    thumb_futures: list = []
+
+    if poster_path_fn:
+        from ..thumbnails import make_thumbnail
+
+    def _gen_thumb(scene_index: int, clip_path: str, poster_offset_sec: float) -> None:
+        assert poster_path_fn is not None
+        if make_thumbnail(clip_path, str(poster_path_fn(scene_index)), seek_sec=poster_offset_sec):
+            if emit_ipc_events:
+                emit_event(f"THUMBNAIL_READY|{scene_index}")
+        else:
+            log(f"Thumbnail produced no frame for scene {scene_index}")
+
+    def _on_clip_ready(result: dict) -> None:
+        scene_index = result["scene_index"]
+        cut_by_idx[scene_index] = result
+        clip_path = result.get("clip_path") or ""
+        clip_mode = result.get("clip_mode") or "failed"
+        poster_offset_sec = result.get("poster_offset_sec") or 0.0
+        if emit_ipc_events:
+            emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
+        if thumb_pool and clip_path and os.path.exists(clip_path):
+            thumb_futures.append(
+                thumb_pool.submit(_gen_thumb, scene_index, clip_path, poster_offset_sec)
+            )
+
+    if phase1_runner is not None:
+        phase1_runner(_on_clip_ready)
+    else:
+        cut_all_scenes(
+            input_file=input_file,
+            scenes=phase1_scenes,
+            keyframes=keyframes,
+            out_dir=scenes_out_dir,
+            mode="copy",
+            use_cuda=use_cuda,
+            max_workers=8,
+            on_ready=_on_clip_ready,
+            progress_range=progress_range,
+            emit_progress_updates=emit_ipc_events,
+        )
+
+    if on_phase1_complete is not None:
+        on_phase1_complete()
+    elif emit_ipc_events:
+        emit_event("PHASE1_COMPLETE")
+
+    phase2_total = len(phase2_scenes)
+    phase2_done = 0
+    if phase2_total:
+        if on_phase2_start is not None:
+            on_phase2_start(phase2_total)
+        elif emit_ipc_events:
+            emit_event(f"REENCODE_PROGRESS|0|{phase2_total}")
+
+        def _on_reencode_ready(result: dict) -> None:
+            nonlocal phase2_done
+            _on_clip_ready(result)
+            phase2_done += 1
+            if emit_ipc_events:
+                emit_event(f"REENCODE_PROGRESS|{phase2_done}|{phase2_total}")
+
+        cut_all_scenes(
+            input_file=input_file,
+            scenes=phase2_scenes,
+            keyframes=keyframes,
+            out_dir=scenes_out_dir,
+            mode="reencode",
+            use_cuda=use_cuda,
+            max_workers=2,
+            on_ready=_on_reencode_ready,
+            emit_progress_updates=False,
+        )
+
+    if thumb_pool:
+        for future in thumb_futures:
+            future.result()
+        thumb_pool.shutdown(wait=True)
+
+    return cut_by_idx

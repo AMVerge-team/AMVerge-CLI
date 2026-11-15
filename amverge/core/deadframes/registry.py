@@ -1,15 +1,6 @@
-import json
-from pathlib import Path
+from ..infra.model_store import load_registry_json
 
-
-def _load_registry():
-    json_path = Path(__file__).parent / "registry.json"
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data
-
-
-_registry_data = _load_registry()
+_registry_data = load_registry_json(__file__)
 
 _sources = _registry_data["_source"]
 

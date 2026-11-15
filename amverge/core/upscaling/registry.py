@@ -1,17 +1,8 @@
-import json
-from pathlib import Path
+from ..infra.model_store import QUALITY_PRESETS as _BASE_PRESETS, load_registry_json
 
+_registry_data = load_registry_json(__file__)
 
-def _load_registry():
-    json_path = Path(__file__).parent / "registry.json"
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data
-
-
-_registry_data = _load_registry()
-
-QUALITY_PRESETS = _registry_data["presets"]
+QUALITY_PRESETS = _registry_data.get("presets", _BASE_PRESETS)
 _sources = _registry_data["_source"]
 
 

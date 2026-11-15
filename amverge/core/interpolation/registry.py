@@ -1,22 +1,10 @@
-import json
-from pathlib import Path
+from ..infra.model_store import QUALITY_PRESETS as _BASE_PRESETS, load_registry_json
 
-
-def _load_registry():
-    json_path = Path(__file__).parent / "registry.json"
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data
-
-
-_registry_data = _load_registry()
+_registry_data = load_registry_json(__file__)
 
 QUALITY_PRESETS = {
-    "archival": {"crf": 14, "x264": "slow", "tune": "animation"},
-    "high":     {"crf": 17, "x264": "slow", "tune": "animation"},
-    "balanced": {"crf": 20, "x264": "medium", "tune": "animation"},
-    "fast":     {"crf": 22, "x264": "veryfast", "tune": "animation"},
-    "draft":    {"crf": 26, "x264": "ultrafast", "tune": "animation"},
+    name: {**preset, "tune": "animation"}
+    for name, preset in _BASE_PRESETS.items()
 }
 
 _sources = _registry_data["_source"]

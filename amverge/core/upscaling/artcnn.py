@@ -1,14 +1,12 @@
 import gc
 import os
-import ssl
 import subprocess
 import threading
-import urllib.error
-import urllib.request
 
 import numpy as np
 
 from ..infra.config import get_models_dir
+from ..infra.model_store import download_with_resume
 from .ffmpeg_helpers import CREATE_NO_WINDOW, build_ffmpeg_pipe, get_color_args, mux_audio
 from .registry import QUALITY_PRESETS, get_model
 
@@ -49,61 +47,17 @@ def is_artcnn_downloaded(model_key):
 def _download_file(url, dest, label, progress_cb, retries):
     if os.path.exists(dest):
         return True
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    temp_path = dest + ".part"
-    ctx = ssl._create_unverified_context()
-
-    for attempt in range(retries):
-        try:
-            existing = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
-            headers = {"User-Agent": "amverge/1.0"}
-            if existing > 0 and attempt > 0:
-                headers["Range"] = f"bytes={existing}-"
-            elif existing > 0:
-                os.remove(temp_path)
-                existing = 0
-
-            req = urllib.request.Request(url, headers=headers)
-            resp = urllib.request.urlopen(req, timeout=120, context=ctx)
-            code = resp.getcode()
-            if code not in (200, 206):
-                raise urllib.error.HTTPError(url, code, "", None, None)
-
-            total = int(resp.headers.get("Content-Length", 0))
-            file_mode = "ab" if code == 206 else "wb"
-            downloaded = existing if code == 206 else 0
-            if code == 206:
-                total = existing + total
-            chunk_size = 65536
-
-            with open(temp_path, file_mode) as f:
-                while True:
-                    chunk = resp.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress_cb and total > 0:
-                        pct = min(99, int(downloaded * 100 / total))
-                        progress_cb(pct, f"Downloading {label}... {pct}%")
-
-            if total > 0 and downloaded != total:
-                raise ConnectionError(f"Incomplete: {downloaded}/{total} bytes")
-
-            os.rename(temp_path, dest)
-            if progress_cb:
-                progress_cb(100, f"Downloaded {label}")
-            return True
-        except (urllib.error.URLError, urllib.error.HTTPError, ConnectionError,
-                TimeoutError, OSError) as e:
-            if attempt == retries - 1:
-                if os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except OSError:
-                        pass
-                raise RuntimeError(f"Download failed for {label}: {e}")
-    return False
+    try:
+        return download_with_resume(
+            url,
+            dest,
+            retries=retries,
+            progress_cb=progress_cb,
+            progress_formatter=lambda pct, _dl, _tot: f"Downloading {label}... {pct}%",
+            done_message=f"Downloaded {label}",
+        )
+    except Exception as e:
+        raise RuntimeError(f"Download failed for {label}: {e}") from e
 
 
 def download_artcnn(model_key, progress_cb=None, retries=3):

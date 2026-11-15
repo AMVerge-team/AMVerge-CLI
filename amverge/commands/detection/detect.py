@@ -224,38 +224,25 @@ def _detect_ipc(
             fail("transnetv2_pytorch not installed. Run: pip install amverge[ml]")
             raise typer.Exit(1)
 
-        from concurrent.futures import ThreadPoolExecutor
-
         import torch
-        from ...core.detection.ai_scene_detection import (
-            decode_and_detect_scenes,
-            decode_video_frames_nelux,
-            run_model_one_pass,
-        )
+        from ...core.detection.ai_scene_detection import detect_transnet_with_fallback
         from ...core.video.scene_utils import scenes_to_objects
-        from ...core.cutting.smart_cut import cut_all_scenes
-        from ...core.thumbnails import make_thumbnail
+        from ...core.cutting.smart_cut import run_two_phase_cuts
 
         # `decode_method` has already been downgraded to ffmpeg by the caller if
         # Nelux is not importable, so reaching here with "nelux" means it loaded
         decode_label = "Nelux" if decode_method == "nelux" else "FFmpeg"
         emit_progress(0, f"Starting TransNetV2 detection ({decode_label} decode)...")
 
-        scenes_secs = scenes_frames = None
-        if decode_method == "nelux":
-            try:
-                frames = decode_video_frames_nelux(video_path)
-                scenes_secs, scenes_frames = run_model_one_pass(
-                    frames, video_path, threshold=ai_threshold
-                )
-            except Exception as exc:
-                # NVDEC turns down files it cannot handle in hardware, 10-bit
-                # H.264 above all. a property of this file, not the machine
-                log(f"NVDEC cannot decode this file ({exc}), using FFmpeg")
-                emit_progress(0, "Starting TransNetV2 detection (FFmpeg decode)...")
-
-        if scenes_secs is None:
-            scenes_secs, scenes_frames = decode_and_detect_scenes(video_path, threshold=ai_threshold)
+        scenes_secs, scenes_frames = detect_transnet_with_fallback(
+            video_path,
+            use_nelux=(decode_method == "nelux"),
+            threshold=ai_threshold,
+            on_nelux_fallback=lambda exc: (
+                log(f"NVDEC cannot decode this file ({exc}), using FFmpeg"),
+                emit_progress(0, "Starting TransNetV2 detection (FFmpeg decode)..."),
+            ),
+        )
 
         keyframes: list[float] = []
 
@@ -286,69 +273,23 @@ def _detect_ipc(
             for s in raw_scenes
         ]))
 
-        cut_by_idx: dict[int, dict] = {}
-
-        # per clip as it lands: one pass at the end leaves the grid posterless
-        thumb_pool = ThreadPoolExecutor(max_workers=4)
-        thumb_futures: list = []
-
-        def _gen_thumb(scene_index: int, clip_path: str, poster_offset_sec: float) -> None:
-            if make_thumbnail(clip_path, _thumb_path(scene_index), seek_sec=poster_offset_sec):
-                emit_event(f"THUMBNAIL_READY|{scene_index}")
-
-        def _on_clip_ready(result: dict) -> None:
-            scene_index = result["scene_index"]
-            cut_by_idx[scene_index] = result
-            clip_path = result.get("clip_path") or ""
-            clip_mode = result.get("clip_mode") or "failed"
-            poster_offset_sec = result.get("poster_offset_sec") or 0.0
-            emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
-            if clip_path and os.path.exists(clip_path):
-                thumb_futures.append(thumb_pool.submit(_gen_thumb, scene_index, clip_path, poster_offset_sec))
-
         emit_progress(82, f"Cutting {len(phase1_scenes)} scenes (lossless copy)...")
-        cut_all_scenes(
+        cut_by_idx = run_two_phase_cuts(
             input_file=video,
-            scenes=phase1_scenes,
+            scenes_out_dir=scenes_out_dir,
+            phase1_scenes=phase1_scenes,
+            phase2_scenes=phase2_scenes,
             keyframes=keyframes,
-            out_dir=scenes_out_dir,
-            mode="copy",
             use_cuda=(device == "cuda"),
-            max_workers=8,
-            on_ready=_on_clip_ready,
+            poster_path_fn=_thumb_path,
+            emit_ipc_events=True,
+            on_phase2_start=lambda total: (
+                emit_event(f"REENCODE_PROGRESS|0|{total}"),
+                emit_progress(90, f"Cutting {total} scenes (re-encode)..."),
+            ),
         )
 
-        emit_event("PHASE1_COMPLETE")
-
-        phase2_total = len(phase2_scenes)
-        phase2_done = 0
-
-        if phase2_total:
-            emit_event(f"REENCODE_PROGRESS|0|{phase2_total}")
-
-            def _on_reencode_ready(result: dict) -> None:
-                nonlocal phase2_done
-                _on_clip_ready(result)
-                phase2_done += 1
-                emit_event(f"REENCODE_PROGRESS|{phase2_done}|{phase2_total}")
-
-            emit_progress(90, f"Cutting {phase2_total} scenes (re-encode)...")
-            cut_all_scenes(
-                input_file=video,
-                scenes=phase2_scenes,
-                keyframes=keyframes,
-                out_dir=scenes_out_dir,
-                mode="reencode",
-                use_cuda=(device == "cuda"),
-                max_workers=2,
-                on_ready=_on_reencode_ready,
-                emit_progress_updates=False,
-            )
-
         emit_progress(95, "Finishing thumbnails...")
-        for future in thumb_futures:
-            future.result()
-        thumb_pool.shutdown(wait=True)
 
         scenes = []
         for s in raw_scenes:

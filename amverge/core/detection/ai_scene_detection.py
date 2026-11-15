@@ -533,3 +533,20 @@ def run_model_one_pass(
 
     scenes_secs = transnet_scenes_to_seconds(scenes_frames, video_fps)
     return scenes_secs, scenes_frames
+
+
+def detect_transnet_with_fallback(
+    video_path: str | Path,
+    *,
+    use_nelux: bool = False,
+    threshold: float = DEFAULT_THRESHOLD,
+    on_nelux_fallback: Callable[[Exception], None] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if use_nelux:
+        try:
+            frames = decode_video_frames_nelux(video_path)
+            return run_model_one_pass(frames, video_path, threshold=threshold)
+        except Exception as exc:
+            if on_nelux_fallback is not None:
+                on_nelux_fallback(exc)
+    return decode_and_detect_scenes(video_path, threshold=threshold)

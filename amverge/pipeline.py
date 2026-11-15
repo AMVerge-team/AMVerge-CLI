@@ -270,14 +270,10 @@ def detect_scenes(
             )
 
         import torch
-        from .core.detection.ai_scene_detection import (
-            decode_and_detect_scenes,
-            decode_video_frames_nelux,
-            run_model_one_pass,
-        )
+        from .core.detection.ai_scene_detection import detect_transnet_with_fallback
         from .core.detection.nelux_runtime import nelux_available
         from .core.video.scene_utils import scenes_to_objects
-        from .core.cutting.smart_cut import cut_all_scenes
+        from .core.cutting.smart_cut import run_two_phase_cuts
 
         import amverge.core.detection.ai_scene_detection as scene_det
         import amverge.core.cutting.smart_cut as smart_cut
@@ -301,22 +297,14 @@ def detect_scenes(
         smart_cut.emit_progress = _emit_patched
         try:
             _progress("detect", 0, f"Starting TransNetV2 detection ({decode_label} decode)...")
-            if effective_decode == "nelux":
-                try:
-                    frames = decode_video_frames_nelux(video_path)
-                except Exception as exc:
-                    # per-file, not per-machine: NVDEC cannot do 10-bit H.264 at all
-                    _progress("detect", 0, f"NVDEC cannot decode this file, using FFmpeg ({exc})")
-                    effective_decode = "ffmpeg"
-
-            if effective_decode == "nelux":
-                scenes_secs, scenes_frames = run_model_one_pass(
-                    frames, video_path, threshold=ai_threshold
-                )
-            else:
-                scenes_secs, scenes_frames = decode_and_detect_scenes(
-                    video_path, threshold=ai_threshold
-                )
+            scenes_secs, scenes_frames = detect_transnet_with_fallback(
+                video_path,
+                use_nelux=(effective_decode == "nelux"),
+                threshold=ai_threshold,
+                on_nelux_fallback=lambda exc: _progress(
+                    "detect", 0, f"NVDEC cannot decode this file, using FFmpeg ({exc})"
+                ),
+            )
         finally:
             scene_det.emit_progress = _orig_emit_scene
             smart_cut.emit_progress = _orig_emit_cut
@@ -328,13 +316,9 @@ def detect_scenes(
         device = "cuda" if torch.cuda.is_available() else "cpu"
         scenes_out_dir = Path(output_dir) / "scenes"
         scenes_out_dir.mkdir(parents=True, exist_ok=True)
-        cut_by_idx: dict[int, dict] = {}
 
         phase1_scenes = []
         phase2_scenes = raw_scenes
-
-        def _on_clip_ready(result: dict) -> None:
-            cut_by_idx[result["scene_index"]] = result
 
         total_count = len(raw_scenes)
         _progress("segment", 0, f"Phase 1/2: Cutting {len(phase1_scenes)}/{total_count} scenes (lossless copy)...")
@@ -342,30 +326,18 @@ def detect_scenes(
         smart_cut.emit_progress = _emit_patched
         _stage = "segment"
         try:
-            cut_all_scenes(
+            cut_by_idx = run_two_phase_cuts(
                 input_file=Path(video_path),
-                scenes=phase1_scenes,
+                scenes_out_dir=scenes_out_dir,
+                phase1_scenes=phase1_scenes,
+                phase2_scenes=phase2_scenes,
                 keyframes=keyframes,
-                out_dir=scenes_out_dir,
-                mode="copy",
                 use_cuda=(device == "cuda"),
-                max_workers=8,
-                on_ready=_on_clip_ready,
+                emit_ipc_events=False,
+                on_phase2_start=lambda n: _progress(
+                    "segment", 60, f"Phase 2/2: Re-encoding {n}/{total_count} scenes..."
+                ),
             )
-
-            if phase2_scenes:
-                _progress("segment", 60, f"Phase 2/2: Re-encoding {len(phase2_scenes)}/{total_count} scenes...")
-                cut_all_scenes(
-                    input_file=Path(video_path),
-                    scenes=phase2_scenes,
-                    keyframes=keyframes,
-                    out_dir=scenes_out_dir,
-                    mode="reencode",
-                    use_cuda=(device == "cuda"),
-                    max_workers=2,
-                    on_ready=_on_clip_ready,
-                    emit_progress_updates=False,
-                )
         finally:
             scene_det.emit_progress = _orig_emit_scene
             smart_cut.emit_progress = _orig_emit_cut

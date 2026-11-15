@@ -30,12 +30,11 @@ def backend(
         decode_video_frames_nelux,
         run_model_one_pass,
     )
-    from ...core.thumbnails import make_thumbnail
     from ...core.detection.keyframe import detect_scenes_by_keyframe
     from ...core.video.probe_utils import probe_video_duration, probe_video_fps, probe_video_dimensions
     from ...core.video.scene_utils import scenes_to_objects, transnet_scenes_to_seconds
     from ...core.detection.short_scenes import merge_short_scenes
-    from ...core.cutting.smart_cut import cut_all_scenes, exact_copy_supported, split_exact_copy_scenes
+    from ...core.cutting.smart_cut import exact_copy_supported, run_two_phase_cuts, split_exact_copy_scenes
     from ...core.cutting.segmenter import run_ffmpeg_segment_streaming
 
     input_video = Path(video_path)
@@ -239,37 +238,13 @@ def backend(
                     f"{len(phase2_scenes)} reencode (ai exact-keyframe copies)"
                 )
 
-            cut_by_idx: dict[int, dict] = {}
-
-
-            import concurrent.futures as _futures
-
-            thumb_pool = _futures.ThreadPoolExecutor(max_workers=4)
-            thumb_futures: list = []
-
-            def _gen_thumb(scene_index: int, clip_path: str, poster_offset_sec: float) -> None:
-                if make_thumbnail(clip_path, str(_poster_path(scene_index)), seek_sec=poster_offset_sec):
-                    emit_event(f"THUMBNAIL_READY|{scene_index}")
-                else:
-                    log(f"Thumbnail produced no frame for scene {scene_index}")
-
-            def _on_clip_ready(result: dict) -> None:
-                scene_index = result["scene_index"]
-                cut_by_idx[scene_index] = result
-                clip_path = result.get("clip_path") or ""
-                clip_mode = result.get("clip_mode") or "failed"
-                poster_offset_sec = result.get("poster_offset_sec") or 0.0
-                emit_event(f"CLIP_READY|{scene_index}|{clip_path}|{clip_mode}")
-                if clip_path and Path(clip_path).exists():
-                    thumb_futures.append(thumb_pool.submit(_gen_thumb, scene_index, clip_path, poster_offset_sec))
-
             use_segmenter = (
                 use_keyframe
                 and len(scenes) > 1
                 and all(s["scene_index"] == i for i, s in enumerate(scenes))
             )
 
-            if use_segmenter:
+            def _run_segmenter(on_clip_ready) -> None:
                 scenes_out_dir.mkdir(parents=True, exist_ok=True)
                 emitted: set[int] = set()
 
@@ -277,7 +252,7 @@ def backend(
                     if idx in emitted:
                         return
                     emitted.add(idx)
-                    _on_clip_ready({
+                    on_clip_ready({
                         "scene_index": idx,
                         "clip_path": path,
                         "clip_mode": "copy",
@@ -303,53 +278,27 @@ def backend(
                     if idx in emitted:
                         continue
                     clip = scenes_out_dir / f"scene_{idx:04d}.mp4"
-                    _on_clip_ready({
+                    on_clip_ready({
                         "scene_index": idx,
                         "clip_path": str(clip) if clip.exists() else None,
                         "clip_mode": "copy" if clip.exists() else "failed",
                     })
-            else:
-                cut_all_scenes(
-                    input_file=input_video,
-                    scenes=phase1_scenes,
-                    keyframes=keyframes,
-                    out_dir=scenes_out_dir,
-                    mode="copy",
-                    use_cuda=use_cuda,
-                    max_workers=8,
-                    on_ready=_on_clip_ready,
-                    progress_range=(82, 99),
-                )
 
-            emit_progress(100, "Keyframe clips ready")
-            emit_event("PHASE1_COMPLETE")
-
-            phase2_total = len(phase2_scenes)
-            phase2_done = 0
-            if phase2_total:
-                emit_event(f"REENCODE_PROGRESS|0|{phase2_total}")
-
-            def _on_reencode_ready(result: dict) -> None:
-                nonlocal phase2_done
-                _on_clip_ready(result)
-                phase2_done += 1
-                emit_event(f"REENCODE_PROGRESS|{phase2_done}|{phase2_total}")
-
-            cut_all_scenes(
+            cut_by_idx = run_two_phase_cuts(
                 input_file=input_video,
-                scenes=phase2_scenes,
+                scenes_out_dir=scenes_out_dir,
+                phase1_scenes=phase1_scenes,
+                phase2_scenes=phase2_scenes,
                 keyframes=keyframes,
-                out_dir=scenes_out_dir,
-                mode="reencode",
                 use_cuda=use_cuda,
-                max_workers=2,
-                on_ready=_on_reencode_ready,
-                emit_progress_updates=False,
+                poster_path_fn=_poster_path,
+                emit_ipc_events=True,
+                phase1_runner=_run_segmenter if use_segmenter else None,
+                on_phase1_complete=lambda: (
+                    emit_progress(100, "Keyframe clips ready"),
+                    emit_event("PHASE1_COMPLETE"),
+                ),
             )
-
-            for _f in thumb_futures:
-                _f.result()
-            thumb_pool.shutdown(wait=True)
 
             for scene in scenes:
                 scene_index = scene["scene_index"]
