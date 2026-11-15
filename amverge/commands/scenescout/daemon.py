@@ -107,15 +107,21 @@ def run_daemon(
 
     def _idle_checker() -> None:
         nonlocal in_standby
+        unload_after = idle_seconds * 3
         while not stop_event.is_set():
             time.sleep(2.0)
             if idle_seconds <= 0:
                 continue
             with lock:
-                if not in_standby and not busy and embedding.is_model_loaded():
-                    if time.time() - last_active >= idle_seconds:
-                        embedding.standby_model()
-                        in_standby = True
+                if busy or not embedding.is_model_loaded():
+                    continue
+                idle_for = time.time() - last_active
+                if in_standby and idle_for >= unload_after:
+                    embedding.unload_model()
+                    in_standby = False
+                elif not in_standby and idle_for >= idle_seconds:
+                    embedding.standby_model()
+                    in_standby = True
 
     threading.Thread(target=_idle_checker, daemon=True).start()
 

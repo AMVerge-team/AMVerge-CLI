@@ -152,6 +152,7 @@ def add_residual(x, brange, residual, residual_scale_factor, scaling_vector=None
 
 
 attn_bias_cache: Dict[Tuple, Any] = {}
+_MAX_ATTN_BIAS_CACHE = 32
 
 
 def get_attn_bias_and_cat(x_list, branges=None):
@@ -161,6 +162,8 @@ def get_attn_bias_and_cat(x_list, branges=None):
     batch_sizes = [b.shape[0] for b in branges] if branges is not None else [x.shape[0] for x in x_list]
     all_shapes = tuple((b, x.shape[1]) for b, x in zip(batch_sizes, x_list))
     if all_shapes not in attn_bias_cache.keys():
+        if len(attn_bias_cache) >= _MAX_ATTN_BIAS_CACHE:
+            attn_bias_cache.pop(next(iter(attn_bias_cache)), None)
         seqlens = []
         for b, x in zip(batch_sizes, x_list):
             for _ in range(b):

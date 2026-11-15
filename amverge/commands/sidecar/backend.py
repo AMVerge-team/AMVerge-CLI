@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import uuid
 from pathlib import Path
@@ -166,6 +167,8 @@ def backend(
                 emit_progress(55, "Running TransNetV2 scene detection...")
                 _t_infer = _time.perf_counter()
                 scenes_secs, scenes_frames = run_model_one_pass(frames, input_video, device=device)
+                del frames
+                gc.collect()
                 log(
                     f"[diag] inference done: {len(scenes_secs)} scenes in "
                     f"{_time.perf_counter() - _t_infer:.2f}s (device={device})"

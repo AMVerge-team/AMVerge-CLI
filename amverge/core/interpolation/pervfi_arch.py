@@ -105,11 +105,16 @@ def softsplat(tenIn, tenFlow, tenMetric=None, strMode='avg'):
 
 _tenGrid_cache: dict = {}
 _tenFlowDiv_cache: dict = {}
+_MAX_WARP_CACHE = 16
 
 
 def warp(tenInput, tenFlow):
     k = (str(tenFlow.device), str(tenFlow.size()), str(tenFlow.dtype))
     if k not in _tenGrid_cache:
+        if len(_tenGrid_cache) >= _MAX_WARP_CACHE:
+            oldest = next(iter(_tenGrid_cache))
+            _tenGrid_cache.pop(oldest, None)
+            _tenFlowDiv_cache.pop(oldest, None)
         H, W = tenFlow.shape[2], tenFlow.shape[3]
         tenHorizontal = (
             torch.linspace(-1.0, 1.0, W, device=tenFlow.device, dtype=torch.float32)
