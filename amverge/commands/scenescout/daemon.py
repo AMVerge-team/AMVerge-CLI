@@ -125,6 +125,17 @@ def run_daemon(
 
     threading.Thread(target=_idle_checker, daemon=True).start()
 
+    def _prewarm() -> None:
+        nonlocal last_active
+        try:
+            embedding.ensure_loaded(resolved_device)
+            with lock:
+                last_active = time.time()
+        except Exception as exc:
+            log(f"[diag] scene scout prewarm skipped: {exc}")
+
+    threading.Thread(target=_prewarm, daemon=True).start()
+
     while True:
         with lock:
             busy = False

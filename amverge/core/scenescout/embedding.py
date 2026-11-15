@@ -12,7 +12,9 @@ Two rules the rest of the package depends on:
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import threading
 
 import numpy as np
 
@@ -21,6 +23,7 @@ from .types import EMBEDDING_MODEL_VERSION
 _MODEL = None
 _PROCESSOR = None
 _DEVICE: str | None = None
+_LOAD_LOCK = threading.RLock()
 
 
 class SceneScoutModelUnavailable(RuntimeError):
@@ -32,12 +35,10 @@ def is_available() -> bool:
 
     Called on the status path, so it must stay cheap and must not raise.
     """
-    try:
-        import torch  # noqa: F401
-        import transformers  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    return (
+        importlib.util.find_spec("torch") is not None
+        and importlib.util.find_spec("transformers") is not None
+    )
 
 
 def resolve_device(preferred: str | None = None) -> str:
@@ -90,47 +91,54 @@ def is_model_loaded() -> bool:
 
 def standby_model() -> bool:
     global _MODEL, _DEVICE
-    if _MODEL is None:
+    with _LOAD_LOCK:
+        if _MODEL is None:
+            return False
+        import torch
+        from ..infra.ipc import log
+        if _DEVICE == "cuda":
+            _MODEL = _MODEL.to("cpu")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            log("[diag] scene scout model moved to CPU standby")
+            return True
         return False
-    import torch
-    from ..infra.ipc import log
-    if _DEVICE == "cuda":
-        _MODEL = _MODEL.to("cpu")
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        log("[diag] scene scout model moved to CPU standby")
-        return True
-    return False
 
 
 def activate_model() -> bool:
     global _MODEL, _DEVICE
-    if _MODEL is None or _DEVICE != "cuda":
+    with _LOAD_LOCK:
+        if _MODEL is None or _DEVICE != "cuda":
+            return False
+        import torch
+        from ..infra.ipc import log
+        if torch.cuda.is_available():
+            _MODEL = _MODEL.to("cuda")
+            log("[diag] scene scout model resumed on CUDA")
+            return True
         return False
-    import torch
-    from ..infra.ipc import log
-    if torch.cuda.is_available():
-        _MODEL = _MODEL.to("cuda")
-        log("[diag] scene scout model resumed on CUDA")
-        return True
-    return False
 
 
 def unload_model() -> bool:
     global _MODEL, _PROCESSOR, _DEVICE
-    if _MODEL is None and _PROCESSOR is None:
-        return False
-    import gc
-    import torch
-    from ..infra.ipc import log
-    _MODEL = None
-    _PROCESSOR = None
-    _DEVICE = None
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    gc.collect()
-    log("[diag] scene scout model unloaded")
-    return True
+    with _LOAD_LOCK:
+        if _MODEL is None and _PROCESSOR is None:
+            return False
+        import gc
+        import torch
+        from ..infra.ipc import log
+        _MODEL = None
+        _PROCESSOR = None
+        _DEVICE = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        log("[diag] scene scout model unloaded")
+        return True
+
+
+def ensure_loaded(device: str | None = None):
+    return _load(device)
 
 
 def _load(device: str | None = None):
@@ -140,7 +148,6 @@ def _load(device: str | None = None):
     hub if it is not already cached. A token from ``HF_TOKEN`` is forwarded so
     gated checkpoints load.
     """
-    import os
     import warnings
     warnings.filterwarnings("ignore")
 
@@ -158,50 +165,62 @@ def _load(device: str | None = None):
 
     global _MODEL, _PROCESSOR, _DEVICE
 
-    device_str = resolve_device(device)
+    with _LOAD_LOCK:
+        device_str = resolve_device(device)
 
-    if _MODEL is not None and (device is None or device == _DEVICE):
-        if device_str == "cuda" and next(_MODEL.parameters()).device.type == "cpu":
-            activate_model()
-        return _MODEL, _PROCESSOR, _DEVICE
+        if _MODEL is not None and (device is None or device == _DEVICE):
+            if device_str == "cuda" and next(_MODEL.parameters()).device.type == "cpu":
+                activate_model()
+            return _MODEL, _PROCESSOR, _DEVICE
 
-    if device_str == "cuda":
-        major, _ = torch.cuda.get_device_capability()
-        dtype = torch.float16 if major >= 7 else torch.float32
-    else:
-        dtype = torch.float32
+        if device_str == "cuda":
+            major, _ = torch.cuda.get_device_capability()
+            dtype = torch.float16 if major >= 7 else torch.float32
+        else:
+            dtype = torch.float32
 
-    if device_str == "cpu":
-        _tune_cpu_threads()
+        if device_str == "cpu":
+            _tune_cpu_threads()
 
-    log(f"[diag] loading scene scout model on {device_str}...")
+        log(f"[diag] loading scene scout model on {device_str}...")
 
-    token = os.environ.get("HF_TOKEN") or None
-    attn_impl = (
-        "sdpa"
-        if hasattr(torch.nn.functional, "scaled_dot_product_attention")
-        else "eager"
-    )
+        token = os.environ.get("HF_TOKEN") or None
+        attn_impl = (
+            "sdpa"
+            if hasattr(torch.nn.functional, "scaled_dot_product_attention")
+            else "eager"
+        )
 
-    processor = AutoProcessor.from_pretrained(EMBEDDING_MODEL_VERSION, token=token)
+        try:
+            processor = AutoProcessor.from_pretrained(
+                EMBEDDING_MODEL_VERSION, token=token, local_files_only=True
+            )
+        except OSError:
+            processor = AutoProcessor.from_pretrained(
+                EMBEDDING_MODEL_VERSION, token=token
+            )
 
-    kwargs: dict = {
-        "pretrained_model_name_or_path": EMBEDDING_MODEL_VERSION,
-        "token": token,
-        "torch_dtype": dtype,
-        "attn_implementation": attn_impl,
-    }
-    model = AutoModel.from_pretrained(**kwargs)
+        base_kwargs: dict = {
+            "pretrained_model_name_or_path": EMBEDDING_MODEL_VERSION,
+            "token": token,
+            "dtype": dtype,
+            "attn_implementation": attn_impl,
+            "low_cpu_mem_usage": True,
+        }
+        try:
+            model = AutoModel.from_pretrained(**base_kwargs, local_files_only=True)
+        except OSError:
+            model = AutoModel.from_pretrained(**base_kwargs)
 
-    if device_str != "cpu":
-        model = model.to(device_str)
+        if device_str != "cpu":
+            model = model.to(device_str)
 
-    model.requires_grad_(False)
-    model.eval()
+        model.requires_grad_(False)
+        model.eval()
 
-    _MODEL, _PROCESSOR, _DEVICE = model, processor, device_str
-    log(f"[diag] scene scout model ready on {device_str} ({dtype})")
-    return model, processor, device_str
+        _MODEL, _PROCESSOR, _DEVICE = model, processor, device_str
+        log(f"[diag] scene scout model ready on {device_str} ({dtype})")
+        return model, processor, device_str
 
 
 def _normalize(features):

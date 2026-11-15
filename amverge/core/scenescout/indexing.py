@@ -632,7 +632,7 @@ class _BackgroundEmbedder:
         import numpy as np
 
         self._queue.put(_END)
-        reported = -1
+        reported = 0
         while self._thread.is_alive():
             self._thread.join(timeout=0.2)
             if self._done != reported:
