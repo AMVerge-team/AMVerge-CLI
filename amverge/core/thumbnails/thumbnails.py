@@ -9,8 +9,8 @@ from typing import Any, Callable
 import av
 from PIL import Image
 
-THUMB_WIDTH = 960
-THUMB_QUALITY = 95
+THUMB_WIDTH = 640
+THUMB_QUALITY = 86
 
 
 def make_thumbnail(clip_path: str, thumb_path: str, seek_sec: float = 0.0) -> bool:
@@ -49,7 +49,7 @@ def make_thumbnail(clip_path: str, thumb_path: str, seek_sec: float = 0.0) -> bo
         image = image.resize((THUMB_WIDTH, new_h), resample=Image.Resampling.LANCZOS)
         image.save(
             thumb_path, "JPEG",
-            quality=THUMB_QUALITY, optimize=True, progressive=True, subsampling=0,
+            quality=THUMB_QUALITY, progressive=True, subsampling=2,
         )
 
     try:

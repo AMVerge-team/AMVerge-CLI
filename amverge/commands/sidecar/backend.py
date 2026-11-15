@@ -26,11 +26,6 @@ def backend(
 
     Emits IPC events to stderr and final JSON to stdout.
     """
-    from ...core.detection.ai_scene_detection import (
-        decode_video_frames_ffmpeg,
-        decode_video_frames_nelux,
-        run_model_one_pass,
-    )
     from ...core.detection.keyframe import detect_scenes_by_keyframe
     from ...core.video.probe_utils import probe_video_duration, probe_video_fps, probe_video_dimensions
     from ...core.video.scene_utils import scenes_to_objects, transnet_scenes_to_seconds
@@ -53,6 +48,11 @@ def backend(
         detector_name = "detect_scenes_by_keyframe"
         log("[diag] scene backend via AMVerge CLI | method=keyframe_detection")
     else:
+        from ...core.detection.ai_scene_detection import (
+            decode_video_frames_ffmpeg,
+            decode_video_frames_nelux,
+            run_model_one_pass,
+        )
         try:
             import torch
         except ImportError:
@@ -224,15 +224,15 @@ def backend(
                 # ai cuts that already sit exactly on keyframes copy with no bleed; the rest re-encode
                 keyframes, phase1_scenes, phase2_scenes = [], [], scenes
                 if exact_copy_supported(input_video):
-                    from ...core.keyframes.keyframe_align import get_keyframe_timestamps_pyav, get_open_gop_keyframes
+                    from ...core.keyframes.keyframe_align import scan_keyframes
                     from ...core.video.probe_utils import probe_video_rate
 
                     emit_progress(82, "Checking scenes against keyframes...")
-                    keyframes = get_keyframe_timestamps_pyav(str(input_video))
+                    keyframes, open_gop = scan_keyframes(str(input_video))
                     phase1_scenes, phase2_scenes = split_exact_copy_scenes(
                         scenes,
                         keyframes,
-                        get_open_gop_keyframes(str(input_video)),
+                        open_gop,
                         probe_video_rate(input_video),
                         input_video_duration,
                     )

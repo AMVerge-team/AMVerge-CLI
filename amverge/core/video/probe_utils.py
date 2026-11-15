@@ -27,12 +27,55 @@ from ..infra.binaries import get_ffprobe
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
+@lru_cache(maxsize=64)
+def _probe_basic_metadata(
+    path_str: str, size: int, mtime_ns: int
+) -> tuple[float | None, float | None, int | None, int | None, str | None, Fraction | None]:
+    del size, mtime_ns
+    try:
+        with av.open(path_str) as container:
+            stream = next(iter(container.streams.video), None)
+            if stream is None:
+                return None, None, None, None, None, None
+            rate = stream.average_rate
+            base_rate = stream.base_rate or rate
+            fps = float(base_rate) if base_rate else None
+            duration = (
+                float(container.duration / av.time_base)
+                if container.duration is not None
+                else (
+                    float(stream.duration * stream.time_base)
+                    if stream.duration is not None and stream.time_base is not None
+                    else None
+                )
+            )
+            width = stream.codec_context.width or None
+            height = stream.codec_context.height or None
+            codec = stream.codec_context.name or None
+            avg_rate = Fraction(rate) if rate else None
+            return fps, duration, width, height, codec, avg_rate
+    except Exception:
+        return None, None, None, None, None, None
+
+
+def _cached_meta(input_video: str | Path):
+    p = Path(input_video)
+    try:
+        st = p.stat()
+        return _probe_basic_metadata(str(p), st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None, None, None, None, None, None
+
+
 def probe_video_fps(input_video: str | Path) -> float:
     """Get the frame rate of the first video stream.
 
     Returns:
         FPS as a float (e.g. 23.976, 24.0, 30.0).
     """
+    fps, _, _, _, _, _ = _cached_meta(input_video)
+    if fps is not None and fps > 0:
+        return fps
     cmd = [
         get_ffprobe(),
         "-v", "error",
@@ -54,12 +97,8 @@ def probe_video_fps(input_video: str | Path) -> float:
 def probe_video_codec(input_video: str | Path) -> str | None:
     """Codec name of the first video stream (``"h264"``, ``"mpeg4"``...), or None
     when the file has no readable video stream."""
-    try:
-        with av.open(str(input_video)) as container:
-            stream = next(iter(container.streams.video), None)
-            return stream.codec_context.name if stream else None
-    except Exception:
-        return None
+    _, _, _, _, codec, _ = _cached_meta(input_video)
+    return codec
 
 
 def probe_video_dimensions(input_video: str | Path) -> tuple[int, int]:
@@ -71,6 +110,9 @@ def probe_video_dimensions(input_video: str | Path) -> tuple[int, int]:
     Read as json by name: csv output appends an empty field per side-data block
     (a Dolby Vision stream prints ``3840x2160x``), which broke positional parsing.
     """
+    _, _, width, height, _, _ = _cached_meta(input_video)
+    if width and height:
+        return int(width), int(height)
     cmd = [
         get_ffprobe(),
         "-v", "error",
@@ -92,6 +134,9 @@ def probe_video_duration(input_video: str | Path) -> float:
     Returns:
         Duration in seconds as a float.
     """
+    _, duration, _, _, _, _ = _cached_meta(input_video)
+    if duration is not None and duration > 0:
+        return duration
     cmd = [
         get_ffprobe(),
         "-v", "error",
@@ -176,9 +221,5 @@ def probe_video_rate(input_video: str | Path) -> Fraction | None:
     (``30000/1001``, not ``29.97``), or None if it cannot be read. Frame-exact
     cutting needs the exact value: a float rate drifts off the frame grid.
     """
-    try:
-        with av.open(str(input_video)) as container:
-            rate = container.streams.video[0].average_rate
-        return Fraction(rate) if rate else None
-    except Exception:
-        return None
+    _, _, _, _, _, rate = _cached_meta(input_video)
+    return rate

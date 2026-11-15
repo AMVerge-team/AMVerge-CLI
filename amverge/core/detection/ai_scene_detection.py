@@ -13,6 +13,7 @@ Usage:
 """
 
 import contextlib
+import importlib.util
 import subprocess
 import sys
 import threading
@@ -36,11 +37,10 @@ from ..transnet.transnet_constants import (
     STRIDE,
 )
 
-try:
-    from transnetv2_pytorch import TransNetV2 as _TransNetV2
-    TRANSNET_AVAILABLE = True
-except ImportError:
-    TRANSNET_AVAILABLE = False
+TRANSNET_AVAILABLE = (
+    importlib.util.find_spec("transnetv2_pytorch") is not None
+    and importlib.util.find_spec("torch") is not None
+)
 
 DEFAULT_THRESHOLD = 0.5
 
@@ -97,13 +97,16 @@ class _WindowedScorer:
         device: str,
         window_size: int = WINDOW_SIZE,
         stride: int = STRIDE,
+        window_batch: int | None = None,
     ) -> None:
         self._model = model
         self._device = device
         self._window = window_size
         self._stride = stride
         self._pad = (window_size - stride) // 2
+        self._window_batch = window_batch if window_batch is not None else (8 if device == "cuda" else 4)
         self._buffer: list[np.ndarray] = []
+        self._pending_windows: list[np.ndarray] = []
         self._probs: list[float] = []
         self._count = 0
         self._last: np.ndarray | None = None
@@ -115,7 +118,7 @@ class _WindowedScorer:
         self._buffer.append(frame)
         self._last = frame
         self._count += 1
-        self._drain()
+        self._drain(flush=False)
 
     def finish(self) -> np.ndarray:
         """Pad the tail, score the remainder, return one probability per frame."""
@@ -125,24 +128,40 @@ class _WindowedScorer:
         remainder = self._count % self._stride
         tail_pad = self._pad + self._stride - (remainder if remainder else self._stride)
         self._buffer.extend([self._last] * tail_pad)
-        self._drain()
+        self._drain(flush=True)
 
         probs = np.asarray(self._probs, dtype=np.float32)
         if len(probs) < self._count:
             probs = np.pad(probs, (0, self._count - len(probs)))
         return probs[: self._count]
 
-    def _drain(self) -> None:
+    def _flush_windows(self) -> None:
+        if not self._pending_windows:
+            return
         import torch
+
+        batch_arr = np.stack(self._pending_windows)
+        self._pending_windows.clear()
+        tensor = torch.from_numpy(batch_arr).to(self._device)
+        with torch.inference_mode():
+            logits, _ = self._model(tensor)
+            preds = torch.sigmoid(logits)
+        preds_np = preds.detach().cpu().numpy()
+        if preds_np.ndim == 3 and preds_np.shape[-1] == 1:
+            preds_np = preds_np[..., 0]
+        elif preds_np.ndim == 1:
+            preds_np = preds_np[None, :]
+        for row in preds_np:
+            self._probs.extend(row[self._pad : self._pad + self._stride].tolist())
+
+    def _drain(self, flush: bool = False) -> None:
         while len(self._buffer) >= self._window:
-            batch = np.stack(self._buffer[: self._window])
-            tensor = torch.from_numpy(batch).unsqueeze(dim=0).to(self._device)
-            with torch.inference_mode():
-                logits, _ = self._model(tensor)
-                preds = torch.sigmoid(logits)
-            preds = preds.detach().cpu().numpy().squeeze()
-            self._probs.extend(preds[self._pad : self._pad + self._stride].tolist())
+            self._pending_windows.append(np.stack(self._buffer[: self._window]))
             self._buffer = self._buffer[self._stride :]
+            if len(self._pending_windows) >= self._window_batch:
+                self._flush_windows()
+        if flush:
+            self._flush_windows()
 
 
 def _scores_to_scenes(model, scores: np.ndarray, threshold: float) -> np.ndarray:
@@ -197,9 +216,10 @@ def decode_and_detect_scenes(
 
     cmd = [
         "ffmpeg", "-y",
+        "-flags2", "fast",
         "-i", str(input_video),
         "-pix_fmt", "rgb24",
-        "-vf", "scale=48:27",
+        "-vf", "scale=48:27:flags=fast_bilinear",
         "-f", "rawvideo",
         "pipe:1",
     ]
@@ -223,21 +243,29 @@ def decode_and_detect_scenes(
     scorer = _WindowedScorer(model, device)
     processed = 0
     last_progress = 19
+    chunk_frames = 256
+    chunk_bytes = chunk_frames * FRAME_BYTES
+    leftover = b""
 
     while True:
-        raw_frame = process.stdout.read(FRAME_BYTES)
-        if len(raw_frame) == 0:
+        chunk = process.stdout.read(chunk_bytes)
+        if not chunk:
             break
-        frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape(
-            FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS
+        buf = leftover + chunk
+        usable = (len(buf) // FRAME_BYTES) * FRAME_BYTES
+        leftover = buf[usable:]
+        if usable == 0:
+            continue
+        batch_frames = np.frombuffer(buf[:usable], dtype=np.uint8).reshape(
+            -1, FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS
         )
-        scorer.push(frame)
-
-        processed += 1
-        if processed % 10 == 0:
-            last_progress = _emit_loop_progress(
-                processed, total_frames, 20, 30, "Decoding video (FFmpeg)...", last_progress
-            )
+        for frame in batch_frames:
+            scorer.push(frame)
+            processed += 1
+            if processed % 100 == 0:
+                last_progress = _emit_loop_progress(
+                    processed, total_frames, 20, 30, "Decoding video (FFmpeg)...", last_progress
+                )
 
     process.stdout.close()
     process.wait()
@@ -280,9 +308,10 @@ def decode_video_frames_ffmpeg(input_video: str | Path) -> np.ndarray:
 
     cmd = [
         get_ffmpeg(), "-y",
+        "-flags2", "fast",
         "-i", str(input_video),
         "-pix_fmt", "rgb24",
-        "-vf", f"scale={FRAME_WIDTH}:{FRAME_HEIGHT}",
+        "-vf", f"scale={FRAME_WIDTH}:{FRAME_HEIGHT}:flags=fast_bilinear",
         "-f", "rawvideo",
         "pipe:1",
     ]
@@ -292,33 +321,39 @@ def decode_video_frames_ffmpeg(input_video: str | Path) -> np.ndarray:
     if process.stdout is None:
         raise RuntimeError("Failed to create stdout pipe")
 
-    frames: list[np.ndarray] = []
+    chunks: list[np.ndarray] = []
     actual_frames = 0
     last_progress = 19
+    chunk_bytes = 256 * FRAME_BYTES
+    leftover = b""
 
     while True:
-        raw_frame = process.stdout.read(FRAME_BYTES)
-        if len(raw_frame) == 0:
+        chunk = process.stdout.read(chunk_bytes)
+        if not chunk:
             break
-        frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape(
-            FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS
+        buf = leftover + chunk
+        usable = (len(buf) // FRAME_BYTES) * FRAME_BYTES
+        leftover = buf[usable:]
+        if usable == 0:
+            continue
+        arr = np.frombuffer(buf[:usable], dtype=np.uint8).reshape(
+            -1, FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS
+        ).copy()
+        chunks.append(arr)
+        actual_frames += len(arr)
+        last_progress = _emit_loop_progress(
+            actual_frames, total_frames, 20, 35, "Decoding video (FFmpeg)...", last_progress
         )
-        frames.append(frame)
-        actual_frames += 1
-        if actual_frames % 10 == 0:
-            last_progress = _emit_loop_progress(
-                actual_frames, total_frames, 20, 35, "Decoding video (FFmpeg)...", last_progress
-            )
 
     process.stdout.close()
     process.wait()
 
     emit_progress(55, f"Decoding video (FFmpeg)... ({actual_frames}/{_safe_total(total_frames)})")
 
-    if not frames:
+    if not chunks:
         return np.empty((0, FRAME_HEIGHT, FRAME_WIDTH, FRAME_CHANNELS), dtype=np.uint8)
 
-    return np.stack(frames)
+    return chunks[0] if len(chunks) == 1 else np.concatenate(chunks, axis=0)
 
 
 def decode_video_frames_nelux(input_video: str | Path) -> np.ndarray:
