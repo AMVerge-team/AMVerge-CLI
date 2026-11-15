@@ -90,6 +90,7 @@ def export(
     exact_copy: bool = typer.Option(False, "--exact-copy", help="With --codec copy and no --merge: re-encode scenes a copy cannot cut exactly, in the source's codec"),
     audio_track: int = typer.Option(-1, "--audio-track", help="0-based audio index to hoist to first (preview language); -1 = keep order"),
     audio_language: str = typer.Option("", "--audio-language", help="language tag to hoist (eng, jpn); resolved per clip, beats --audio-track"),
+    keyframe_cache_dir: Optional[Path] = typer.Option(None, "--keyframe-cache-dir", hidden=True, help="Folder caching keyframe scans across exports; the caller clears it"),
     ipc: bool = typer.Option(False, "--ipc", hidden=True, help="Emit IPC events for the Tauri app (no Rich UI)"),
 ) -> None:
     """Export selected scenes from a detect run."""
@@ -185,6 +186,7 @@ def export(
         audio_track=(audio_track if audio_track >= 0 else None),
         audio_language=(audio_language.strip().lower() or None),
         exact_copy=exact_copy,
+        keyframe_cache_dir=str(keyframe_cache_dir) if keyframe_cache_dir else None,
     )
 
     abort = threading.Event()

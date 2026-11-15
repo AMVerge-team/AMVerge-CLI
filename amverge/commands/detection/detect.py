@@ -200,7 +200,7 @@ def _detect_ipc(
     from ...core.infra.ipc import emit_progress, emit_event, log
     from ...core.detection.keyframe import detect_cuts_by_keyframe
     from ...core.detection.edge import detect_cuts_by_edge
-    from ...core.cutting.segmenter import run_ffmpeg_segment, collect_scenes
+    from ...core.cutting.segmenter import run_ffmpeg_segment_streaming, collect_scenes
     from ...core.video import get_video_duration
     from ...core.thumbnails.thumbnails_streaming import generate_thumbnails_streaming
 
@@ -214,10 +214,9 @@ def _detect_ipc(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    emit_progress(10, "Extracting keyframes...")
-
+    # detection fills 10-50% and cutting 50-90%, so the bar never jumps back
     def kf_cb(pct: int, msg: str) -> None:
-        emit_progress(pct, msg)
+        emit_progress(10 + round(max(0, min(100, pct)) * 0.4), msg)
 
     if method == "transnetv2":
         from ...core.detection.ai_scene_detection import TRANSNET_AVAILABLE
@@ -370,6 +369,7 @@ def _detect_ipc(
         print(json.dumps(scenes), flush=True)
         return
 
+    emit_progress(10, "Extracting keyframes..." if method == "keyframe" else "Detecting edges...")
     if method == "keyframe":
         cut_points = detect_cuts_by_keyframe(video_path, min_duration=min_duration, progress_cb=kf_cb)
     else:
@@ -381,16 +381,30 @@ def _detect_ipc(
             progress_cb=kf_cb,
         )
 
-    emit_progress(50, f"Cutting {len(cut_points)} scenes...")
+    scene_total = len(cut_points) + 1
+    emit_progress(50, f"Cutting {scene_total} scenes...")
 
     seg_stem = video_stem.replace("%", "%%")
     output_pattern = os.path.join(output_dir, f"{seg_stem}_%04d.mp4")
-    run_ffmpeg_segment(video_path, output_pattern, cut_points)
-
     total_duration = get_video_duration(video_path)
+    scenes_cut = 0
+
+    # each finished segment is one scene: count it on the bar (50-90%) and log it
+    def on_scene_cut(index: int, _path: str) -> None:
+        nonlocal scenes_cut
+        scenes_cut += 1
+        log(f"Scene {index + 1} detected ({scenes_cut}/{scene_total})")
+        emit_progress(50 + round(min(1.0, scenes_cut / scene_total) * 40),
+                      f"Cutting scenes {scenes_cut}/{scene_total}...")
+
+    # same cut as run_ffmpeg_segment, reporting each segment as it lands
+    run_ffmpeg_segment_streaming(
+        video_path, output_pattern, cut_points, total_duration=total_duration or None,
+        on_segment=on_scene_cut,
+    )
+
     scenes = collect_scenes(output_dir, video_stem, cut_points, total_duration)
 
-    emit_progress(75, "Building scenes...")
     emit_progress(90, f"Generating thumbnails for {len(scenes)} scenes...")
 
     generate_thumbnails_streaming(output_dir, scenes, video_stem)

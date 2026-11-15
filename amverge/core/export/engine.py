@@ -57,6 +57,7 @@ class ExportSettings:
     audio_language: Optional[str] = None  # language tag to hoist; resolved per input
     audio_single: bool = False  # keep only the selected track (mixed-layout merges)
     exact_copy: bool = False  # separate copy exports: re-encode ranges a copy cannot cut exactly
+    keyframe_cache_dir: Optional[str] = None  # on-disk keyframe scans, owned and cleared by the caller
 
 
 @dataclass
@@ -441,8 +442,14 @@ def _contiguous_range_groups(jobs: list[ExportJob], eps: float = 0.05) -> list[l
     return groups
 
 
+KEYFRAME_SCAN_WORKERS = 4
+
+
 def _exact_copy_jobs(
     jobs: list[ExportJob], settings: ExportSettings, ffprobe: str, gpu_encoders: set[str],
+    kf_cache: dict[str, list[float]],
+    on_source_done: Optional[Callable[[int, int], None]] = None,
+    abort: Optional[threading.Event] = None,
 ) -> list[ExportJob]:
     """Marks every range a stream copy cannot cut exactly to re-encode instead.
 
@@ -452,40 +459,62 @@ def _exact_copy_jobs(
     through ``smart_cut.split_exact_copy_scenes``, the check import uses, so a
     keyframe-detected episode stays entirely stream copied. A source whose codec
     the container cannot hold re-encoded (AVI is copy only) keeps snapping.
+
+    Sources are checked in parallel (one demux pass each, cached on disk when
+    ``settings.keyframe_cache_dir`` is set); their keyframes land in
+    ``kf_cache`` so ``_smartcut_ranges`` does not scan them again.
     """
     from ..cutting.smart_cut import split_exact_copy_scenes
-    from ..keyframes.keyframe_align import get_keyframe_timestamps_pyav, get_open_gop_keyframes
+    from ..keyframes.keyframe_align import cached_scan_keyframes
 
     by_source: dict[str, list[ExportJob]] = {}
     for job in jobs:
         if job.seek_ms is not None:
             by_source.setdefault(job.input, []).append(job)
+    if not by_source:
+        return jobs
 
-    reencode: dict[int, ExportJob] = {}
-    for source, source_jobs in by_source.items():
+    def check(source: str) -> tuple[list[float], dict[int, ExportJob]]:
+        if abort is not None and abort.is_set():
+            raise ExportAborted("Export aborted")
+        keyframes, open_gop = cached_scan_keyframes(source, settings.keyframe_cache_dir)
         codec = params.exact_copy_codec(
             probe_video_codec(ffprobe, source), probe_is_10bit(ffprobe, source), settings.container,
         )
         if codec is None:
-            continue
+            return keyframes, {}
         gpu = resolve_use_gpu(replace(settings, codec=codec), gpu_encoders)
         scenes = [
             {"start_sec": job.seek_ms / 1000.0, "end_sec": (job.seek_ms + (job.dur_ms or 0)) / 1000.0, "job": job}
-            for job in sorted(source_jobs, key=lambda j: j.seek_ms)
+            for job in sorted(by_source[source], key=lambda j: j.seek_ms)
         ]
         _, inexact = split_exact_copy_scenes(
-            scenes,
-            get_keyframe_timestamps_pyav(source),
-            get_open_gop_keyframes(source),
-            probe_video_rate(source),
-            probe_video_duration(source),
+            scenes, keyframes, open_gop, probe_video_rate(source), probe_video_duration(source),
         )
-        for scene in inexact:
-            reencode[id(scene["job"])] = replace(scene["job"], codec=codec, gpu=gpu)
+        return keyframes, {id(s["job"]): replace(s["job"], codec=codec, gpu=gpu) for s in inexact}
+
+    reencode: dict[int, ExportJob] = {}
+    total = len(by_source)
+    with ThreadPoolExecutor(max_workers=min(KEYFRAME_SCAN_WORKERS, total)) as pool:
+        futures = {pool.submit(check, source): source for source in by_source}
+        try:
+            for done, future in enumerate(as_completed(futures), start=1):
+                keyframes, marked = future.result()
+                kf_cache[futures[future]] = keyframes
+                reencode.update(marked)
+                if on_source_done:
+                    on_source_done(done, total)
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
     return [reencode.get(id(job), job) for job in jobs]
 
 
-def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool, frame_timed: bool = False) -> list[ExportJob]:
+def _smartcut_ranges(
+    jobs: list[ExportJob], tmp_dir: Path, dedupe: bool, frame_timed: bool = False,
+    kf_cache: Optional[dict[str, list[float]]] = None, keyframe_cache_dir: Optional[str] = None,
+) -> list[ExportJob]:
     """For remux (copy) exports, cut each source range as a true,
     keyframe-snapped stream copy (see ``cutting.smart_cut``) so every
     boundary is guaranteed decodable. Whole-file jobs (already a pre-cut
@@ -501,9 +530,9 @@ def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool, frame_t
     ``ExportSettings.exact_copy`` each scene stands alone, bleed and all.
     """
     from ..cutting.smart_cut import copy_container_suffix, copy_range
-    from ..keyframes.keyframe_align import get_keyframe_timestamps_pyav
+    from ..keyframes.keyframe_align import cached_scan_keyframes
 
-    kf_cache: dict = {}
+    kf_cache = kf_cache if kf_cache is not None else {}
     suffix_cache: dict = {}
     rate_cache: dict = {}
     out: list[ExportJob] = []
@@ -515,7 +544,8 @@ def _smartcut_ranges(jobs: list[ExportJob], tmp_dir: Path, dedupe: bool, frame_t
             continue
         src = job.input
         if src not in kf_cache:
-            kf_cache[src] = get_keyframe_timestamps_pyav(src)
+            kf_cache[src] = cached_scan_keyframes(src, keyframe_cache_dir)[0]
+        if src not in suffix_cache:
             suffix_cache[src] = copy_container_suffix(Path(src))
             rate_cache[src] = probe_video_rate(src)
         last = group[-1]
@@ -659,16 +689,23 @@ def export_scenes(
         geometry = {src: probe_frame_geometry(ffprobe, src) for src in dict.fromkeys(j.input for j in jobs)}
         canvas = params.merge_canvas(list(geometry.values()))
 
+    kf_cache: dict[str, list[float]] = {}
     if settings.codec == "copy" and settings.exact_copy and not settings.merge:
         progress(2, "Checking scenes against keyframes...")
-        jobs = _exact_copy_jobs(jobs, settings, ffprobe, gpu_encoders)
+        jobs = _exact_copy_jobs(
+            jobs, settings, ffprobe, gpu_encoders, kf_cache,
+            on_source_done=lambda done, total: progress(
+                2 + (3 * done) // total, f"Checking keyframes {done}/{total} episodes..."),
+            abort=abort,
+        )
 
     smartcut_tmp = None
     if settings.codec == "copy" and canvas is None and any(j.seek_ms is not None and not j.codec for j in jobs):
         smartcut_tmp = tempfile.TemporaryDirectory()
         progress(5, "Cutting source ranges...")
         jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), dedupe=settings.merge,
-                                frame_timed=settings.container == "avi")
+                                frame_timed=settings.container == "avi",
+                                kf_cache=kf_cache, keyframe_cache_dir=settings.keyframe_cache_dir)
 
     source_video_codec = probe_video_codec(ffprobe, jobs[0].input) if jobs else None
     source_is_10bit = probe_is_10bit(ffprobe, jobs[0].input) if jobs else False

@@ -94,3 +94,64 @@ def get_open_gop_keyframes(video_path: str) -> list[float]:
                 open_gop.append(float(last_key * stream.time_base))
                 last_key = None
     return open_gop
+
+
+def scan_keyframes(video_path: str) -> tuple[list[float], list[float]]:
+    """``(get_keyframe_timestamps_pyav, get_open_gop_keyframes)`` from one
+    demux pass instead of two: both read every packet of the file, which is
+    most of the cost on a full episode."""
+    keyframe_times: list[float] = []
+    open_gop: list[float] = []
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        last_key = None
+        for packet in container.demux(stream):
+            if packet.is_keyframe:
+                ts = packet.pts if packet.pts is not None else packet.dts
+                if ts is not None:
+                    keyframe_times.append(float(ts * packet.time_base))
+                if packet.pts is not None:
+                    last_key = packet.pts
+                continue
+            if packet.pts is None:
+                continue
+            if last_key is not None and packet.pts < last_key:
+                open_gop.append(float(last_key * stream.time_base))
+                last_key = None
+    return sorted(set(keyframe_times)), open_gop
+
+
+def cached_scan_keyframes(video_path: str, cache_dir: str | None) -> tuple[list[float], list[float]]:
+    """:func:`scan_keyframes` through an on-disk cache in ``cache_dir`` (none:
+    no cache). Entries are keyed by path, size and mtime, so an edited or
+    replaced file is rescanned. The caller owns the folder's lifetime (the
+    app clears it on close and launch)."""
+    import hashlib
+    import json
+    import os
+    import threading
+    from pathlib import Path
+
+    if not cache_dir:
+        return scan_keyframes(video_path)
+    try:
+        st = os.stat(video_path)
+    except OSError:
+        return scan_keyframes(video_path)
+    key = f"{os.path.abspath(video_path)}|{st.st_size}|{st.st_mtime_ns}"
+    entry = Path(cache_dir) / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()[:32]}.json"
+    try:
+        data = json.loads(entry.read_text(encoding="utf-8"))
+        if data.get("key") == key:
+            return list(data["keyframes"]), list(data["open_gop"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    keyframes, open_gop = scan_keyframes(video_path)
+    try:
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        tmp = entry.with_name(f"{entry.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps({"key": key, "keyframes": keyframes, "open_gop": open_gop}), encoding="utf-8")
+        os.replace(tmp, entry)
+    except OSError:
+        pass
+    return keyframes, open_gop
