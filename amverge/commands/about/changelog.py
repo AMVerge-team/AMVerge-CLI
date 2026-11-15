@@ -7,6 +7,15 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v1.3.0", [
+        "TransNetV2 GPU scene detection is ~43% faster via batched window inference and chunked FFmpeg frame reads",
+        "Keyframe detection starts immediately without loading PyTorch or CUDA libraries",
+        "Scene Scout daemon pre-warms SigLIP 2 on startup and loads cached weights offline-first without Hugging Face network round-trips",
+        "Single-pass keyframe and open-GOP packet scanning with parallel, disk-cached scans during export --exact-copy",
+        "Cached PyAV video metadata probing eliminates repeated ffprobe subprocess spawns per import",
+        "Faster, lighter JPEG poster thumbnails (640w, 4:2:0 subsampling) and live per-segment progress during detect --ipc",
+        "Unified Hugging Face weight loader across upscaling, interpolation, depth maps, and deadframes with bounded RAM/VRAM caches",
+    ]),
     ("v1.2.0", [
         "Scene Scout indexing is several times faster: it decodes only the frames it needs instead of the whole episode",
         "Each scene is now indexed by its first frame, or its midpoint when the first frame is blank",
@@ -22,30 +31,30 @@ _CLI_ENTRIES = [
     ("v1.1.0", [
         "Merging clips of different sizes keeps each one's aspect ratio: the largest size becomes the frame, the rest get black bars",
     ]),
-    ("v0.9.6"), [
-        "Fixed WEBP imports"
-    ],
-    ("v0.9.5"), [
-        "Fixed GPU decoding"
-    ],
-    ("v0.8.3"), [
-        "Fixed thumbnail generation for scene scout"
-    ],
-    ("v0.8.2"), [
-        "Added stream copying where possible in materialize_clips if the user resumes video processing"
-    ],
-    ("v0.8.1"), [
-        "Fixed broken imports"
-    ],
-    ("v0.8.0"), [
-        "Added scenescout"
-    ],
-    ("v0.5.0"), [
-        "Fixed deadframes lagging near the end of clips and freezing the video"
-    ],
-    ("v0.4.0"), [
-        "Improved scene detection accuracy by a large margin"
-    ],
+    ("v0.9.6", [
+        "Fixed WEBP imports",
+    ]),
+    ("v0.9.5", [
+        "Fixed GPU decoding",
+    ]),
+    ("v0.8.3", [
+        "Fixed thumbnail generation for scene scout",
+    ]),
+    ("v0.8.2", [
+        "Added stream copying where possible in materialize_clips if the user resumes video processing",
+    ]),
+    ("v0.8.1", [
+        "Fixed broken imports",
+    ]),
+    ("v0.8.0", [
+        "Added scenescout",
+    ]),
+    ("v0.5.0", [
+        "Fixed deadframes lagging near the end of clips and freezing the video",
+    ]),
+    ("v0.4.0", [
+        "Improved scene detection accuracy by a large margin",
+    ]),
     ("v0.3.1", [
         "Windows: no more console windows flashing during import, probing and detection",
         "Windows: CREATE_NO_WINDOW added to the remaining ffmpeg/ffprobe subprocess calls",
