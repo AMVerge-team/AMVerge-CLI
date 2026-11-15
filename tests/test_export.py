@@ -437,12 +437,12 @@ class TestExactCopyExport:
         for out, idx in zip(outputs, indices):
             assert numbers(out) == list(range(*spec.scene_frames[idx]))
 
-    def test_merge_ignores_it(self, media_files, tmp_path):
+    def test_merge_exact_copy_cuts_off_keyframe_ranges_without_bleed(self, media_files, tmp_path):
         spec = BY_NAME["h264_2997_gop"]
         (out,) = run_export(tmp_path, range_jobs(spec, media_files[spec.name], [1, 2]),
                             codec="copy", container=spec.export_container, merge=True, exact_copy=True)
-        assert [e.rsplit("|", 1)[1] for e in run_export.events] == ["copy"]
-        assert set(expected_frames(spec, [1, 2])) <= set(numbers(out))
+        assert [e.rsplit("|", 1)[1] for e in run_export.events] == ["reencode"]
+        assert numbers(out) == expected_frames(spec, [1, 2])
 
     def test_avi_is_copy_only_so_it_keeps_snapping(self, media_files, tmp_path):
         spec = BY_NAME["h264_2997_gop"]

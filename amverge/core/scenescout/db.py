@@ -89,6 +89,16 @@ def connect(path: str | Path, timeout: float = 10.0) -> Iterator[sqlite3.Connect
         conn.close()
 
 
+@contextmanager
+def connect_ro(path: str | Path, timeout: float = 10.0) -> Iterator[sqlite3.Connection]:
+    """Open a database for read-only queries without WAL pragma writes or commits."""
+    conn = sqlite3.connect(str(path), timeout=timeout)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 def create_database(name: str, root: str | Path | None = None) -> Path:
     path = db_path(name, root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,7 +121,7 @@ def database_info(path: str | Path) -> DatabaseInfo:
     model_version = EMBEDDING_MODEL_VERSION
     if p.is_file():
         try:
-            with connect(p) as conn:
+            with connect_ro(p) as conn:
                 videos = conn.execute("SELECT COUNT(*) FROM processed_videos").fetchone()[0]
                 scenes = conn.execute("SELECT COUNT(*) FROM scene_embeddings").fetchone()[0]
                 row = conn.execute("SELECT model_version FROM processed_videos LIMIT 1").fetchone()
@@ -135,7 +145,7 @@ def is_valid_database(path: str | Path) -> bool:
     if not p.is_file():
         return False
     try:
-        with connect(p) as conn:
+        with connect_ro(p) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = {row[0] for row in cursor.fetchall()}
@@ -280,7 +290,7 @@ def delete_database(name: str, root: str | Path | None = None) -> bool:
 
 
 def list_videos(path: str | Path) -> list[IndexedVideo]:
-    with connect(path) as conn:
+    with connect_ro(path) as conn:
         rows = conn.execute(
             """
             SELECT v.id, v.filepath, v.status, v.modified_at, COUNT(s.id)
@@ -326,7 +336,7 @@ def remove_video(
 
 
 def find_video(path: str | Path, filepath: str) -> Optional[IndexedVideo]:
-    with connect(path) as conn:
+    with connect_ro(path) as conn:
         row = conn.execute(
             """
             SELECT v.id, v.filepath, v.status, v.modified_at, COUNT(s.id)

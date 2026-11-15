@@ -227,7 +227,11 @@ def _detect_ipc(
         import torch
         from ...core.detection.ai_scene_detection import detect_transnet_with_fallback
         from ...core.video.scene_utils import scenes_to_objects
-        from ...core.cutting.smart_cut import run_two_phase_cuts
+        from ...core.cutting.smart_cut import (
+            exact_copy_supported,
+            run_two_phase_cuts,
+            split_exact_copy_scenes,
+        )
 
         # `decode_method` has already been downgraded to ffmpeg by the caller if
         # Nelux is not importable, so reaching here with "nelux" means it loaded
@@ -244,16 +248,31 @@ def _detect_ipc(
             ),
         )
 
-        keyframes: list[float] = []
-
         raw_scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         scenes_out_dir = Path(output_dir) / "scenes"
         scenes_out_dir.mkdir(parents=True, exist_ok=True)
 
-        phase1_scenes = []
-        phase2_scenes = raw_scenes
+        # ai cuts that already sit on closed-GOP keyframes stream-copy with no
+        # bleed; only off-keyframe / open-GOP scenes fall through to re-encode
+        keyframes: list[float] = []
+        phase1_scenes: list[dict] = []
+        phase2_scenes: list[dict] = raw_scenes
+        if exact_copy_supported(video):
+            from ...core.keyframes.keyframe_align import scan_keyframes
+            from ...core.video.probe_utils import probe_video_rate
+
+            emit_progress(80, "Checking scenes against keyframes...")
+            keyframes, open_gop = scan_keyframes(video_path)
+            phase1_scenes, phase2_scenes = split_exact_copy_scenes(
+                raw_scenes,
+                keyframes,
+                open_gop,
+                probe_video_rate(video),
+                get_video_duration(video_path),
+            )
+        log(f"AI cut split: {len(phase1_scenes)} copy, {len(phase2_scenes)} reencode")
 
         def _thumb_path(scene_index: int) -> str:
             return os.path.join(output_dir, f"{video_stem}_{scene_index:04d}.jpg")

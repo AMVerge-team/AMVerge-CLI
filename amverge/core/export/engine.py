@@ -88,12 +88,43 @@ def detect_gpu_encoders(ffmpeg: str) -> set[str]:
     return {enc for enc in ("h264_nvenc", "hevc_nvenc", "av1_nvenc") if enc in out}
 
 
+_CUDA_CACHED: Optional[bool] = None
+_RATE_CACHE: dict[str, Optional[Fraction]] = {}
+_ORIGIN_CACHE: dict[str, Fraction] = {}
+
+
+def _cached_video_rate(path: str) -> Optional[Fraction]:
+    if path not in _RATE_CACHE:
+        _RATE_CACHE[path] = probe_video_rate(path)
+    return _RATE_CACHE[path]
+
+
+def _cached_seek_origin(path: str) -> Fraction:
+    if path not in _ORIGIN_CACHE:
+        _ORIGIN_CACHE[path] = probe_seek_origin(path)
+    return _ORIGIN_CACHE[path]
+
+
 def _cuda_available() -> bool:
+    global _CUDA_CACHED
+    if _CUDA_CACHED is not None:
+        return _CUDA_CACHED
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "-L"],
+            capture_output=True, text=True, timeout=3, creationflags=CREATE_NO_WINDOW,
+        )
+        if r.returncode == 0 and "GPU " in (r.stdout or ""):
+            _CUDA_CACHED = True
+            return True
+    except Exception:
+        pass
     try:
         import torch
-        return bool(torch.cuda.is_available())
+        _CUDA_CACHED = bool(torch.cuda.is_available())
     except Exception:
-        return False
+        _CUDA_CACHED = False
+    return _CUDA_CACHED
 
 
 def resolve_use_gpu(settings: ExportSettings, gpu_encoders: set[str]) -> bool:
@@ -139,7 +170,7 @@ def job_frames(job: "ExportJob") -> Optional[tuple[int, int]]:
     if job.seek_ms is None or not job.dur_ms:
         return None
     start = job.seek_ms / 1000.0
-    return params.frame_grid_range(start, start + job.dur_ms / 1000.0, probe_video_rate(job.input))
+    return params.frame_grid_range(start, start + job.dur_ms / 1000.0, _cached_video_rate(job.input))
 
 
 def probe_is_10bit(ffprobe: str, path: str) -> bool:
@@ -386,8 +417,8 @@ def _export_one(
                                       params.copy_video_args(source_video_codec, ext, source_frame_rate))
 
     frames = job_frames(job)
-    grid_rate = str(probe_video_rate(job.input)) if frames else None
-    seek_origin = probe_seek_origin(job.input) if job.seek_ms else Fraction(0)
+    grid_rate = str(_cached_video_rate(job.input)) if frames else None
+    seek_origin = _cached_seek_origin(job.input) if job.seek_ms else Fraction(0)
 
     def reencode_args(codec: str, gpu: bool) -> list[str]:
         return params.build_reencode_args(job.input, out_path, codec, settings.audio, gpu,
@@ -442,6 +473,26 @@ def _contiguous_range_groups(jobs: list[ExportJob], eps: float = 0.05) -> list[l
     return groups
 
 
+def _collapse_contiguous_ranges(jobs: list[ExportJob]) -> list[ExportJob]:
+    """Collapse consecutive back-to-back ranges from the same source into one
+    continuous range job so a merge checks and cuts the outer span rather than
+    internal cut boundaries between adjacent selected scenes."""
+    out: list[ExportJob] = []
+    for group in _contiguous_range_groups(jobs):
+        first, last = group[0], group[-1]
+        if len(group) == 1 or first.seek_ms is None:
+            out.append(first)
+        else:
+            end_ms = (last.seek_ms or 0) + (last.dur_ms or 0)
+            out.append(ExportJob(
+                scene_index=first.scene_index,
+                input=first.input,
+                seek_ms=first.seek_ms,
+                dur_ms=end_ms - first.seek_ms,
+            ))
+    return out
+
+
 KEYFRAME_SCAN_WORKERS = 4
 
 
@@ -477,19 +528,20 @@ def _exact_copy_jobs(
     def check(source: str) -> tuple[list[float], dict[int, ExportJob]]:
         if abort is not None and abort.is_set():
             raise ExportAborted("Export aborted")
-        keyframes, open_gop = cached_scan_keyframes(source, settings.keyframe_cache_dir)
+        scenes = [
+            {"start_sec": job.seek_ms / 1000.0, "end_sec": (job.seek_ms + (job.dur_ms or 0)) / 1000.0, "job": job}
+            for job in sorted(by_source[source], key=lambda j: j.seek_ms)
+        ]
+        points = [0.0, *(x for s in scenes for x in (s["start_sec"], s["end_sec"]))]
+        keyframes, open_gop = cached_scan_keyframes(source, settings.keyframe_cache_dir, points=points)
         codec = params.exact_copy_codec(
             probe_video_codec(ffprobe, source), probe_is_10bit(ffprobe, source), settings.container,
         )
         if codec is None:
             return keyframes, {}
         gpu = resolve_use_gpu(replace(settings, codec=codec), gpu_encoders)
-        scenes = [
-            {"start_sec": job.seek_ms / 1000.0, "end_sec": (job.seek_ms + (job.dur_ms or 0)) / 1000.0, "job": job}
-            for job in sorted(by_source[source], key=lambda j: j.seek_ms)
-        ]
         _, inexact = split_exact_copy_scenes(
-            scenes, keyframes, open_gop, probe_video_rate(source), probe_video_duration(source),
+            scenes, keyframes, open_gop, _cached_video_rate(source), probe_video_duration(source),
         )
         return keyframes, {id(s["job"]): replace(s["job"], codec=codec, gpu=gpu) for s in inexact}
 
@@ -689,8 +741,11 @@ def export_scenes(
         geometry = {src: probe_frame_geometry(ffprobe, src) for src in dict.fromkeys(j.input for j in jobs)}
         canvas = params.merge_canvas(list(geometry.values()))
 
+    if settings.merge and settings.codec == "copy":
+        jobs = _collapse_contiguous_ranges(jobs)
+
     kf_cache: dict[str, list[float]] = {}
-    if settings.codec == "copy" and settings.exact_copy and not settings.merge:
+    if settings.codec == "copy" and settings.exact_copy:
         progress(2, "Checking scenes against keyframes...")
         jobs = _exact_copy_jobs(
             jobs, settings, ffprobe, gpu_encoders, kf_cache,
@@ -698,9 +753,18 @@ def export_scenes(
                 2 + (3 * done) // total, f"Checking keyframes {done}/{total} episodes..."),
             abort=abort,
         )
+        reenc_count = sum(1 for j in jobs if j.codec)
+        copy_count = len(jobs) - reenc_count
+        progress(6, f"Keyframes checked: {copy_count} stream copy, {reenc_count} re-encode")
 
     smartcut_tmp = None
-    if settings.codec == "copy" and canvas is None and any(j.seek_ms is not None and not j.codec for j in jobs):
+    can_smartcut = (
+        settings.codec == "copy"
+        and canvas is None
+        and any(j.seek_ms is not None and not j.codec for j in jobs)
+        and not (settings.merge and any(j.codec for j in jobs))
+    )
+    if can_smartcut:
         smartcut_tmp = tempfile.TemporaryDirectory()
         progress(5, "Cutting source ranges...")
         jobs = _smartcut_ranges(jobs, Path(smartcut_tmp.name), dedupe=settings.merge,
@@ -758,12 +822,24 @@ def _individual(
         langs = probe_audio_languages(ffprobe, job.input) if settings.audio_language else None
         job_gpu = job.gpu if job.codec else use_gpu
         job_rate = probe_video_frame_rate(ffprobe, job.input) if job.codec else source_frame_rate
+        effective_codec = job.codec or settings.codec
+        mode_label = "stream copy" if effective_codec == "copy" else ("GPU re-encode" if job_gpu else "CPU re-encode")
+        with done_lock:
+            cur_idx = done + 1
+            base_pct = max(8, int((done / total) * 90))
+            progress(base_pct, f"Exporting clip {cur_idx}/{total} ({mode_label})...")
+
+        def on_clip_frac(frac: float) -> None:
+            if workers <= 1:
+                pct = max(8, min(98, int(((done + frac) / total) * 90) + 8))
+                progress(pct, f"Exporting clip {done + 1}/{total} ({mode_label} {int(frac * 100)}%)...")
+
         mode = _export_one(job, out_path, settings, ffmpeg, job_gpu, source_video_codec, source_is_10bit, job_rate,
-                           total_ms, None, abort, active, audio_count, langs)
+                           total_ms, on_clip_frac if workers <= 1 else None, abort, active, audio_count, langs)
         with done_lock:
             done += 1
             outputs[job.scene_index] = out_path
-            progress(int(done / total * 100), f"Exported {done}/{total} clips")
+            progress(max(10, int(done / total * 100)), f"Exported {done}/{total} clips ({mode})")
             event(f"CLIP_READY|{job.scene_index}|{out_path}|{mode}")
 
     if workers <= 1:
@@ -818,7 +894,8 @@ def _merge(
         )
 
     seg_copy = settings.codec == "copy" and not force_reencode and not has_ranges and not canvas
-    fallback_codec = "h264_high10" if source_is_10bit else "h264_high"
+    exact_codec = params.exact_copy_codec(source_video_codec, source_is_10bit, ext) if source_video_codec else None
+    fallback_codec = exact_codec or ("h264_high10" if source_is_10bit else "h264_high")
     seg_codec = "copy" if seg_copy else (settings.codec if settings.codec != "copy" else fallback_codec)
     # Copied audio keeps its original timestamps while the re-encoded video is
     # rebased to 0, so the two drift apart from the first join onward. Encoding
@@ -830,18 +907,20 @@ def _merge(
     # agree keep all their tracks; a mixed set is narrowed to one track so the
     # join succeeds, and that track is the language asked for, not an arbitrary
     # first one.
-    seg_languages = [probe_audio_languages(ffprobe, job.input) for job in jobs]
+    lang_by_input = {src: probe_audio_languages(ffprobe, src) for src in dict.fromkeys(j.input for j in jobs)}
+    seg_languages = [lang_by_input[job.input] for job in jobs]
     uniform_audio = len({tuple(langs) for langs in seg_languages}) == 1
     seg_audio_count = len(seg_languages[0]) if uniform_audio and seg_languages else audio_count
     if not uniform_audio:
-        progress(30, "Clips carry different audio tracks; keeping the selected language only")
+        progress(10, "Clips carry different audio tracks; keeping the selected language only")
 
     seg_settings = ExportSettings(codec=seg_codec, audio=seg_audio, container=ext,
                                   hardware=settings.hardware, merge=False,
                                   audio_track=settings.audio_track,
                                   audio_language=settings.audio_language,
                                   audio_single=not uniform_audio)
-    verb = "Remuxing" if seg_copy else "Encoding"
+    seg_use_gpu = resolve_use_gpu(seg_settings, detect_gpu_encoders(ffmpeg))
+    verb = "Remuxing" if seg_copy else ("Encoding (GPU)" if seg_use_gpu else "Encoding (CPU)")
     with tempfile.TemporaryDirectory() as tmp:
         segments: list[str] = []
         total = len(jobs)
@@ -849,18 +928,25 @@ def _merge(
         for i, job in enumerate(jobs):
             if abort.is_set():
                 raise ExportAborted()
-            
+
             seg = str(Path(tmp) / f"seg_{i:04d}.{ext}")
             total_ms = job.dur_ms or probe_duration_ms(ffprobe, job.input)
+            seg_base = 10 + int((i / total) * 78)
+            seg_span = max(1, int((1 / total) * 78))
+            progress(seg_base, f"{verb} segment {i + 1}/{total}...")
+
+            def on_seg_frac(frac: float, idx: int = i, base: int = seg_base, span: int = seg_span) -> None:
+                progress(min(88, base + int(frac * span)), f"{verb} segment {idx + 1}/{total} ({int(frac * 100)}%)...")
+
             _export_one(job, seg, seg_settings, ffmpeg,
-                        resolve_use_gpu(seg_settings, detect_gpu_encoders(ffmpeg)),
-                        source_video_codec, source_is_10bit, source_frame_rate, total_ms, None, abort, active,
+                        seg_use_gpu,
+                        source_video_codec, source_is_10bit, source_frame_rate, total_ms, on_seg_frac, abort, active,
                         seg_audio_count, seg_languages[i] if seg_languages else None,
                         params.fit_filter(geometry[job.input], canvas) if canvas else None)
             segments.append(seg)
-            progress(30 + int((i + 1) / total * 55), f"{verb} {i + 1}/{total} segments")
+            progress(10 + int((i + 1) / total * 78), f"{verb} {i + 1}/{total} segments")
 
-        progress(90, "Concatenating segments...")
+        progress(90, f"Concatenating {total} segments...")
         _concat_copy(segments, out_path, ext, source_video_codec if seg_copy else None,
                      "copy", ffmpeg, abort, active, frame_rate=source_frame_rate)
         

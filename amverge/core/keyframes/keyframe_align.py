@@ -121,37 +121,100 @@ def scan_keyframes(video_path: str) -> tuple[list[float], list[float]]:
     return sorted(set(keyframe_times)), open_gop
 
 
-def cached_scan_keyframes(video_path: str, cache_dir: str | None) -> tuple[list[float], list[float]]:
+def scan_keyframes_near(video_path: str, points: list[float]) -> tuple[list[float], list[float]]:
+    """Seek only around ``points`` (scene start/end boundaries) instead of
+    demuxing a whole multi-GB episode when checking a handful of export ranges.
+    Captures the enclosing keyframe at/before each point, any keyframe inside
+    the window, and the enclosing keyframe at/after each point (plus its
+    open-GOP leading-picture check)."""
+    found_kf: set[float] = set()
+    found_og: set[float] = set()
+    try:
+        with av.open(video_path) as container:
+            if not container.streams.video:
+                return [], []
+            stream = container.streams.video[0]
+            if stream.time_base is None:
+                return [], []
+            tb = float(stream.time_base)
+            windows: list[list[float]] = []
+            for pt in sorted({0.0, *(max(0.0, float(p)) for p in points)}):
+                lo, hi = max(0.0, pt - 0.25), pt + 0.25
+                if windows and lo <= windows[-1][1] + 2.0:
+                    windows[-1][1] = max(windows[-1][1], hi)
+                else:
+                    windows.append([lo, hi])
+            for lo, hi in windows:
+                container.seek(int(lo / tb), stream=stream, backward=True, any_frame=False)
+                last_key = None
+                after_key = 0
+                saw_past_hi = False
+                for packet in container.demux(stream):
+                    if packet.pts is None and packet.dts is None:
+                        continue
+                    ts = float((packet.pts if packet.pts is not None else packet.dts) * stream.time_base)
+                    if packet.is_keyframe:
+                        found_kf.add(ts)
+                        last_key = packet.pts
+                        after_key = 0
+                        if ts >= hi:
+                            saw_past_hi = True
+                        continue
+                    if last_key is not None:
+                        after_key += 1
+                        if packet.pts is not None and packet.pts < last_key:
+                            found_og.add(float(last_key * stream.time_base))
+                            last_key = None
+                        elif after_key >= 16:
+                            last_key = None
+                    if saw_past_hi and last_key is None:
+                        break
+    except Exception:
+        return [], []
+    return sorted(found_kf), sorted(found_og)
+
+
+def cached_scan_keyframes(
+    video_path: str,
+    cache_dir: str | None,
+    points: list[float] | None = None,
+) -> tuple[list[float], list[float]]:
     """:func:`scan_keyframes` through an on-disk cache in ``cache_dir`` (none:
     no cache). Entries are keyed by path, size and mtime, so an edited or
-    replaced file is rescanned. The caller owns the folder's lifetime (the
-    app clears it on close and launch)."""
+    replaced file is rescanned. When ``points`` has a small set of boundaries
+    and no full cache exists yet, uses :func:`scan_keyframes_near` to avoid
+    demuxing multi-GB files from start to finish."""
     import hashlib
     import json
     import os
     import threading
     from pathlib import Path
 
-    if not cache_dir:
-        return scan_keyframes(video_path)
-    try:
-        st = os.stat(video_path)
-    except OSError:
-        return scan_keyframes(video_path)
-    key = f"{os.path.abspath(video_path)}|{st.st_size}|{st.st_mtime_ns}"
-    entry = Path(cache_dir) / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()[:32]}.json"
-    try:
-        data = json.loads(entry.read_text(encoding="utf-8"))
-        if data.get("key") == key:
-            return list(data["keyframes"]), list(data["open_gop"])
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        pass
+    entry = None
+    key = None
+    if cache_dir:
+        try:
+            st = os.stat(video_path)
+            key = f"{os.path.abspath(video_path)}|{st.st_size}|{st.st_mtime_ns}"
+            entry = Path(cache_dir) / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()[:32]}.json"
+            data = json.loads(entry.read_text(encoding="utf-8"))
+            if data.get("key") == key:
+                return list(data["keyframes"]), list(data["open_gop"])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+
+    if points and len(points) <= 64:
+        kf, og = scan_keyframes_near(video_path, points)
+        if kf:
+            return kf, og
+
     keyframes, open_gop = scan_keyframes(video_path)
-    try:
-        entry.parent.mkdir(parents=True, exist_ok=True)
-        tmp = entry.with_name(f"{entry.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps({"key": key, "keyframes": keyframes, "open_gop": open_gop}), encoding="utf-8")
-        os.replace(tmp, entry)
-    except OSError:
-        pass
+    if entry is not None and key is not None:
+        try:
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            tmp = entry.with_name(f"{entry.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text(json.dumps({"key": key, "keyframes": keyframes, "open_gop": open_gop}), encoding="utf-8")
+            os.replace(tmp, entry)
+        except OSError:
+            pass
     return keyframes, open_gop
