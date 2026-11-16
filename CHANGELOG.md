@@ -3,6 +3,7 @@
 ## v1.3.3
 
 - **Scene Scout thread-safety fix**: Moved lazy `torch` and `transformers` (`AutoModel`, `AutoProcessor`) imports inside `_LOAD_LOCK` in `amverge/core/scenescout/embedding.py` so the daemon's `_prewarm` thread and `_BackgroundEmbedder` cannot race on `transformers`' lazy importer (`ImportError: cannot import name 'AutoModel' from 'transformers'`).
+- **Configurable CLI config/models directory**: Added `AMVERGE_CONFIG_DIR` support to `get_amverge_config_dir()` in `amverge/core/infra/config.py` (with unit tests in `tests/test_config_paths.py`) so desktop installs can place depth/upscale weights outside `%APPDATA%`.
 
 ## v1.3.2
 
