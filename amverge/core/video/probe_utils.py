@@ -85,7 +85,7 @@ def probe_video_fps(input_video: str | Path) -> float:
         str(input_video),
     ]
     result = subprocess.run(
-        cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, creationflags=CREATE_NO_WINDOW
     )
     raw = result.stdout.strip().splitlines()[0].strip()
     if "/" in raw:
@@ -122,7 +122,7 @@ def probe_video_dimensions(input_video: str | Path) -> tuple[int, int]:
         str(input_video),
     ]
     result = subprocess.run(
-        cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, creationflags=CREATE_NO_WINDOW
     )
     stream = json.loads(result.stdout)["streams"][0]
     return int(stream["width"]), int(stream["height"])
@@ -145,7 +145,7 @@ def probe_video_duration(input_video: str | Path) -> float:
         str(input_video),
     ]
     result = subprocess.run(
-        cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, creationflags=CREATE_NO_WINDOW
     )
     raw = result.stdout.strip().splitlines()[0].strip()
     return float(raw)
@@ -184,7 +184,7 @@ def probe_seek_origin(input_video: str | Path) -> Fraction:
     ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, creationflags=CREATE_NO_WINDOW
         )
         data = json.loads(result.stdout)
         video = Fraction(data["streams"][0]["start_time"])
@@ -208,7 +208,7 @@ def probe_video_start(input_video: str | Path) -> float:
     ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, creationflags=CREATE_NO_WINDOW
         )
         return float(result.stdout.strip().splitlines()[0])
     except Exception:

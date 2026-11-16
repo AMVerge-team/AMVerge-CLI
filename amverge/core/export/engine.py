@@ -80,7 +80,7 @@ def detect_gpu_encoders(ffmpeg: str) -> set[str]:
     try:
         r = subprocess.run(
             [ffmpeg, "-hide_banner", "-encoders"],
-            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
         )
     except Exception:
         return set()
@@ -112,7 +112,7 @@ def _cuda_available() -> bool:
     try:
         r = subprocess.run(
             ["nvidia-smi", "-L"],
-            capture_output=True, text=True, timeout=3, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3, creationflags=CREATE_NO_WINDOW,
         )
         if r.returncode == 0 and "GPU " in (r.stdout or ""):
             _CUDA_CACHED = True
@@ -153,7 +153,7 @@ def probe_video_frame_rate(ffprobe: str, path: str) -> Optional[str]:
             [ffprobe, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=avg_frame_rate,r_frame_rate",
              "-of", "default=nk=1:nw=1", path],
-            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
         )
         for value in (r.stdout or "").splitlines():
             numerator, separator, denominator = value.strip().partition("/")
@@ -178,7 +178,7 @@ def probe_is_10bit(ffprobe: str, path: str) -> bool:
         r = subprocess.run(
             [ffprobe, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=pix_fmt", "-of", "default=nk=1:nw=1", path],
-            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
         )
         pix_fmt = (r.stdout or "").strip().lower()
         return pix_fmt.endswith(("10le", "10be", "12le", "12be", "14le", "14be", "16le", "16be"))
@@ -195,7 +195,7 @@ def _probe_stream(ffprobe: str, path: str, kind: str) -> Optional[str]:
         r = subprocess.run(
             [ffprobe, "-v", "error", "-select_streams", f"{kind}:0",
              "-show_entries", "stream=codec_name", "-of", "default=nk=1:nw=1", path],
-            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
         )
         name = (r.stdout or "").strip().splitlines()
         return name[0].strip().lower() if name and name[0].strip() else None
@@ -211,7 +211,7 @@ def probe_frame_geometry(ffprobe: str, path: str) -> Optional[tuple[int, int, Fr
             [ffprobe, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height,sample_aspect_ratio:stream_side_data=rotation",
              "-of", "json", path],
-            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
         )
         stream = json.loads(r.stdout or "{}")["streams"][0]
         width, height = int(stream["width"]), int(stream["height"])
@@ -250,7 +250,7 @@ def _copy_concat_safe(ffprobe: str, path: str) -> bool:
             [ffprobe, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "frame=key_frame,pts_time",
              "-read_intervals", "%+#1", "-of", "csv=p=0", path],
-            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
         )
         first = next((ln for ln in (r.stdout or "").splitlines() if ln.strip()), "")
         if not first:
@@ -269,7 +269,7 @@ def probe_audio_stream_count(ffprobe: str, path: str) -> int:
         r = subprocess.run(
             [ffprobe, "-v", "error", "-select_streams", "a",
              "-show_entries", "stream=index", "-of", "csv=p=0", path],
-            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
         )
         return len([ln for ln in (r.stdout or "").splitlines() if ln.strip()])
     except Exception:
@@ -282,7 +282,7 @@ def probe_audio_languages(ffprobe: str, path: str) -> list[str]:
         r = subprocess.run(
             [ffprobe, "-v", "error", "-select_streams", "a",
              "-show_entries", "stream_tags=language", "-of", "csv=p=0", path],
-            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
         )
         return [ln.strip().lower() for ln in (r.stdout or "").splitlines()]
     except Exception:
@@ -304,7 +304,7 @@ def probe_duration_ms(ffprobe: str, path: str) -> Optional[int]:
         r = subprocess.run(
             [ffprobe, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=nk=1:nw=1", path],
-            capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
         )
         s = (r.stdout or "").strip()
         return int(float(s) * 1000) if s else None
@@ -328,7 +328,7 @@ def _run_ffmpeg(
     full = [ffmpeg, "-progress", "pipe:1", "-nostats", "-hide_banner", *args]
     proc = subprocess.Popen(
         full, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, creationflags=CREATE_NO_WINDOW,
+        text=True, encoding="utf-8", errors="replace", creationflags=CREATE_NO_WINDOW,
     )
     active.add(proc)
     stderr_tail: list[str] = []
@@ -614,7 +614,7 @@ def _smartcut_ranges(
 def _copy_streams(ffprobe: str, source: str, include_audio: bool) -> list[dict[str, str]]:
     result = subprocess.run(
         [ffprobe, "-v", "error", "-show_entries", "stream=index,codec_name,codec_type", "-of", "json", source],
-        capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
     )
     if result.returncode:
         raise ExportError((result.stderr or "ffprobe could not inspect input").strip())
@@ -644,7 +644,7 @@ def _ffmpeg_video_copy_error(
             args += ["-bsf:v", bsf]
         args += params.copy_video_args(codec, container)
         args += ["-f", params.muxer_name(container), target]
-        result = subprocess.run(args, capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, creationflags=CREATE_NO_WINDOW)
         if result.returncode:
             return (result.stderr or "the muxer rejected the stream").strip()
         back = _copy_streams(ffprobe, target, include_audio=False)

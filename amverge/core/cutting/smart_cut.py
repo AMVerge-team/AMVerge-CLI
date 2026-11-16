@@ -45,7 +45,7 @@ def _background_kwargs() -> dict:
 
 def _run_ffmpeg(cmd: list[str]) -> None:
     p = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=120, **_background_kwargs()
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **_background_kwargs()
     )
     if p.returncode != 0:
         raise RuntimeError(f"ffmpeg failed (exit {p.returncode}): {p.stderr[-600:]}")
@@ -461,7 +461,7 @@ def _is_10bit(path: Path) -> bool:
                 get_ffprobe(), "-v", "error", "-select_streams", "v:0",
                 "-show_entries", "stream=pix_fmt", "-of", "default=nk=1:nw=1", str(path),
             ],
-            capture_output=True, text=True, **_background_kwargs(),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", **_background_kwargs(),
         ).stdout
     except Exception:
         return False

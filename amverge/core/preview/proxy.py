@@ -43,7 +43,7 @@ def probe_video(path: str | Path) -> dict:
             "-show_entries", "stream=codec_name,profile,pix_fmt,width,height",
             "-of", "json", str(path),
         ],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
         return {}
@@ -132,7 +132,7 @@ def ensure_preview_proxy(
     if on_progress:
         on_progress(0.0)
 
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(result.stderr.strip() or "ffmpeg failed to build the preview proxy")

@@ -117,7 +117,7 @@ def _run_chunk(
     cmd += ["-i", video_path, "-map", "0:v:0", "-map", "0:a?"]
     cmd += _output_args(output_pattern, cut_points, start_num, video_args)
 
-    result = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=CREATE_NO_WINDOW)
 
     if result.returncode != 0:
         tail = result.stderr[-2000:] if result.stderr else "no stderr"
