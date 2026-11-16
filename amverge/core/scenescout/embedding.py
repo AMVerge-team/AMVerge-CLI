@@ -148,24 +148,26 @@ def _load(device: str | None = None):
     hub if it is not already cached. A token from ``HF_TOKEN`` is forwarded so
     gated checkpoints load.
     """
-    import warnings
-    warnings.filterwarnings("ignore")
-
-    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-
-    import torch
-    from transformers import AutoModel, AutoProcessor
-    from transformers.utils import logging as hf_logging
-    hf_logging.set_verbosity_error()
-    hf_logging.disable_progress_bar()
-
     from ..infra.ipc import log
 
     global _MODEL, _PROCESSOR, _DEVICE
 
     with _LOAD_LOCK:
+        # transformers' lazy __getattr__ is not thread-safe on first import; keep it inside _LOAD_LOCK
+        # so daemon._prewarm and _BackgroundEmbedder cannot race on AutoModel/AutoProcessor.
+        import warnings
+        warnings.filterwarnings("ignore")
+
+        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+        os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
+        import torch
+        from transformers import AutoModel, AutoProcessor
+        from transformers.utils import logging as hf_logging
+        hf_logging.set_verbosity_error()
+        hf_logging.disable_progress_bar()
+
         device_str = resolve_device(device)
 
         if _MODEL is not None and (device is None or device == _DEVICE):
