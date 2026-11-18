@@ -128,7 +128,7 @@ def _prompt_upscale(defaults: dict | None = None):
     err.print("  [muted]Configure AI upscaling options.[/]\n")
 
     keys = get_all_model_keys()
-    default_key = d.get("model", keys[0] if keys else "adore")
+    default_key = d.get("model", keys[0] if keys else "shufflecugan")
     default_idx = keys.index(default_key) if default_key in keys else 0
 
     model_val = select(
@@ -264,7 +264,7 @@ def _run_step_upscale(input_path: str, output_path: str, config: dict, progress_
         upscale_model, download_weights, is_weight_downloaded,
         UPSCALE_REGISTRY,
     )
-    model = config.get("model", "adore")
+    model = config.get("model", "shufflecugan")
     entry = UPSCALE_REGISTRY.get(model)
     if entry is None:
         fail(f"Unknown upscale model: {model}")

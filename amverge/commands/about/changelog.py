@@ -96,7 +96,7 @@ _CLI_ENTRIES = [
         "New commands: upscale, models",
         "System monitor: live GPU/CPU/RAM/ETA during upscale",
         "Portable FFmpeg auto-download to %APPDATA%/com.amverge.cli/",
-        "9 upscale models: adore, shufflecugan, fallin_soft, fallin_strong, anime4k, C4F16, C4F32, R8F64, realesrgan-x2/x4/anime",
+        "8 upscale models: shufflecugan, fallin_soft, fallin_strong, anime4k, C4F16, C4F32, R8F64, realesrgan-x2/x4/anime",
         "Library API: upscale_model(), SystemMonitor",
         "pyproject.toml: [upscale] extra (torch, opencv, spandrel, onnxruntime)",
     ]),

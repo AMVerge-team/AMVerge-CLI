@@ -102,7 +102,7 @@ def _upscale_ipc(model, entry, input, output, scale, preset, mode, fit_w, fit_h)
 
 
 def upscale(
-    model: str = typer.Option("adore", "--model", "-m", help="Model key from registry (see --list-models)"),
+    model: str = typer.Option("shufflecugan", "--model", "-m", help="Model key from registry (see --list-models)"),
     input: Path = typer.Argument(None, help="Input video file"),
     output: Path = typer.Option(Path("upscaled.mp4"), "--output", "-o", help="Output video file"),
     scale: int = typer.Option(2, "--scale", "-s", help="Scale factor (model-specific)"),

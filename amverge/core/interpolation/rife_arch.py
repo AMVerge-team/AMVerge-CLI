@@ -64,7 +64,7 @@ def _conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1)
     )
 
 
-class Head4(nn.Module):
+class Head(nn.Module):
     """v2 context encoder (RIFE 4.20-4.25). Emits a 4-channel feature map."""
 
     def __init__(self):
@@ -88,7 +88,7 @@ class Head4(nn.Module):
         return x3
 
 
-class Head2(nn.Sequential):
+class ContextEncoderV47(nn.Sequential):
     """v4.7 context encoder: Conv down -> ConvTranspose up. 4-channel out.
 
     Subclasses ``Sequential`` so its checkpoint keys are ``encode.0`` /
@@ -161,7 +161,7 @@ class IFNetConfig:
     channels:        per-block width ``c`` (length = number of blocks).
     out_ch:          per-block output channels after PixelShuffle (13 for v2's
                      8-channel feat, 6 for the 1-channel-feat variants).
-    encode:          ``"head4"`` (v2), ``"head2"`` (v4.7), or ``None`` (v1).
+    encode:          ``"head"`` (v2), ``"encoder_v47"`` (v4.7), or ``None`` (v1).
     propagate_feat:  whether each block's feat output feeds the next block
                      (v2) or is dropped (v4.7, v1).
     """
@@ -188,11 +188,11 @@ class IFNet(nn.Module):
 
         # Context encoder (optional). Its feature width is fixed at 4 channels.
         encode_feat = 0
-        if cfg.encode == "head4":
-            self.encode = Head4()
+        if cfg.encode == "head":
+            self.encode = Head()
             encode_feat = 4
-        elif cfg.encode == "head2":
-            self.encode = Head2()
+        elif cfg.encode == "encoder_v47":
+            self.encode = ContextEncoderV47()
             encode_feat = 4
         else:
             self.encode = None
@@ -217,11 +217,7 @@ class IFNet(nn.Module):
     def _encode(self, img):
         return self.encode(img[:, :3]) if self.encode is not None else None
 
-    def cacheReset(self, frame):
-        self.f0 = self._encode(frame)
-        self.f1 = None
-
-    def cachePair(self, img0, img1):
+    def encode_pair(self, img0, img1):
         self.f0 = self._encode(img0)
         self.f1 = self._encode(img1)
 
@@ -305,9 +301,9 @@ def infer_config(state_dict) -> IFNetConfig:
     out_ch = int(last.shape[1]) // 4
 
     if "encode.cnn0.weight" in state_dict:
-        encode = "head4"
+        encode = "head"
     elif "encode.0.weight" in state_dict:
-        encode = "head2"
+        encode = "encoder_v47"
     else:
         encode = None
 
@@ -330,11 +326,8 @@ class RIFEModel(nn.Module):
         super().__init__()
         self.flownet = IFNet(cfg)
 
-    def cacheReset(self, frame):
-        self.flownet.cacheReset(frame)
-
-    def cachePair(self, img0, img1):
-        self.flownet.cachePair(img0, img1)
+    def encode_pair(self, img0, img1):
+        self.flownet.encode_pair(img0, img1)
 
     def forward(self, img0, img1, timestep=0.5):
         return self.flownet(img0, img1, timestep)
