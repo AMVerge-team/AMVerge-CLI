@@ -155,6 +155,9 @@ def _load(device: str | None = None):
     gated checkpoints load.
     """
     from ..infra.ipc import log
+    from ..infra.config import configure_app_storage
+
+    configure_app_storage()
 
     global _MODEL, _PROCESSOR, _DEVICE
 

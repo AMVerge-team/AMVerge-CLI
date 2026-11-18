@@ -145,6 +145,7 @@ AMVerge-CLI/
 │       ├── image/
 │       │   └── image.py         crop_image() + CropData - supports animated GIF
 │       ├── infra/
+│       │   ├── config.py        config/model paths, app paths.json + ai_storage_path.txt discovery, HF_HOME setup
 │       │   ├── binaries.py      get_binary(), get_ffmpeg(), get_ffprobe() - PyInstaller-aware PATH search
 │       │   ├── diagnostics.py   get_gpu_info(), get_versions() - clean wrappers
 │       │   ├── ipc.py           emit_progress(), emit_event(), log(), check_if_path_exists(), build_video_cache_prefix()

@@ -270,7 +270,7 @@ amverge models --verbose                   # show file paths and hashes
 | `--verbose / -v` | false | Show file paths and hashes |
 
 **Model keys:** Use `amverge upscale --list-models` or `amverge interpolate --list-models` for full lists.
-Storage: `%APPDATA%/com.amverge.cli/models/upscale/{key}/` and `.../interpolation/{key}/`.
+Storage: `%APPDATA%/com.amverge.cli/models/upscale/{key}/` and `.../interpolation/{key}/`. If AMVerge Desktop moved AI storage, the CLI reads `paths.json` or `ai_storage_path.txt` from the desktop app data folder and uses its `config` and `hf-cache` folders. `AMVERGE_CONFIG_DIR`, `HF_HOME`, and `HF_HUB_CACHE` override app discovery.
 
 ---
 
