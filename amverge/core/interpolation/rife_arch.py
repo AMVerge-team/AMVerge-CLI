@@ -13,7 +13,7 @@ skeleton but differ in three ways:
 Rather than hardcode one shape, :class:`IFNet` is driven by an
 :class:`IFNetConfig`, and :func:`infer_config` derives that config straight
 from a checkpoint's tensor shapes. So any compatible RIFE checkpoint loads —
-v2 (4.20-4.25, heavy, lite), Elexor, and the v1 line (4.6, ...) — without a
+v2 (4.20-4.25, heavy, lite), v4.7, and the v1 line (4.6, ...) — without a
 per-model table. Non-RIFE checkpoints (e.g. PerVFI) raise a clear error.
 """
 
