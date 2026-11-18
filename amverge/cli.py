@@ -1,5 +1,9 @@
 ﻿import typer
 
+from .core.infra.config import configure_app_storage
+
+configure_app_storage()
+
 from .commands.detection.detect import detect
 from .commands.export.export import export
 from .commands.export.merge import merge
