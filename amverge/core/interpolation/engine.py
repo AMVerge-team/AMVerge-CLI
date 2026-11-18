@@ -224,7 +224,7 @@ def interpolate_video(
                 t0 = _frame_to_tensor(cv2.cvtColor(curr_frame, cv2.COLOR_BGR2RGB), device)
                 t0_padded = _pad_to_tensor_body(t0)
 
-                model.cachePair(p0_padded, t0_padded)
+                model.encode_pair(p0_padded, t0_padded)
                 saved_f0 = model.flownet.f0
                 saved_f1 = model.flownet.f1
 
