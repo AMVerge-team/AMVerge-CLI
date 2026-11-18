@@ -24,7 +24,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 _tenGrid: dict = {}
-_tenFlowDiv: dict = {}
 
 
 def _warp(tenInput, tenFlow):
@@ -42,16 +41,18 @@ def _warp(tenInput, tenFlow):
             .expand(tenFlow.shape[0], -1, -1, W)
         )
         _tenGrid[k] = torch.cat([tenHorizontal, tenVertical], 1).to(tenFlow.dtype)
-        _tenFlowDiv[k] = torch.tensor(
-            [2.0 / (W - 1), 2.0 / (H - 1)],
-            dtype=tenFlow.dtype,
-            device=tenFlow.device,
-        ).view(1, 2, 1, 1)
 
-    g = (_tenGrid[k] + tenFlow * _tenFlowDiv[k]).permute(0, 2, 3, 1)
+    H, W = tenInput.shape[2], tenInput.shape[3]
+    flow_u = tenFlow[:, 0:1, :, :] / ((W - 1.0) / 2.0)
+    flow_v = tenFlow[:, 1:2, :, :] / ((H - 1.0) / 2.0)
+    g = (_tenGrid[k] + torch.cat([flow_u, flow_v], 1)).permute(0, 2, 3, 1)
+
     return F.grid_sample(
-        input=tenInput, grid=g, mode="bilinear",
-        padding_mode="border", align_corners=True,
+        input=tenInput,
+        grid=g,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
     )
 
 
