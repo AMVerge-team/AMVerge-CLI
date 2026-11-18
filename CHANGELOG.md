@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.3.4
+
+- **Interpolation architecture & verification**: Swapped backward warping to canonical `hzwer/Practical-RIFE` implementation and added SHA-256 verification hashes for all 19 interpolation models.
+- **Model registries cleanup**: Removed unpublished adore.pth model from upscale registry and updated default upscale model to shufflecugan.
+- **Storage & attribution updates**: Updated attributions and streamlined model registries.
+
 ## v1.3.3
 
 - **Scene Scout thread-safety fix**: Moved lazy `torch` and `transformers` (`AutoModel`, `AutoProcessor`) imports inside `_LOAD_LOCK` in `amverge/core/scenescout/embedding.py` so the daemon's `_prewarm` thread and `_BackgroundEmbedder` cannot race on `transformers`' lazy importer (`ImportError: cannot import name 'AutoModel' from 'transformers'`).
