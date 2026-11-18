@@ -3,6 +3,9 @@ import sys
 
 
 def get_amverge_config_dir():
+    override = os.environ.get("AMVERGE_CONFIG_DIR", "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
     appdata = os.environ.get("APPDATA", "")
     if appdata:
         return os.path.join(appdata, "com.amverge.cli")

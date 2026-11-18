@@ -20,6 +20,12 @@ _APP_TEAM = [
     ("TOSINIRL",        "Mac video import fixes"),
 ]
 
+# third-party projects AMVerge builds on, credited by their authors
+_BUILT_WITH = [
+    ("Scene Scout", "scene search · Mark-Shun (Sonicfreak1111) · GPL-3.0"),
+    ("NeLux",  "NVDEC GPU decode · NevermindNilas (orig. Trentonom0r3) · AGPL-3.0"),
+]
+
 
 def _credits_table() -> Table:
     t = Table(
@@ -39,6 +45,11 @@ def _credits_table() -> Table:
     t.add_row("", "", end_section=True)
     t.add_row("[white bold]AMVerge App[/]", "", end_section=True)
     for name, role in _APP_TEAM:
+        t.add_row(name, role)
+
+    t.add_row("", "", end_section=True)
+    t.add_row("[white bold]Built with[/]", "", end_section=True)
+    for name, role in _BUILT_WITH:
         t.add_row(name, role)
 
     return t

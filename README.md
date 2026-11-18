@@ -264,6 +264,10 @@ Built by [Moongetsu](https://github.com/Moongetsu) as a standalone port of the [
 
 AMVerge was created by [Crptk](https://github.com/crptk). All core scene detection and clip management logic originates from the original AMVerge project.
 
+Scene search (`amverge scout`) is built on [Scene Scout](https://github.com/Mark-Shun/scene-scout) by [Mark-Shun](https://github.com/Mark-Shun) (Sonicfreak1111). The SigLIP 2 embedding path is ported from that project, and the database format stays compatible with it. Scene Scout is licensed under GPL-3.0. It began as a fork of [Gabrjiele's SigLIP 2 NaFlex search](https://github.com/Gabrjiele/siglip2-naflex-search), using [Google's SigLIP 2](https://huggingface.co/google/siglip2-so400m-patch16-naflex).
+
+GPU video decoding (`--decode-method nelux`) uses [NeLux](https://github.com/NevermindNilas/NeLux) by [NevermindNilas](https://github.com/NevermindNilas), originally created by [Trentonom0r3](https://github.com/Trentonom0r3). NeLux is licensed under AGPL-3.0 and is installed separately as an optional dependency.
+
 </details>
 
 ---
