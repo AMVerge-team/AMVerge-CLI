@@ -27,20 +27,6 @@
     }
   },
   "models": {
-    "adore": {
-      "method": "ml",
-      "name": "Adore",
-      "scales": [
-        2,
-        4
-      ],
-      "credit": "by renarchi",
-      "description": "High quality anime upscaler",
-      "category": "upscale",
-      "file": "adore.pth",
-      "size_bytes": 5657417,
-      "hash": "443378bdc6db6cf4a75eea61ee7afc78b2c4b6a4d3b3981a40ff61f38bbc8f1a"
-    },
     "shufflecugan": {
       "method": "ml",
       "name": "ShuffleCUGAN",

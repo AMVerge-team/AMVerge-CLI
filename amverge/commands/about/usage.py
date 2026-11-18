@@ -86,7 +86,7 @@ def usage() -> None:
     t5.add_row("list caches",           "amverge cache %APPDATA%/amverge/episodes/id/")
     t5.add_row("clear cache",           "amverge cache ./out --clear ep01.mkv")
     t5.add_row("library",               "from amverge import detect_scenes")
-    t5.add_row("upscale (ML)",          "amverge upscale ep01.mkv -m adore -s 2")
+    t5.add_row("upscale (ML)",          "amverge upscale ep01.mkv -m shufflecugan -s 2")
     t5.add_row("upscale (Anime4K)",     "amverge upscale ep01.mkv -m anime4k --mode medium -s 2")
     t5.add_row("interpolate",           "amverge interpolate ep01.mkv -m rife4.25 -f 2")
     t5.add_row("interpolate (archival)","amverge interpolate ep01.mkv -m rife4.25-heavy -f 4 -p archival")

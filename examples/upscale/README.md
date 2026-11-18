@@ -14,7 +14,7 @@ Models are defined in `core/upscaling/registry.json`. See [docs/registry.md](../
 
 ```bash
 pip install amverge[upscale]         # for ML and ArtCNN methods
-amverge models --download adore      # pre-download ML model
+amverge models --download shufflecugan      # pre-download ML model
 amverge models --download C4F32      # pre-download ArtCNN model
 amverge models --download anime4k    # pre-download Anime4K shaders
 ```
@@ -23,6 +23,6 @@ amverge models --download anime4k    # pre-download Anime4K shaders
 
 | File | What It Does |
 |------|-------------|
-| `01_ml_upscale.py` | Upscale with adore model (2x) |
+| `01_ml_upscale.py` | Upscale with shufflecugan model (2x) |
 | `02_anime4k_upscale.py` | Fast filter-based upscale with Anime4K |
 | `03_manage_models.py` | List, download, and delete model files |

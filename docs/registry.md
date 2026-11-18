@@ -74,19 +74,19 @@ PyTorch model loaded via spandrel. Frame-by-frame inference on GPU/CPU.
 | `hash` | yes | SHA-256 hex digest for integrity verification |
 
 ```json
-"adore": {
+"shufflecugan": {
   "method": "ml",
-  "name": "Adore",
+  "name": "ShuffleCUGAN",
   "scales": [2, 4],
   "credit": "based on AniSmooth by moongetsu",
   "description": "High quality anime upscaler",
   "category": "upscale",
-  "file": "adore.pth",
+  "file": "sudo_shuffle_cugan_9.584.969.pth",
   "hash": "443378bdc6db6cf4a75eea61ee7afc78b2c4b6a4d3b3981a40ff61f38bbc8f1a"
 }
 ```
 
-Download URL becomes: `{_source.ml}{category}/{file}` = `AniSmooth-Models/.../upscale/adore.pth`
+Download URL becomes: `{_source.ml}{category}/{file}` = `AniSmooth-Models/.../upscale/sudo_shuffle_cugan_9.584.969.pth`
 
 Model files are stored at `%APPDATA%/com.amverge.cli/models/upscale/{key}/{file}`.
 
