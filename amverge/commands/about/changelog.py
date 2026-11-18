@@ -61,7 +61,7 @@ _CLI_ENTRIES = [
     ]),
     ("v0.3.0", [
         "Interpolation: RIFE PyTorch CUDA/CPU inference (interpolate command)",
-        "Interpolation: 18 RIFE models (4.6 through 4.25-heavy, Elexor, PerVFI)",
+        "Interpolation: 18 RIFE models (4.6 through 4.25-heavy, RIFE 4.7, PerVFI)",
         "Interpolation: SystemMonitor live display (GPU util/temp/VRAM, CPU/RAM, ETA)",
         "Interpolation: --no-monitor flag, --yes auto-confirm, FFmpeg bootstrap",
         "Flowframes: Flowframes 1.42.0 integration (flowframes command)",

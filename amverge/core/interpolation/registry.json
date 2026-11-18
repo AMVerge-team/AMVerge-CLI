@@ -132,13 +132,14 @@
     "file": "rife425_lite.pth",
     "heavy": false
   },
-  "rife-elexor": {
+  "rife4.7": {
     "method": "rife",
-    "name": "RIFE Elexor",
+    "name": "RIFE 4.7",
     "credit": "by hzwer / megvii-research",
-    "description": "RIFE Elexor variant (optimized for anime)",
-    "file": "rife_elexor.pth",
-    "heavy": false
+    "description": "Real-time Intermediate Flow Estimation v4.7 (v1 arch, 4-ch head)",
+    "file": "rife47.pth",
+    "heavy": false,
+    "hash": "6a8a825ab2750558bdd20dcced386fd82b7222c7ba58c11d3b611d9c44f1be63"
   },
   "pervfi": {
     "method": "pervfi",
