@@ -104,7 +104,6 @@ def softsplat(tenIn, tenFlow, tenMetric=None, strMode='avg'):
 # ---------------------------------------------------------------------------
 
 _tenGrid_cache: dict = {}
-_tenFlowDiv_cache: dict = {}
 _MAX_WARP_CACHE = 16
 
 
@@ -114,7 +113,6 @@ def warp(tenInput, tenFlow):
         if len(_tenGrid_cache) >= _MAX_WARP_CACHE:
             oldest = next(iter(_tenGrid_cache))
             _tenGrid_cache.pop(oldest, None)
-            _tenFlowDiv_cache.pop(oldest, None)
         H, W = tenFlow.shape[2], tenFlow.shape[3]
         tenHorizontal = (
             torch.linspace(-1.0, 1.0, W, device=tenFlow.device, dtype=torch.float32)
@@ -127,16 +125,18 @@ def warp(tenInput, tenFlow):
             .expand(tenFlow.shape[0], -1, -1, W)
         )
         _tenGrid_cache[k] = torch.cat([tenHorizontal, tenVertical], 1).to(tenFlow.dtype)
-        _tenFlowDiv_cache[k] = torch.tensor(
-            [2.0 / (W - 1), 2.0 / (H - 1)],
-            dtype=tenFlow.dtype,
-            device=tenFlow.device,
-        ).view(1, 2, 1, 1)
 
-    g = (_tenGrid_cache[k] + tenFlow * _tenFlowDiv_cache[k]).permute(0, 2, 3, 1)
+    H, W = tenInput.shape[2], tenInput.shape[3]
+    flow_u = tenFlow[:, 0:1, :, :] / ((W - 1.0) / 2.0)
+    flow_v = tenFlow[:, 1:2, :, :] / ((H - 1.0) / 2.0)
+    g = (_tenGrid_cache[k] + torch.cat([flow_u, flow_v], 1)).permute(0, 2, 3, 1)
+
     return F.grid_sample(
-        input=tenInput, grid=g, mode='bilinear',
-        padding_mode='border', align_corners=True,
+        input=tenInput,
+        grid=g,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
     )
 
 

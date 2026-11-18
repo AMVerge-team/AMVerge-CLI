@@ -266,7 +266,7 @@ AMVerge was created by [Crptk](https://github.com/crptk). All core scene detecti
 
 Scene search (`amverge scout`) is built on [Scene Scout](https://github.com/Mark-Shun/scene-scout) by [Mark-Shun](https://github.com/Mark-Shun) (Sonicfreak1111). The SigLIP 2 embedding path is ported from that project, and the database format stays compatible with it. Scene Scout is licensed under GPL-3.0. It began as a fork of [Gabrjiele's SigLIP 2 NaFlex search](https://github.com/Gabrjiele/siglip2-naflex-search), using [Google's SigLIP 2](https://huggingface.co/google/siglip2-so400m-patch16-naflex).
 
-The RIFE warp helper (`_warp` in `rife_arch.py`, and `warp` in `pervfi_arch.py`) uses the cached `tenFlowDiv` form from [TheAnimeScripter](https://github.com/NevermindNilas/TheAnimeScripter) `src/rifearches/warplayer.py` by [NevermindNilas](https://github.com/NevermindNilas). The older inline-divide warp is [Practical-RIFE](https://github.com/hzwer/Practical-RIFE) by hzwer. TheAnimeScripter is licensed under AGPL-3.0.
+The RIFE warp helper (`_warp` in `rife_arch.py`, and `warp` in `pervfi_arch.py`) uses the canonical backward-warp implementation from [Practical-RIFE](https://github.com/hzwer/Practical-RIFE) by [hzwer](https://github.com/hzwer).
 
 GPU video decoding (`--decode-method nelux`) uses [NeLux](https://github.com/NevermindNilas/NeLux) by [NevermindNilas](https://github.com/NevermindNilas), originally created by [Trentonom0r3](https://github.com/Trentonom0r3). NeLux is licensed under AGPL-3.0 and is installed separately as an optional dependency.
 
