@@ -6,14 +6,14 @@ The RIFE family ships several checkpoint shapes that all share the IFNet
 skeleton but differ in three ways:
 
 * number of coarse-to-fine blocks (4 or 5),
-* the context encoder (a 4-conv ``Head`` for v2, a 2-conv encoder for Elexor,
+* the context encoder (a 4-conv ``Head`` for v2, a 2-conv encoder for v4.7,
   or none at all for the v1 line), and
 * per-block channel widths and the per-block output width (``out_ch``).
 
 Rather than hardcode one shape, :class:`IFNet` is driven by an
 :class:`IFNetConfig`, and :func:`infer_config` derives that config straight
 from a checkpoint's tensor shapes. So any compatible RIFE checkpoint loads —
-v2 (4.20-4.25, heavy, lite), Elexor, and the v1 line (4.6, ...) — without a
+v2 (4.20-4.25, heavy, lite), v4.7, and the v1 line (4.6, ...) — without a
 per-model table. Non-RIFE checkpoints (e.g. PerVFI) raise a clear error.
 """
 
@@ -88,10 +88,10 @@ class Head4(nn.Module):
 
 
 class Head2(nn.Sequential):
-    """Elexor context encoder: Conv down -> ConvTranspose up. 4-channel out.
+    """v4.7 context encoder: Conv down -> ConvTranspose up. 4-channel out.
 
     Subclasses ``Sequential`` so its checkpoint keys are ``encode.0`` /
-    ``encode.1`` (matching the Elexor weights), while a custom ``forward``
+    ``encode.1`` (matching v4.7 weights), while a custom ``forward``
     applies the LeakyReLU between the two convs.
     """
 
@@ -160,9 +160,9 @@ class IFNetConfig:
     channels:        per-block width ``c`` (length = number of blocks).
     out_ch:          per-block output channels after PixelShuffle (13 for v2's
                      8-channel feat, 6 for the 1-channel-feat variants).
-    encode:          ``"head4"`` (v2), ``"head2"`` (Elexor), or ``None`` (v1).
+    encode:          ``"head4"`` (v2), ``"head2"`` (v4.7), or ``None`` (v1).
     propagate_feat:  whether each block's feat output feeds the next block
-                     (v2) or is dropped (Elexor, v1).
+                     (v2) or is dropped (v4.7, v1).
     """
 
     channels: list
