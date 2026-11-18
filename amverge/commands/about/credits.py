@@ -22,6 +22,7 @@ _APP_TEAM = [
 
 # third-party projects AMVerge builds on, credited by their authors
 _BUILT_WITH = [
+    ("Scene Scout", "scene search · Mark-Shun (Sonicfreak1111) · GPL-3.0"),
     ("NeLux",  "NVDEC GPU decode · NevermindNilas (orig. Trentonom0r3) · AGPL-3.0"),
 ]
 
