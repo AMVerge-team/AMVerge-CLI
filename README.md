@@ -62,7 +62,7 @@ amverge detect episode.mp4
 amverge export episode.mp4 --scenes episode_scenes/scenes.json --select 0,2,5-8
 amverge merge clip1.mp4 clip2.mp4 --output out.mp4
 amverge info episode.mp4
-amverge upscale episode.mp4 --method ml --model adore -s 2
+amverge upscale episode.mp4 --method ml --model shufflecugan -s 2
 amverge upscale episode.mp4 --method anime4k --anime4k-mode medium
 amverge models                           # manage upscale & interpolation model files
 amverge interpolate episode.mp4 -f 2     # AI frame interpolation (RIFE, PyTorch)
