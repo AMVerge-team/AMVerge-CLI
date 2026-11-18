@@ -264,6 +264,8 @@ Built by [Moongetsu](https://github.com/Moongetsu) as a standalone port of the [
 
 AMVerge was created by [Crptk](https://github.com/crptk). All core scene detection and clip management logic originates from the original AMVerge project.
 
+GPU video decoding (`--decode-method nelux`) uses [NeLux](https://github.com/NevermindNilas/NeLux) by [NevermindNilas](https://github.com/NevermindNilas), originally created by [Trentonom0r3](https://github.com/Trentonom0r3). NeLux is licensed under AGPL-3.0 and is installed separately as an optional dependency.
+
 </details>
 
 ---
