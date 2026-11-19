@@ -1,8 +1,82 @@
+import json
 import os
 import sys
 
 
+def _app_data_dirs():
+    home = os.path.expanduser("~")
+    appdata = os.environ.get("APPDATA", "")
+    dirs = []
+    if appdata:
+        dirs.extend([
+            os.path.join(appdata, "app.amverge"),
+            os.path.join(appdata, "AMVerge"),
+        ])
+    if os.name == "nt":
+        dirs.append(os.path.join(home, "AppData", "Roaming", "app.amverge"))
+    elif sys.platform == "darwin":
+        dirs.append(os.path.join(home, "Library", "Application Support", "app.amverge"))
+    else:
+        dirs.append(os.path.join(home, ".local", "share", "app.amverge"))
+    return list(dict.fromkeys(dirs))
+
+
+def _read_app_paths():
+    paths = {}
+    for directory in _app_data_dirs():
+        paths_file = os.path.join(directory, "paths.json")
+        if os.path.isfile(paths_file):
+            try:
+                with open(paths_file, encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                if isinstance(payload, dict):
+                    for key, value in payload.items():
+                        if value is not None and value != "":
+                            paths.setdefault(key, value)
+            except (OSError, ValueError, TypeError):
+                pass
+        pointer_file = os.path.join(directory, "ai_storage_path.txt")
+        if os.path.isfile(pointer_file):
+            try:
+                with open(pointer_file, encoding="utf-8") as handle:
+                    root = handle.read().strip()
+                if root:
+                    if not paths.get("ai_config_dir"):
+                        paths["ai_config_dir"] = os.path.join(root, "config")
+                    if not paths.get("hf_home_dir"):
+                        paths["hf_home_dir"] = os.path.join(root, "hf-cache")
+            except OSError:
+                pass
+    return paths
+
+
+def configure_app_storage() -> None:
+    paths = _read_app_paths()
+    if not os.environ.get("AMVERGE_CONFIG_DIR", "").strip():
+        config = str(paths.get("ai_config_dir") or "").strip()
+        if config:
+            os.environ["AMVERGE_CONFIG_DIR"] = os.path.abspath(os.path.expanduser(config))
+    if (
+        not os.environ.get("HF_HOME", "").strip()
+        and not os.environ.get("HF_HUB_CACHE", "").strip()
+    ):
+        hf_home = str(paths.get("hf_home_dir") or "").strip()
+        if hf_home:
+            os.environ["HF_HOME"] = os.path.abspath(os.path.expanduser(hf_home))
+    if not os.environ.get("AMVERGE_SCENE_SCOUT_DIR", "").strip():
+        scout_root = str(paths.get("scene_scout_dir") or "").strip()
+        if not scout_root:
+            episodes = str(paths.get("episodes_storage_dir") or "").strip()
+            if episodes:
+                scout_root = os.path.join(os.path.dirname(episodes), "amverge-scene-scout")
+        if scout_root:
+            os.environ["AMVERGE_SCENE_SCOUT_DIR"] = os.path.abspath(
+                os.path.expanduser(scout_root)
+            )
+
+
 def get_amverge_config_dir():
+    configure_app_storage()
     override = os.environ.get("AMVERGE_CONFIG_DIR", "").strip()
     if override:
         return os.path.abspath(os.path.expanduser(override))

@@ -43,6 +43,9 @@ def default_root() -> Path:
 
 def resolve_root(explicit: str | Path | None = None) -> Path:
     """The directory holding every Scene Scout database."""
+    from ..infra.config import configure_app_storage
+
+    configure_app_storage()
     if explicit:
         return Path(explicit).expanduser().resolve()
 
@@ -96,7 +99,7 @@ def list_db_paths(root: str | Path | None = None) -> list[Path]:
     if not directory.is_dir():
         return []
     found: list[Path] = []
-    for suffix in (".scoutdb", ".db", ".scdb"):
+    for suffix in sorted(SUPPORTED_DB_SUFFIXES):
         found.extend(directory.glob(f"*{suffix}"))
     seen = set()
     result = []
