@@ -5,7 +5,8 @@
 - **Interpolation architecture & verification**: Swapped backward warping to canonical `hzwer/Practical-RIFE` implementation and added SHA-256 verification hashes for all 19 interpolation models.
 - **Model registries cleanup**: Removed unpublished adore.pth model from upscale registry and updated default upscale model to shufflecugan.
 - **Storage & attribution updates**: Updated attributions and streamlined model registries.
-- **Desktop storage discovery**: Standalone CLI launches now follow the desktop app's `paths.json` and legacy `ai_storage_path.txt` for moved config, model weights, FFmpeg, and Hugging Face cache. Explicit `AMVERGE_CONFIG_DIR`, `HF_HOME`, and `HF_HUB_CACHE` still take precedence.
+- **Desktop storage discovery**: Standalone CLI launches now follow the desktop app's `paths.json` and legacy `ai_storage_path.txt` for moved config, model weights, FFmpeg, Scene Scout databases, and Hugging Face cache. Explicit `AMVERGE_CONFIG_DIR`, `HF_HOME`, `HF_HUB_CACHE`, and `AMVERGE_SCENE_SCOUT_DIR` still take precedence.
+- **Scene Scout snapshot recovery**: Complete SigLIP 2 snapshots load offline, while incomplete caches trigger a targeted repair download before model loading. Failed repairs now include cache recovery steps instead of only a missing weights exception.
 
 ## v1.3.3
 

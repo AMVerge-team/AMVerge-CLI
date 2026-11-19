@@ -63,6 +63,16 @@ def configure_app_storage() -> None:
         hf_home = str(paths.get("hf_home_dir") or "").strip()
         if hf_home:
             os.environ["HF_HOME"] = os.path.abspath(os.path.expanduser(hf_home))
+    if not os.environ.get("AMVERGE_SCENE_SCOUT_DIR", "").strip():
+        scout_root = str(paths.get("scene_scout_dir") or "").strip()
+        if not scout_root:
+            episodes = str(paths.get("episodes_storage_dir") or "").strip()
+            if episodes:
+                scout_root = os.path.join(os.path.dirname(episodes), "amverge-scene-scout")
+        if scout_root:
+            os.environ["AMVERGE_SCENE_SCOUT_DIR"] = os.path.abspath(
+                os.path.expanduser(scout_root)
+            )
 
 
 def get_amverge_config_dir():

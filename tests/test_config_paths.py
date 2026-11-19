@@ -36,15 +36,18 @@ def test_app_paths_json_supplies_config_and_hf_storage(monkeypatch, tmp_path):
     (app_data / "paths.json").write_text(json.dumps({
         "ai_config_dir": str(config),
         "hf_home_dir": str(hf_home),
+        "scene_scout_dir": str(tmp_path / "moved" / "amverge-scene-scout"),
     }), encoding="utf-8")
     monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
     monkeypatch.delenv("AMVERGE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("HF_HOME", raising=False)
     monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.delenv("AMVERGE_SCENE_SCOUT_DIR", raising=False)
 
     assert get_amverge_config_dir() == str(config)
     configure_app_storage()
     assert os.environ["HF_HOME"] == str(hf_home)
+    assert os.environ["AMVERGE_SCENE_SCOUT_DIR"] == str(tmp_path / "moved" / "amverge-scene-scout")
 
 
 def test_legacy_ai_pointer_supplies_config_and_hf_storage(monkeypatch, tmp_path):
