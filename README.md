@@ -284,3 +284,14 @@ AMVerge CLI is licensed under the GNU GPL v3.0.
 Any derivative work must also be open-source under the same license.
 
 </details>
+
+---
+
+## Links
+
+- **Website**: [amverge.app](https://amverge.app/)
+- **Desktop App**: [AMVerge-team/AMVerge](https://github.com/AMVerge-team/AMVerge)
+- **After Effects Extension**: [AMVerge-team/AMVerge-Extension](https://github.com/AMVerge-team/AMVerge-Extension)
+- **Website Repo**: [AMVerge-team/AMVerge-Website](https://github.com/AMVerge-team/AMVerge-Website)
+- **Homebrew Tap (macOS)**: [AMVerge-team/homebrew-tap](https://github.com/AMVerge-team/homebrew-tap)
+- **Discord**: [Join the AMVerge Discord](https://discord.gg/bmXjTgsAaN)
