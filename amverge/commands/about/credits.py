@@ -38,7 +38,7 @@ _EXTENSION_TEAM = [
 # third-party projects AMVerge builds on, credited by their authors
 _BUILT_WITH = [
     ("Scene Scout", "scene search · Mark-Shun (Sonicfreak1111) · GPL-3.0"),
-    ("TAS warp", "RIFE tenFlowDiv warp · NevermindNilas · AGPL-3.0"),
+    ("Practical-RIFE", "RIFE optical-flow warp · hzwer / Megvii Research · MIT"),
     ("NeLux",  "NVDEC GPU decode · NevermindNilas (orig. Trentonom0r3) · AGPL-3.0"),
     ("Depth Anything", "vendored model code · Apache-2.0"),
 ]
