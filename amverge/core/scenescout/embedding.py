@@ -155,11 +155,14 @@ def _model_snapshot(token: str | None) -> str:
         try:
             return snapshot_download(**kwargs, local_files_only=False)
         except Exception as exc:
+            from ..infra.ipc import log
+            detail = f"{type(exc).__name__}: {exc}"
+            log(f"[error] SigLIP 2 snapshot_download failed: {detail}")
             raise SceneScoutModelUnavailable(
-                "Scene Scout's SigLIP 2 model cache is incomplete. Connect to the internet "
-                "and retry so the missing files can download. If it keeps failing, delete "
-                "the models--google--siglip2-so400m-patch16-naflex folder inside your "
-                "Hugging Face cache and retry."
+                f"Failed to download Scene Scout's SigLIP 2 model ({detail}). "
+                "Check your internet connection and folder permissions, then retry. "
+                "If it keeps failing, delete the models--google--siglip2-so400m-patch16-naflex "
+                "folder inside your Hugging Face cache and retry."
             ) from exc
 
 
