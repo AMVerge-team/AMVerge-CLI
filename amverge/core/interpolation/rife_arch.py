@@ -23,33 +23,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-_tenGrid: dict = {}
+_WARP_GRID_CACHE: dict[tuple, torch.Tensor] = {}
 
 
-def _warp(tenInput, tenFlow):
-    k = (str(tenFlow.device), str(tenFlow.size()), str(tenFlow.dtype))
-    if k not in _tenGrid:
-        H, W = tenFlow.shape[2], tenFlow.shape[3]
-        tenHorizontal = (
-            torch.linspace(-1.0, 1.0, W, device=tenFlow.device, dtype=torch.float32)
-            .view(1, 1, 1, W)
-            .expand(tenFlow.shape[0], -1, H, -1)
-        )
-        tenVertical = (
-            torch.linspace(-1.0, 1.0, H, device=tenFlow.device, dtype=torch.float32)
-            .view(1, 1, H, 1)
-            .expand(tenFlow.shape[0], -1, -1, W)
-        )
-        _tenGrid[k] = torch.cat([tenHorizontal, tenVertical], 1).to(tenFlow.dtype)
+def _warp(img: torch.Tensor, flow: torch.Tensor) -> torch.Tensor:
+    b, _, h, w = flow.shape
+    key = (flow.device, b, h, w, flow.dtype)
+    base = _WARP_GRID_CACHE.get(key)
+    if base is None:
+        ys = torch.linspace(-1.0, 1.0, h, device=flow.device, dtype=torch.float32)
+        xs = torch.linspace(-1.0, 1.0, w, device=flow.device, dtype=torch.float32)
+        grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+        base = torch.stack((grid_x, grid_y), dim=-1).unsqueeze(0).expand(b, -1, -1, -1).to(flow.dtype)
+        _WARP_GRID_CACHE[key] = base
 
-    H, W = tenInput.shape[2], tenInput.shape[3]
-    flow_u = tenFlow[:, 0:1, :, :] / ((W - 1.0) / 2.0)
-    flow_v = tenFlow[:, 1:2, :, :] / ((H - 1.0) / 2.0)
-    g = (_tenGrid[k] + torch.cat([flow_u, flow_v], 1)).permute(0, 2, 3, 1)
+    ih, iw = img.shape[2], img.shape[3]
+    norm_u = flow[:, 0] / ((iw - 1.0) / 2.0)
+    norm_v = flow[:, 1] / ((ih - 1.0) / 2.0)
+    sample_grid = base + torch.stack((norm_u, norm_v), dim=-1)
 
     return F.grid_sample(
-        input=tenInput,
-        grid=g,
+        img,
+        sample_grid,
         mode="bilinear",
         padding_mode="border",
         align_corners=True,
