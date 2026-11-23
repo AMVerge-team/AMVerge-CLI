@@ -394,13 +394,18 @@ def build_copy_args(
     seek_ms: int | None = None, dur_ms: int | None = None, bsf: str | None = None,
     audio_track: int | None = None, audio_count: int | None = None,
     audio_single: bool = False, video_tag: list[str] | None = None,
+    seek_origin: Fraction = Fraction(0),
 ) -> list[str]:
     """Stream-copy the whole input (pre-cut clip) or a [seek, seek+dur] range
     (cut from a source episode). Input-side ``-ss`` = fast keyframe seek."""
     ext = Path(out).suffix.lstrip(".").lower()
     args = ["-y"]
     if seek_ms and seek_ms > 0:
-        args += ["-ss", _time_str(seek_ms)]
+        # Input-side -ss with -c:v copy snaps to the keyframe <= target.
+        # Include seek_origin (non-zero container start_time) plus a 10ms epsilon
+        # (< 1 frame even at 60fps) so millisecond rounding never undershoots the
+        # target keyframe and snaps back to the previous scene.
+        args += ["-ss", _sec_str(Fraction(seek_ms + 10, 1000) + seek_origin)]
     args += ["-i", inp, "-map", "0:v:0"]
     args += audio_map_args(audio, audio_track, audio_count, audio_single)
     if dur_ms and dur_ms > 0:

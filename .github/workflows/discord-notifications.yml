@@ -1,0 +1,27 @@
+name: Discord Notifications
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    types: [opened, closed, reopened]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, closed, reopened]
+  issue_comment:
+    types: [created]
+  release:
+    types: [published]
+  watch:
+    types: [started]
+  create:
+  delete:
+
+jobs:
+  notify:
+    uses: AMVerge-team/.github/.github/workflows/discord-notify.yml@main
+    with:
+      bot_name: "AMVerge CLI"
+      bot_avatar: "amverge-cli.png"
+    secrets: inherit

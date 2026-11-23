@@ -410,15 +410,16 @@ def _export_one(
             track = resolved
             audio_count = len(audio_languages)
 
+    frames = job_frames(job)
+    grid_rate = str(_cached_video_rate(job.input)) if frames else None
+    seek_origin = _cached_seek_origin(job.input) if job.seek_ms else Fraction(0)
+
     def copy_args() -> list[str]:
         bsf = params.stream_copy_bsf(source_video_codec, ext)
         return params.build_copy_args(job.input, out_path, settings.audio, job.seek_ms, job.dur_ms, bsf,
                                       track, audio_count, settings.audio_single,
-                                      params.copy_video_args(source_video_codec, ext, source_frame_rate))
-
-    frames = job_frames(job)
-    grid_rate = str(_cached_video_rate(job.input)) if frames else None
-    seek_origin = _cached_seek_origin(job.input) if job.seek_ms else Fraction(0)
+                                      params.copy_video_args(source_video_codec, ext, source_frame_rate),
+                                      seek_origin)
 
     def reencode_args(codec: str, gpu: bool) -> list[str]:
         return params.build_reencode_args(job.input, out_path, codec, settings.audio, gpu,

@@ -62,7 +62,7 @@ amverge detect episode.mp4
 amverge export episode.mp4 --scenes episode_scenes/scenes.json --select 0,2,5-8
 amverge merge clip1.mp4 clip2.mp4 --output out.mp4
 amverge info episode.mp4
-amverge upscale episode.mp4 --method ml --model adore -s 2
+amverge upscale episode.mp4 --method ml --model shufflecugan -s 2
 amverge upscale episode.mp4 --method anime4k --anime4k-mode medium
 amverge models                           # manage upscale & interpolation model files
 amverge interpolate episode.mp4 -f 2     # AI frame interpolation (RIFE, PyTorch)
@@ -264,6 +264,14 @@ Built by [Moongetsu](https://github.com/Moongetsu) as a standalone port of the [
 
 AMVerge was created by [Crptk](https://github.com/crptk). All core scene detection and clip management logic originates from the original AMVerge project.
 
+Scene search (`amverge scout`) is built on [Scene Scout](https://github.com/Mark-Shun/scene-scout) by [Mark-Shun](https://github.com/Mark-Shun) (Sonicfreak1111). The SigLIP 2 embedding path is ported from that project, and the database format stays compatible with it. Scene Scout is licensed under GPL-3.0. It began as a fork of [Gabrjiele's SigLIP 2 NaFlex search](https://github.com/Gabrjiele/siglip2-naflex-search), using [Google's SigLIP 2](https://huggingface.co/google/siglip2-so400m-patch16-naflex).
+
+The RIFE warp helper (`_warp` in `rife_arch.py`, and `warp` in `pervfi_arch.py`) uses the canonical backward-warp implementation from [Practical-RIFE](https://github.com/hzwer/Practical-RIFE) by [hzwer](https://github.com/hzwer).
+
+GPU video decoding (`--decode-method nelux`) uses [NeLux](https://github.com/NevermindNilas/NeLux) by [NevermindNilas](https://github.com/NevermindNilas), originally created by [Trentonom0r3](https://github.com/Trentonom0r3). NeLux is licensed under AGPL-3.0 and is installed separately as an optional dependency.
+
+Depth maps use [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2). The model code is vendored under Apache-2.0 in `amverge/vendor/depth_anything_v2`, including DINOv2 (Copyright Meta Platforms, Inc.). The Small weights are Apache-2.0. The Base and Large weights are CC-BY-NC-4.0.
+
 </details>
 
 ---
@@ -276,3 +284,14 @@ AMVerge CLI is licensed under the GNU GPL v3.0.
 Any derivative work must also be open-source under the same license.
 
 </details>
+
+---
+
+## Links
+
+- **Website**: [amverge.app](https://amverge.app/)
+- **Desktop App**: [AMVerge-team/AMVerge](https://github.com/AMVerge-team/AMVerge)
+- **After Effects Extension**: [AMVerge-team/AMVerge-Extension](https://github.com/AMVerge-team/AMVerge-Extension)
+- **Website Repo**: [AMVerge-team/AMVerge-Website](https://github.com/AMVerge-team/AMVerge-Website)
+- **Homebrew Tap (macOS)**: [AMVerge-team/homebrew-tap](https://github.com/AMVerge-team/homebrew-tap)
+- **Discord**: [Join the AMVerge Discord](https://discord.gg/bmXjTgsAaN)

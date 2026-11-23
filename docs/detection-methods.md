@@ -64,6 +64,8 @@ The transnetv2 method has two decode backends. The flag is ignored by the keyfra
 | `ffmpeg` (default) | FFmpeg pipe, decode and inference interleaved in one pass | cross-platform | no extra setup |
 | `nelux` | Nelux/NVDEC GPU decode into a frame buffer, then inference | Windows | faster; needs Nelux + FFmpeg shared DLLs (`AMVERGE_FFMPEG_BIN`) |
 
+GPU decode is provided by [NeLux](https://github.com/NevermindNilas/NeLux) by [NevermindNilas](https://github.com/NevermindNilas) (originally created by [Trentonom0r3](https://github.com/Trentonom0r3)), licensed under AGPL-3.0.
+
 When `--decode-method nelux` is requested, the CLI runs a quick availability smoke test first. If Nelux or its FFmpeg DLLs are missing, it prints a warning and falls back to the `ffmpeg` backend automatically, so the command always completes.
 
 ```bash

@@ -141,6 +141,28 @@ def ensure_loaded(device: str | None = None):
     return _load(device)
 
 
+def _model_snapshot(token: str | None) -> str:
+    from huggingface_hub import snapshot_download
+
+    kwargs = {
+        "repo_id": EMBEDDING_MODEL_VERSION,
+        "token": token,
+        "allow_patterns": ["*.json", "*.safetensors", "*.model", "*.jinja"],
+    }
+    try:
+        return snapshot_download(**kwargs, local_files_only=True)
+    except Exception:
+        try:
+            return snapshot_download(**kwargs, local_files_only=False)
+        except Exception as exc:
+            raise SceneScoutModelUnavailable(
+                "Scene Scout's SigLIP 2 model cache is incomplete. Connect to the internet "
+                "and retry so the missing files can download. If it keeps failing, delete "
+                "the models--google--siglip2-so400m-patch16-naflex folder inside your "
+                "Hugging Face cache and retry."
+            ) from exc
+
+
 def _load(device: str | None = None):
     """Load and cache the model, processor and resolved device.
 
@@ -149,6 +171,9 @@ def _load(device: str | None = None):
     gated checkpoints load.
     """
     from ..infra.ipc import log
+    from ..infra.config import configure_app_storage
+
+    configure_app_storage()
 
     global _MODEL, _PROCESSOR, _DEVICE
 
@@ -193,26 +218,17 @@ def _load(device: str | None = None):
             else "eager"
         )
 
-        try:
-            processor = AutoProcessor.from_pretrained(
-                EMBEDDING_MODEL_VERSION, token=token, local_files_only=True
-            )
-        except OSError:
-            processor = AutoProcessor.from_pretrained(
-                EMBEDDING_MODEL_VERSION, token=token
-            )
+        snapshot_path = _model_snapshot(token)
+        processor = AutoProcessor.from_pretrained(snapshot_path, local_files_only=True)
 
         base_kwargs: dict = {
-            "pretrained_model_name_or_path": EMBEDDING_MODEL_VERSION,
+            "pretrained_model_name_or_path": snapshot_path,
             "token": token,
             "dtype": dtype,
             "attn_implementation": attn_impl,
             "low_cpu_mem_usage": True,
         }
-        try:
-            model = AutoModel.from_pretrained(**base_kwargs, local_files_only=True)
-        except OSError:
-            model = AutoModel.from_pretrained(**base_kwargs)
+        model = AutoModel.from_pretrained(**base_kwargs, local_files_only=True)
 
         if device_str != "cpu":
             model = model.to(device_str)
