@@ -406,3 +406,36 @@ def test_unsupported_newer_schema_reports_metadata_and_polluted_v4_self_heals(tm
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         assert "scene_embeddings" not in tables
         assert "image_embeddings" not in tables
+
+
+def test_compact_reclaims_freelist_even_when_external_wal_holder_is_open(tmp_path: Path):
+    db_file = tmp_path / "wal_locked_v3.scoutdb"
+    vec = _unit_vec(5, dim=64).tobytes() * 200
+    with sqlite3.connect(str(db_file)) as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.executescript(
+            """
+            CREATE TABLE processed_videos (id INTEGER PRIMARY KEY AUTOINCREMENT, filepath TEXT UNIQUE NOT NULL, modified_at REAL NOT NULL, model_version TEXT, status TEXT DEFAULT 'completed');
+            CREATE TABLE scene_embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, video_id INTEGER NOT NULL, scene_index INTEGER NOT NULL, start_time_ms INTEGER NOT NULL, end_time_ms INTEGER NOT NULL, embedding BLOB NOT NULL, thumbnail BLOB);
+            PRAGMA user_version = 3;
+            """
+        )
+        conn.execute("INSERT INTO processed_videos (id, filepath, modified_at) VALUES (1, 'D:/Show/ep1.mkv', 1.0)")
+        conn.executemany(
+            "INSERT INTO scene_embeddings (video_id, scene_index, start_time_ms, end_time_ms, embedding, thumbnail) VALUES (1, ?, 0, 1000, ?, NULL)",
+            [(i, vec) for i in range(40)],
+        )
+        conn.commit()
+
+    # Simulate another app (e.g. old Scene Scout) holding an idle WAL connection open
+    holder = sqlite3.connect(str(db_file))
+    holder.execute("PRAGMA journal_mode = WAL")
+    holder.execute("SELECT COUNT(*) FROM processed_videos").fetchone()
+    try:
+        scoutdb.upgrade_database(db_file, backup=False)
+    finally:
+        holder.close()
+
+    with sqlite3.connect(str(db_file)) as conn:
+        assert conn.execute("PRAGMA freelist_count").fetchone()[0] == 0
+        assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2

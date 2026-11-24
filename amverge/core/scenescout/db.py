@@ -713,19 +713,29 @@ def _compact_database_v4(path: Path) -> None:
     except OSError:
         return
 
-    conn = sqlite3.connect(str(path), timeout=30.0, isolation_level=None)
+    conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
+    switched_to_delete = False
     try:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.execute("PRAGMA journal_mode = DELETE")
-        conn.execute(f"PRAGMA page_size = {PAGE_SIZE}")
+        try:
+            conn.execute("PRAGMA journal_mode = DELETE")
+            switched_to_delete = True
+            conn.execute(f"PRAGMA page_size = {PAGE_SIZE}")
+        except sqlite3.OperationalError:
+            # Another process has the DB open in WAL mode; keep WAL and still VACUUM to reclaim dead pages
+            pass
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
         conn.execute("VACUUM")
-        conn.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.OperationalError:
-        try:
+        if switched_to_delete:
             conn.execute("PRAGMA journal_mode = WAL")
-        except sqlite3.OperationalError:
-            pass
+        else:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.OperationalError:
+        if switched_to_delete:
+            try:
+                conn.execute("PRAGMA journal_mode = WAL")
+            except sqlite3.OperationalError:
+                pass
     finally:
         conn.close()
 
