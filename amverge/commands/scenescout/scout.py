@@ -139,10 +139,18 @@ def info(
         return
 
     banner("scout info")
-    console.print(f"Name   : {result.name}")
-    console.print(f"Path   : {result.path}")
-    console.print(f"Videos : {result.video_count}")
-    console.print(f"Scenes : {result.scene_count}")
+    console.print(f"Name    : {result.name}")
+    console.print(f"Path    : {result.path}")
+    console.print(f"Schema  : v{result.schema_version}" + (f" ({result.database_id})" if result.database_id else ""))
+    console.print(f"Videos  : {result.video_count}")
+    console.print(f"Scenes  : {result.scene_count}")
+    console.print(f"Model   : {result.model_version}")
+    if result.created_by_app:
+        console.print(f"Created : {result.created_by_app} {result.created_by_version or ''} ({result.created_at or 'n/a'})")
+    if result.updated_by_app:
+        console.print(f"Updated : {result.updated_by_app} {result.updated_by_version or ''} ({result.updated_at or 'n/a'})")
+    if result.media_roots:
+        console.print(f"Roots   : {', '.join(result.media_roots)}")
 
 
 @scout.command("open")
@@ -376,6 +384,7 @@ def search(
     query: Optional[str] = typer.Argument(None, help="What to look for"),
     database: list[str] = typer.Option([], "--db", help="Database to search (repeatable)"),
     video: list[str] = typer.Option([], "--video", help="Filter search to specific video filepath(s)"),
+    exclude_video: list[str] = typer.Option([], "--exclude-video", help="Exclude specific video filepath(s) from search"),
     image: Optional[Path] = typer.Option(None, "--image", help="Search by reference image instead"),
     root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
     top_k: int = typer.Option(24, "--top-k", help="Maximum results"),
@@ -438,6 +447,7 @@ def search(
         device=device,
         databases=targets,
         video_paths=video,
+        exclude_video_paths=exclude_video,
         start_subjects=start_subject,
         include_unclear=include_unclear,
         skip_edges_ms=max(0, skip_edges_ms),
@@ -659,4 +669,36 @@ def generate_thumbnails_cmd(
 
     banner("scout generate-thumbnails")
     console.print(f"[green]> Generated {count} missing or low-resolution thumbnails for {path.name}[/green]")
+
+
+@scout.command("relink")
+def relink_cmd(
+    database: str = typer.Argument(..., help="Database name or path"),
+    search_dirs: list[Path] = typer.Argument(..., help="Directory(s) to search for moved video files"),
+    no_verify_hash: bool = typer.Option(False, "--no-verify-hash", help="Skip content fingerprint verification"),
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Relink missing video files in a database using stored media roots and fingerprints."""
+    from ...core.scenescout import db as scoutdb
+    from ...core.scenescout.paths import db_path
+
+    path = db_path(database, root)
+    if not path.is_file():
+        if as_json:
+            _emit({"error": f"database not found at {path}"}, True)
+            raise typer.Exit(1)
+        fail(f"No database at {path}")
+        raise typer.Exit(1)
+
+    summary = scoutdb.relink_database_paths(path, search_dirs, verify_hash=not no_verify_hash)
+    if as_json:
+        _emit(summary, True)
+        return
+
+    banner("scout relink")
+    console.print(
+        f"Checked {summary['checked']} videos ({summary['missing']} missing) -> "
+        f"relinked [bold]{summary['relinked']}[/bold], unresolved {summary['unresolved']}"
+    )
 

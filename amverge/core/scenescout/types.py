@@ -14,6 +14,9 @@ from typing import Any, Optional
 # bump when the model or preprocessing changes, so older databases are re-indexed, not compared across spaces
 EMBEDDING_MODEL_VERSION = "google/siglip2-so400m-patch16-naflex"
 
+# shared SQLite PRAGMA user_version across AMVerge-CLI and standalone Scene Scout
+SCHEMA_VERSION = 4
+
 
 @dataclass(frozen=True)
 class SceneHit:
@@ -25,7 +28,7 @@ class SceneHit:
     end_ms: int
     score: float
     database: str
-    # base64 jpeg, only when thumbnails are asked for
+    # base64 webp/jpeg, only when thumbnails are asked for
     thumbnail_b64: Optional[str] = None
     # {"start": tags, "end": tags}; None when indexed without motion
     motion: Optional[dict[str, Any]] = None
@@ -56,6 +59,14 @@ class DatabaseInfo:
     size_bytes: int = 0
     model_version: str = EMBEDDING_MODEL_VERSION
     created_at: Optional[str] = None
+    database_id: Optional[str] = None
+    schema_version: int = SCHEMA_VERSION
+    created_by_app: Optional[str] = None
+    created_by_version: Optional[str] = None
+    updated_by_app: Optional[str] = None
+    updated_by_version: Optional[str] = None
+    updated_at: Optional[str] = None
+    media_roots: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -66,6 +77,14 @@ class DatabaseInfo:
             "sizeBytes": self.size_bytes,
             "modelVersion": self.model_version,
             "createdAt": self.created_at,
+            "databaseId": self.database_id,
+            "schemaVersion": self.schema_version,
+            "createdByApp": self.created_by_app,
+            "createdByVersion": self.created_by_version,
+            "updatedByApp": self.updated_by_app,
+            "updatedByVersion": self.updated_by_version,
+            "updatedAt": self.updated_at,
+            "mediaRoots": list(self.media_roots),
         }
 
 
@@ -78,6 +97,16 @@ class IndexedVideo:
     scene_count: int
     status: str = "completed"
     modified_at: float = 0.0
+    model_id: Optional[str] = None
+    detector: Optional[str] = None
+    sampling_strategy: Optional[str] = None
+    sampling_config: Optional[dict[str, Any]] = None
+    file_size: Optional[int] = None
+    content_fingerprint: Optional[str] = None
+    duration_ms: Optional[int] = None
+    fps: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -87,6 +116,16 @@ class IndexedVideo:
             "sceneCount": self.scene_count,
             "status": self.status,
             "modifiedAt": self.modified_at,
+            "modelId": self.model_id,
+            "detector": self.detector,
+            "samplingStrategy": self.sampling_strategy,
+            "samplingConfig": self.sampling_config,
+            "fileSize": self.file_size,
+            "contentFingerprint": self.content_fingerprint,
+            "durationMs": self.duration_ms,
+            "fps": self.fps,
+            "width": self.width,
+            "height": self.height,
         }
 
 
@@ -107,6 +146,7 @@ class SearchOptions:
     device: Optional[str] = None
     databases: list[str] = field(default_factory=list)
     video_paths: list[str] = field(default_factory=list)
+    exclude_video_paths: list[str] = field(default_factory=list)
     # keep only scenes whose start subject moves one of these ways (motion.SUBJECT_TAGS)
     start_subjects: list[str] = field(default_factory=list)
     # whether a scene with no readable motion survives the start_subjects filter

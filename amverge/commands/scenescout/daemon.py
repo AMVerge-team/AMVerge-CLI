@@ -40,6 +40,7 @@ def _search(req: dict, root: Optional[Path], device: str) -> dict:
         device=req.get("device") or device,
         databases=targets,
         video_paths=_as_list(req.get("videos") or req.get("video")),
+        exclude_video_paths=_as_list(req.get("exclude_videos") or req.get("exclude_video")),
         start_subjects=list(req.get("start_subjects") or []),
         include_unclear=bool(req.get("include_unclear", False)),
         skip_edges_ms=int(req.get("skip_edges_ms", 0)),
