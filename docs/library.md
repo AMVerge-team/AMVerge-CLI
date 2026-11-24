@@ -183,7 +183,7 @@ from amverge import upscale_model, UPSCALE_AVAILABLE
 
 # All methods dispatched automatically from registry
 if UPSCALE_AVAILABLE:
-    upscale_model("adore", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
+    upscale_model("shufflecugan", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
 
 # Shader method (FFmpeg only, no ML)
 upscale_model("anime4k", "episode.mp4", "upscaled.mp4", scale=2, mode="medium")
@@ -193,7 +193,7 @@ upscale_model("C4F32", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
 
 # Full options
 upscale_model(
-    "adore",
+    "shufflecugan",
     "episode.mp4",
     "upscaled.mp4",
     scale=2,
@@ -558,7 +558,7 @@ for key, entry in UPSCALE_REGISTRY.items():
     print(f"  {entry.get('description')} | {entry.get('credit')}")
 
 # Query by method
-ml_models = get_ml_models()          # {"adore": {...}, "shufflecugan": {...}, ...}
+ml_models = get_ml_models()          # {"shufflecugan": {...}, "shufflecugan": {...}, ...}
 onnx_models = get_onnx_models()      # {"C4F16": {...}, "C4F32": {...}, ...}
 shader_models = get_shader_models()  # {"anime4k": {...}}
 
@@ -566,14 +566,14 @@ shader_models = get_shader_models()  # {"anime4k": {...}}
 print("Anime4K modes:", list(ANIME4K_MODE_PRESETS.keys()))  # ['light', 'medium', 'strong']
 
 # Weight management
-download_weights("adore")                  # downloads from registry URL
+download_weights("shufflecugan")                  # downloads from registry URL
 is_weight_downloaded("shufflecugan")       # True/False
-path = get_weight_path("adore")            # full path to .pth file
-verify_weight_hash("adore", path)          # SHA-256 integrity check
+path = get_weight_path("shufflecugan")            # full path to .pth file
+verify_weight_hash("shufflecugan", path)          # SHA-256 integrity check
 
 # Unified upscale - dispatches from registry method type automatically
 if UPSCALE_AVAILABLE:
-    upscale_model("adore", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
+    upscale_model("shufflecugan", "episode.mp4", "upscaled.mp4", scale=2, preset="high")
     upscale_model("realesrgan-x2", "episode.mp4", "upscaled.mp4", scale=2)
 
 # Shader method (FFmpeg only, no ML deps)

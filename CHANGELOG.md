@@ -1,8 +1,17 @@
 # Changelog
 
+## v1.3.4
+
+- **Interpolation architecture & verification**: Swapped backward warping to canonical `hzwer/Practical-RIFE` implementation and added SHA-256 verification hashes for all 19 interpolation models.
+- **Model registries cleanup**: Removed unpublished adore.pth model from upscale registry and updated default upscale model to shufflecugan.
+- **Storage & attribution updates**: Updated attributions and streamlined model registries.
+- **Desktop storage discovery**: Standalone CLI launches now follow the desktop app's `paths.json` and legacy `ai_storage_path.txt` for moved config, model weights, FFmpeg, Scene Scout databases, and Hugging Face cache. Explicit `AMVERGE_CONFIG_DIR`, `HF_HOME`, `HF_HUB_CACHE`, and `AMVERGE_SCENE_SCOUT_DIR` still take precedence.
+- **Scene Scout snapshot recovery**: Complete SigLIP 2 snapshots load offline, while incomplete caches trigger a targeted repair download before model loading. Failed repairs now include cache recovery steps instead of only a missing weights exception.
+
 ## v1.3.3
 
 - **Scene Scout thread-safety fix**: Moved lazy `torch` and `transformers` (`AutoModel`, `AutoProcessor`) imports inside `_LOAD_LOCK` in `amverge/core/scenescout/embedding.py` so the daemon's `_prewarm` thread and `_BackgroundEmbedder` cannot race on `transformers`' lazy importer (`ImportError: cannot import name 'AutoModel' from 'transformers'`).
+- **Configurable CLI config/models directory**: Added `AMVERGE_CONFIG_DIR` support to `get_amverge_config_dir()` in `amverge/core/infra/config.py` (with unit tests in `tests/test_config_paths.py`) so desktop installs can place depth/upscale weights outside `%APPDATA%`.
 
 ## v1.3.2
 

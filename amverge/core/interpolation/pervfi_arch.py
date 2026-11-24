@@ -103,40 +103,34 @@ def softsplat(tenIn, tenFlow, tenMetric=None, strMode='avg'):
 # warp helper (backward warp)
 # ---------------------------------------------------------------------------
 
-_tenGrid_cache: dict = {}
-_tenFlowDiv_cache: dict = {}
+_WARP_GRID_CACHE: dict[tuple, torch.Tensor] = {}
 _MAX_WARP_CACHE = 16
 
 
-def warp(tenInput, tenFlow):
-    k = (str(tenFlow.device), str(tenFlow.size()), str(tenFlow.dtype))
-    if k not in _tenGrid_cache:
-        if len(_tenGrid_cache) >= _MAX_WARP_CACHE:
-            oldest = next(iter(_tenGrid_cache))
-            _tenGrid_cache.pop(oldest, None)
-            _tenFlowDiv_cache.pop(oldest, None)
-        H, W = tenFlow.shape[2], tenFlow.shape[3]
-        tenHorizontal = (
-            torch.linspace(-1.0, 1.0, W, device=tenFlow.device, dtype=torch.float32)
-            .view(1, 1, 1, W)
-            .expand(tenFlow.shape[0], -1, H, -1)
-        )
-        tenVertical = (
-            torch.linspace(-1.0, 1.0, H, device=tenFlow.device, dtype=torch.float32)
-            .view(1, 1, H, 1)
-            .expand(tenFlow.shape[0], -1, -1, W)
-        )
-        _tenGrid_cache[k] = torch.cat([tenHorizontal, tenVertical], 1).to(tenFlow.dtype)
-        _tenFlowDiv_cache[k] = torch.tensor(
-            [2.0 / (W - 1), 2.0 / (H - 1)],
-            dtype=tenFlow.dtype,
-            device=tenFlow.device,
-        ).view(1, 2, 1, 1)
+def warp(img: torch.Tensor, flow: torch.Tensor) -> torch.Tensor:
+    b, _, h, w = flow.shape
+    key = (flow.device, b, h, w, flow.dtype)
+    base = _WARP_GRID_CACHE.get(key)
+    if base is None:
+        if len(_WARP_GRID_CACHE) >= _MAX_WARP_CACHE:
+            _WARP_GRID_CACHE.pop(next(iter(_WARP_GRID_CACHE)), None)
+        ys = torch.linspace(-1.0, 1.0, h, device=flow.device, dtype=torch.float32)
+        xs = torch.linspace(-1.0, 1.0, w, device=flow.device, dtype=torch.float32)
+        grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+        base = torch.stack((grid_x, grid_y), dim=-1).unsqueeze(0).expand(b, -1, -1, -1).to(flow.dtype)
+        _WARP_GRID_CACHE[key] = base
 
-    g = (_tenGrid_cache[k] + tenFlow * _tenFlowDiv_cache[k]).permute(0, 2, 3, 1)
+    ih, iw = img.shape[2], img.shape[3]
+    norm_u = flow[:, 0] / ((iw - 1.0) / 2.0)
+    norm_v = flow[:, 1] / ((ih - 1.0) / 2.0)
+    sample_grid = base + torch.stack((norm_u, norm_v), dim=-1)
+
     return F.grid_sample(
-        input=tenInput, grid=g, mode='bilinear',
-        padding_mode='border', align_corners=True,
+        img,
+        sample_grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
     )
 
 

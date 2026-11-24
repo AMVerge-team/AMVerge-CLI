@@ -201,19 +201,19 @@ Upscale video using AI super-resolution or GPU-accelerated filters.
 Method is auto-detected from the model key in registry.json.
 
 ```bash
-amverge upscale episode.mp4 -m adore -s 2               # ML model (GPU recommended)
+amverge upscale episode.mp4 -m shufflecugan -s 2               # ML model (GPU recommended)
 amverge upscale episode.mp4 -m anime4k --mode medium    # shader (fast, no ML)
 amverge upscale episode.mp4 -m C4F32 -s 2               # ONNX (lightweight)
 amverge upscale episode.mp4 -m realesrgan-x2            # Real-ESRGAN x2
-amverge upscale episode.mp4 -m adore -s 4 -p archival   # archive quality 4x
+amverge upscale episode.mp4 -m shufflecugan -s 4 -p archival   # archive quality 4x
 amverge upscale --list-models                           # browse all models
 amverge upscale --credits                               # show credits
-amverge upscale episode.mp4 -m adore -y                 # auto-confirm downloads
+amverge upscale episode.mp4 -m shufflecugan -y                 # auto-confirm downloads
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model / -m` | `adore` | Model key from registry (see --list-models) |
+| `--model / -m` | `shufflecugan` | Model key from registry (see --list-models) |
 | `--output / -o` | `upscaled.mp4` | Output video file |
 | `--scale / -s` | `2` | Scale factor (model-specific, 2 or 4) |
 | `--preset / -p` | `high` | Quality: archival, high, balanced, fast, draft |
@@ -249,7 +249,7 @@ Manage upscaling and interpolation model files. Shows both registries by default
 amverge models                             # list all models (upscale + interpolation)
 amverge models --interpolation             # interpolation models only
 amverge models --upscale                   # upscale models only
-amverge models --download adore            # download a model
+amverge models --download shufflecugan            # download a model
 amverge models --download anime4k          # download Anime4K shaders
 amverge models --download C4F32            # download ArtCNN model
 amverge models --download rife4.25         # download RIFE interpolation model
@@ -270,7 +270,7 @@ amverge models --verbose                   # show file paths and hashes
 | `--verbose / -v` | false | Show file paths and hashes |
 
 **Model keys:** Use `amverge upscale --list-models` or `amverge interpolate --list-models` for full lists.
-Storage: `%APPDATA%/com.amverge.cli/models/upscale/{key}/` and `.../interpolation/{key}/`.
+Storage: `%APPDATA%/com.amverge.cli/models/upscale/{key}/` and `.../interpolation/{key}/`. If AMVerge Desktop moved AI storage, the CLI reads `paths.json` or `ai_storage_path.txt` from the desktop app data folder and uses its `config` and `hf-cache` folders. `AMVERGE_CONFIG_DIR`, `HF_HOME`, and `HF_HUB_CACHE` override app discovery.
 
 ---
 

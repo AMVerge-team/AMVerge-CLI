@@ -7,6 +7,25 @@ from ...ui import banner, console
 
 
 _CLI_ENTRIES = [
+    ("v1.3.4", [
+        "Interpolation backward warping now uses the canonical hzwer/Practical-RIFE implementation, with SHA-256 verification hashes for all 19 interpolation models",
+        "Removed the unpublished adore.pth from the upscale registry and made shufflecugan the default upscale model",
+        "Standalone launches follow the desktop app's paths.json and legacy ai_storage_path.txt for moved config, model weights, FFmpeg, Scene Scout databases, and Hugging Face cache",
+        "Explicit AMVERGE_CONFIG_DIR, HF_HOME, HF_HUB_CACHE, and AMVERGE_SCENE_SCOUT_DIR environment variables still take precedence over app-discovered paths",
+        "Scene Scout loads complete SigLIP 2 snapshots offline and repairs incomplete caches with a targeted download before model loading",
+        "Failed snapshot repairs now print cache recovery steps instead of only a missing weights exception",
+        "Updated attributions and streamlined model registries",
+    ]),
+    ("v1.3.3", [
+        "Fixed Scene Scout daemon import races: lazy torch/transformers imports now happen under the load lock, so prewarm and background embedding can no longer crash with 'cannot import name AutoModel'",
+        "AMVERGE_CONFIG_DIR lets desktop installs place depth/upscale weights outside %APPDATA%, with unit tests covering the override",
+    ]),
+    ("v1.3.2", [
+        "FFmpeg, FFprobe, and nvidia-smi subprocess pipes now decode UTF-8 with replacement, so non-ASCII filenames and source metadata no longer crash Windows cp1252 readers during WebP/source exports",
+    ]),
+    ("v1.3.1", [
+        "Exact-copy merge improvements, windowed keyframe scanning, batched Scene Scout links, and two-phase keyframe stream-copy split detection",
+    ]),
     ("v1.3.0", [
         "TransNetV2 GPU scene detection is ~43% faster via batched window inference and chunked FFmpeg frame reads",
         "Keyframe detection starts immediately without loading PyTorch or CUDA libraries",
@@ -61,7 +80,7 @@ _CLI_ENTRIES = [
     ]),
     ("v0.3.0", [
         "Interpolation: RIFE PyTorch CUDA/CPU inference (interpolate command)",
-        "Interpolation: 18 RIFE models (4.6 through 4.25-heavy, Elexor, PerVFI)",
+        "Interpolation: 18 RIFE models (4.6 through 4.25-heavy, RIFE 4.7, PerVFI)",
         "Interpolation: SystemMonitor live display (GPU util/temp/VRAM, CPU/RAM, ETA)",
         "Interpolation: --no-monitor flag, --yes auto-confirm, FFmpeg bootstrap",
         "Flowframes: Flowframes 1.42.0 integration (flowframes command)",
@@ -96,7 +115,7 @@ _CLI_ENTRIES = [
         "New commands: upscale, models",
         "System monitor: live GPU/CPU/RAM/ETA during upscale",
         "Portable FFmpeg auto-download to %APPDATA%/com.amverge.cli/",
-        "9 upscale models: adore, shufflecugan, fallin_soft, fallin_strong, anime4k, C4F16, C4F32, R8F64, realesrgan-x2/x4/anime",
+        "8 upscale models: shufflecugan, fallin_soft, fallin_strong, anime4k, C4F16, C4F32, R8F64, realesrgan-x2/x4/anime",
         "Library API: upscale_model(), SystemMonitor",
         "pyproject.toml: [upscale] extra (torch, opencv, spandrel, onnxruntime)",
     ]),

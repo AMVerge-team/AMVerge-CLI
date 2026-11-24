@@ -15,9 +15,14 @@ from ...core.scenescout.paths import db_path, list_db_paths
 from ...core.scenescout.types import SearchOptions
 
 
+_REPLY_LOCK = threading.Lock()
+
+
 def _reply(data: dict) -> None:
-    sys.stdout.write(json.dumps(data, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
+    line = json.dumps(data, separators=(",", ":")) + "\n"
+    with _REPLY_LOCK:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 def _as_list(value) -> list:
@@ -26,18 +31,28 @@ def _as_list(value) -> list:
     return [value] if isinstance(value, str) else list(value)
 
 
-def _search(req: dict, root: Optional[Path], device: str) -> dict:
+def _search(req: dict, root: Optional[Path], device: Optional[str]) -> dict:
     raw_dbs = _as_list(req.get("databases") or req.get("database"))
     targets = [str(db_path(name, root)) for name in raw_dbs] if raw_dbs else [str(p) for p in list_db_paths(root)]
     if not targets:
         return {"status": "error", "error": "No databases found"}
+
+    unsub_progress = None
+    if not embedding.is_model_loaded():
+        req_id = req.get("id")
+        _reply({"id": req_id, "status": "progress", "stage": "loading_model", "done": 0, "total": 100})
+        unsub_progress = embedding.subscribe_load_progress(
+            lambda done, total: _reply(
+                {"id": req_id, "status": "progress", "stage": "loading_model", "done": done, "total": total}
+            )
+        )
 
     options = SearchOptions(
         top_k=int(req.get("top_k", 24)),
         similarity_threshold=float(req.get("threshold", -1.0)),
         include_thumbnails=bool(req.get("include_thumbnails", True)),
         max_patches=int(req.get("max_patches", 256)),
-        device=req.get("device") or device,
+        device=req.get("device") or embedding.resolve_device(device),
         databases=targets,
         video_paths=_as_list(req.get("videos") or req.get("video")),
         start_subjects=list(req.get("start_subjects") or []),
@@ -45,32 +60,33 @@ def _search(req: dict, root: Optional[Path], device: str) -> dict:
         skip_edges_ms=int(req.get("skip_edges_ms", 0)),
     )
 
-    if not embedding.is_model_loaded():
-        _reply({"id": req.get("id"), "status": "progress", "stage": "loading_model", "done": 0, "total": 1})
-
     query = req.get("query")
     image = req.get("image")
     flow = req.get("flow_from")
     started = time.perf_counter()
     reply: dict = {"status": "ok"}
-    if flow:
-        hits, reply["flow"] = scoutsearch.search_flow(
-            str(flow["path"]),
-            options,
-            text=query or None,
-            start_ms=flow.get("start_ms"),
-            end_ms=flow.get("end_ms"),
-        )
-    elif image:
-        hits = scoutsearch.search_image(str(image), options)
-    else:
-        hits = scoutsearch.search_text(query or "", options)
+    try:
+        if flow:
+            hits, reply["flow"] = scoutsearch.search_flow(
+                str(flow["path"]),
+                options,
+                text=query or None,
+                start_ms=flow.get("start_ms"),
+                end_ms=flow.get("end_ms"),
+            )
+        elif image:
+            hits = scoutsearch.search_image(str(image), options)
+        else:
+            hits = scoutsearch.search_text(query or "", options)
+    finally:
+        if unsub_progress is not None:
+            unsub_progress()
     log(f"[diag] daemon search: {len(hits)} results in {time.perf_counter() - started:.3f}s")
     reply["results"] = [h.to_json() for h in hits]
     return reply
 
 
-def _add(req: dict, root: Optional[Path], device: str, on_progress: Callable[[str, int, int], None]) -> dict:
+def _add(req: dict, root: Optional[Path], device: Optional[str], on_progress: Callable[[str, int, int], None]) -> dict:
     video = req.get("video")
     path = db_path(req.get("database"), root)
     if not path.is_file():
@@ -79,7 +95,7 @@ def _add(req: dict, root: Optional[Path], device: str, on_progress: Callable[[st
     count = indexing.index_video(
         path,
         video,
-        device=req.get("device") or device,
+        device=req.get("device") or embedding.resolve_device(device),
         max_patches=int(req.get("max_patches", 256)),
         batch_size=int(req.get("batch_size", 16)),
         accurate=bool(req.get("accurate", False)),
@@ -96,8 +112,8 @@ def run_daemon(
     device: Optional[str] = None,
     idle_seconds: int = 300,
 ) -> None:
-    resolved_device = embedding.resolve_device(device)
-    log(f"[diag] scene scout daemon starting | device={resolved_device} idle_seconds={idle_seconds}")
+    resolved_device: Optional[str] = device
+    log(f"[diag] scene scout daemon starting | device={resolved_device or 'auto'} idle_seconds={idle_seconds}")
 
     last_active = time.time()
     in_standby = False
@@ -107,7 +123,6 @@ def run_daemon(
 
     def _idle_checker() -> None:
         nonlocal in_standby
-        unload_after = idle_seconds * 3
         while not stop_event.is_set():
             time.sleep(2.0)
             if idle_seconds <= 0:
@@ -116,19 +131,17 @@ def run_daemon(
                 if busy or not embedding.is_model_loaded():
                     continue
                 idle_for = time.time() - last_active
-                if in_standby and idle_for >= unload_after:
-                    embedding.unload_model()
-                    in_standby = False
-                elif not in_standby and idle_for >= idle_seconds:
+                if not in_standby and idle_for >= idle_seconds:
                     embedding.standby_model()
                     in_standby = True
 
     threading.Thread(target=_idle_checker, daemon=True).start()
 
     def _prewarm() -> None:
-        nonlocal last_active
+        nonlocal last_active, resolved_device
         try:
-            embedding.ensure_loaded(resolved_device)
+            _, _, active_dev = embedding.ensure_loaded(resolved_device)
+            resolved_device = active_dev
             with lock:
                 last_active = time.time()
         except Exception as exc:
@@ -192,7 +205,7 @@ def run_daemon(
                     "status": "ok",
                     "loaded": embedding.is_model_loaded(),
                     "standby": in_standby,
-                    "device": resolved_device,
+                    "device": resolved_device or "auto",
                 }
             elif action == "search":
                 reply = _search(req, root, resolved_device)

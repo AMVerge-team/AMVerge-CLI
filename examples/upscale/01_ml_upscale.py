@@ -20,7 +20,7 @@ if not UPSCALE_AVAILABLE:
     print("ML upscaling not available. Run: pip install amverge[upscale]")
     sys.exit(1)
 
-model_key = "adore"
+model_key = "shufflecugan"
 entry = UPSCALE_REGISTRY[model_key]
 print(f"Model: {entry['name']} ({entry['description']})")
 print(f"Credit: {entry['credit']}")

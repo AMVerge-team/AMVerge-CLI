@@ -8,7 +8,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "Real-time Intermediate Flow Estimation v4.6 (v1 arch, 4-ch head)",
     "file": "rife46.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "67efcd38673f5eb8f76887d4d216e2b71000606907960a5da278cd0efceafb77"
   },
   "rife4.13-lite": {
     "method": "rife",
@@ -16,7 +17,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "RIFE v4.13 lite variant (v1 arch)",
     "file": "rife413_lite.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "57825cb276134aab7e1f3b6cff1421e1cf3930a4b51a069c1864584c6367f13c"
   },
   "rife4.14": {
     "method": "rife",
@@ -24,7 +26,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "Real-time Intermediate Flow Estimation v4.14 (v1 arch)",
     "file": "rife414.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "78cbe43f451eff5c142e8ba4ceb39f952b7fefcfe9d50226b24f85fdbbb444db"
   },
   "rife4.15": {
     "method": "rife",
@@ -32,7 +35,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "Real-time Intermediate Flow Estimation v4.15 (v1 arch)",
     "file": "rife415.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "055e852220856d5d11b3253aa30654069366bb19623c356e04eeb1de3275fde7"
   },
   "rife4.15-lite": {
     "method": "rife",
@@ -40,7 +44,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "RIFE v4.15 lite variant (v1 arch)",
     "file": "rife415_lite.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "04643d9ad905f542cbefbb33f06cc5fa1c90280bbd9183c87b9dce80e54c4869"
   },
   "rife4.16-lite": {
     "method": "rife",
@@ -48,7 +53,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "RIFE v4.16 lite variant (v1 arch)",
     "file": "rife416_lite.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "5b9e669a176e00cf861f8115171556845e559eb4579e6c945d588f87fa8ecf2c"
   },
   "rife4.17": {
     "method": "rife",
@@ -56,7 +62,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "Real-time Intermediate Flow Estimation v4.17 (v1 arch)",
     "file": "rife417.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "7f5bf5b762ca19196d6a7df6e35010f1eec5853dac1ded6d2155c4e47843ceed"
   },
   "rife4.17-lite": {
     "method": "rife",
@@ -64,7 +71,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "RIFE v4.17 lite variant (v1 arch)",
     "file": "rife417_lite.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "54e855268d6038a4fbf9e7d25734b55e765bc83db1181961be38bbcb3f7c22eb"
   },
   "rife4.18": {
     "method": "rife",
@@ -72,7 +80,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "Real-time Intermediate Flow Estimation v4.18 (v1 arch)",
     "file": "rife418.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "e17db82ff953bf3b1643b0004a6fc6ac5c4ca79597ff7ff2602ad0e7255189ca"
   },
   "rife4.20": {
     "method": "rife",
@@ -80,7 +89,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "Real-time Intermediate Flow Estimation v4.20 (v2 arch, 8-ch head, 61 MB)",
     "file": "rife420.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "95175574ef8b099da4de9b54b32aa8334c82f0fb410c30f1fd09fb3d98a3c5c9"
   },
   "rife4.21": {
     "method": "rife",
@@ -88,7 +98,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "Real-time Intermediate Flow Estimation v4.21 (v2 arch)",
     "file": "rife421.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "672cdc8daad646af48f5c72ddab1b8fdc0922a3d5fca281df0f75f1f6adec9dc"
   },
   "rife4.22": {
     "method": "rife",
@@ -96,7 +107,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "Real-time Intermediate Flow Estimation v4.22 (v2 arch)",
     "file": "rife422.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "52978b5d53346870c6d41a902e7cb4b8fac407c3412d6113abef358c74f7169e"
   },
   "rife4.22-lite": {
     "method": "rife",
@@ -104,7 +116,8 @@
     "credit": "by hzwer / megvii-research",
     "description": "RIFE v4.22 lite variant (v2 arch)",
     "file": "rife422_lite.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "43bcc14897c624b82de69796e7b457ac42edc41f25d2876b54aaec6ecca6336d"
   },
   "rife4.25": {
     "method": "rife",
@@ -130,15 +143,17 @@
     "credit": "by hzwer / megvii-research",
     "description": "RIFE v4.25 lite variant",
     "file": "rife425_lite.pth",
-    "heavy": false
+    "heavy": false,
+    "hash": "8dcd01f0ad9c59c3155261c1eff894a494fec20b7a692a062072f1f49b002698"
   },
-  "rife-elexor": {
+  "rife4.7": {
     "method": "rife",
-    "name": "RIFE Elexor",
+    "name": "RIFE 4.7",
     "credit": "by hzwer / megvii-research",
-    "description": "RIFE Elexor variant (optimized for anime)",
-    "file": "rife_elexor.pth",
-    "heavy": false
+    "description": "Real-time Intermediate Flow Estimation v4.7 (v1 arch, 4-ch head)",
+    "file": "rife47.pth",
+    "heavy": false,
+    "hash": "6a8a825ab2750558bdd20dcced386fd82b7222c7ba58c11d3b611d9c44f1be63"
   },
   "pervfi": {
     "method": "pervfi",
@@ -149,7 +164,8 @@
     "flow_estimator": "gmflow",
     "flow_file": "gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth",
     "generator": "v00",
-    "heavy": true
+    "heavy": true,
+    "hash": "50532f4602fe8fbe21123241b3ea8b3302c5999377b378467302bbe2c952f8c8"
   },
   "pervfi-vb": {
     "method": "pervfi",
@@ -160,6 +176,7 @@
     "flow_estimator": "gmflow",
     "flow_file": "gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth",
     "generator": "vb",
-    "heavy": true
+    "heavy": true,
+    "hash": "49bc23edc486206c420641fcdd7cb709bb42b467990712421402192a020d4bb0"
   }
 }

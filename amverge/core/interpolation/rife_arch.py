@@ -6,14 +6,14 @@ The RIFE family ships several checkpoint shapes that all share the IFNet
 skeleton but differ in three ways:
 
 * number of coarse-to-fine blocks (4 or 5),
-* the context encoder (a 4-conv ``Head`` for v2, a 2-conv encoder for Elexor,
+* the context encoder (a 4-conv ``Head`` for v2, a 2-conv encoder for v4.7,
   or none at all for the v1 line), and
 * per-block channel widths and the per-block output width (``out_ch``).
 
 Rather than hardcode one shape, :class:`IFNet` is driven by an
 :class:`IFNetConfig`, and :func:`infer_config` derives that config straight
 from a checkpoint's tensor shapes. So any compatible RIFE checkpoint loads —
-v2 (4.20-4.25, heavy, lite), Elexor, and the v1 line (4.6, ...) — without a
+v2 (4.20-4.25, heavy, lite), v4.7, and the v1 line (4.6, ...) — without a
 per-model table. Non-RIFE checkpoints (e.g. PerVFI) raise a clear error.
 """
 
@@ -23,35 +23,31 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-_tenGrid: dict = {}
-_tenFlowDiv: dict = {}
+_WARP_GRID_CACHE: dict[tuple, torch.Tensor] = {}
 
 
-def _warp(tenInput, tenFlow):
-    k = (str(tenFlow.device), str(tenFlow.size()), str(tenFlow.dtype))
-    if k not in _tenGrid:
-        H, W = tenFlow.shape[2], tenFlow.shape[3]
-        tenHorizontal = (
-            torch.linspace(-1.0, 1.0, W, device=tenFlow.device, dtype=torch.float32)
-            .view(1, 1, 1, W)
-            .expand(tenFlow.shape[0], -1, H, -1)
-        )
-        tenVertical = (
-            torch.linspace(-1.0, 1.0, H, device=tenFlow.device, dtype=torch.float32)
-            .view(1, 1, H, 1)
-            .expand(tenFlow.shape[0], -1, -1, W)
-        )
-        _tenGrid[k] = torch.cat([tenHorizontal, tenVertical], 1).to(tenFlow.dtype)
-        _tenFlowDiv[k] = torch.tensor(
-            [2.0 / (W - 1), 2.0 / (H - 1)],
-            dtype=tenFlow.dtype,
-            device=tenFlow.device,
-        ).view(1, 2, 1, 1)
+def _warp(img: torch.Tensor, flow: torch.Tensor) -> torch.Tensor:
+    b, _, h, w = flow.shape
+    key = (flow.device, b, h, w, flow.dtype)
+    base = _WARP_GRID_CACHE.get(key)
+    if base is None:
+        ys = torch.linspace(-1.0, 1.0, h, device=flow.device, dtype=torch.float32)
+        xs = torch.linspace(-1.0, 1.0, w, device=flow.device, dtype=torch.float32)
+        grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+        base = torch.stack((grid_x, grid_y), dim=-1).unsqueeze(0).expand(b, -1, -1, -1).to(flow.dtype)
+        _WARP_GRID_CACHE[key] = base
 
-    g = (_tenGrid[k] + tenFlow * _tenFlowDiv[k]).permute(0, 2, 3, 1)
+    ih, iw = img.shape[2], img.shape[3]
+    norm_u = flow[:, 0] / ((iw - 1.0) / 2.0)
+    norm_v = flow[:, 1] / ((ih - 1.0) / 2.0)
+    sample_grid = base + torch.stack((norm_u, norm_v), dim=-1)
+
     return F.grid_sample(
-        input=tenInput, grid=g, mode="bilinear",
-        padding_mode="border", align_corners=True,
+        img,
+        sample_grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
     )
 
 
@@ -63,7 +59,7 @@ def _conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1)
     )
 
 
-class Head4(nn.Module):
+class Head(nn.Module):
     """v2 context encoder (RIFE 4.20-4.25). Emits a 4-channel feature map."""
 
     def __init__(self):
@@ -87,11 +83,11 @@ class Head4(nn.Module):
         return x3
 
 
-class Head2(nn.Sequential):
-    """Elexor context encoder: Conv down -> ConvTranspose up. 4-channel out.
+class ContextEncoderV47(nn.Sequential):
+    """v4.7 context encoder: Conv down -> ConvTranspose up. 4-channel out.
 
     Subclasses ``Sequential`` so its checkpoint keys are ``encode.0`` /
-    ``encode.1`` (matching the Elexor weights), while a custom ``forward``
+    ``encode.1`` (matching v4.7 weights), while a custom ``forward``
     applies the LeakyReLU between the two convs.
     """
 
@@ -160,9 +156,9 @@ class IFNetConfig:
     channels:        per-block width ``c`` (length = number of blocks).
     out_ch:          per-block output channels after PixelShuffle (13 for v2's
                      8-channel feat, 6 for the 1-channel-feat variants).
-    encode:          ``"head4"`` (v2), ``"head2"`` (Elexor), or ``None`` (v1).
+    encode:          ``"head"`` (v2), ``"encoder_v47"`` (v4.7), or ``None`` (v1).
     propagate_feat:  whether each block's feat output feeds the next block
-                     (v2) or is dropped (Elexor, v1).
+                     (v2) or is dropped (v4.7, v1).
     """
 
     channels: list
@@ -187,11 +183,11 @@ class IFNet(nn.Module):
 
         # Context encoder (optional). Its feature width is fixed at 4 channels.
         encode_feat = 0
-        if cfg.encode == "head4":
-            self.encode = Head4()
+        if cfg.encode == "head":
+            self.encode = Head()
             encode_feat = 4
-        elif cfg.encode == "head2":
-            self.encode = Head2()
+        elif cfg.encode == "encoder_v47":
+            self.encode = ContextEncoderV47()
             encode_feat = 4
         else:
             self.encode = None
@@ -216,11 +212,7 @@ class IFNet(nn.Module):
     def _encode(self, img):
         return self.encode(img[:, :3]) if self.encode is not None else None
 
-    def cacheReset(self, frame):
-        self.f0 = self._encode(frame)
-        self.f1 = None
-
-    def cachePair(self, img0, img1):
+    def encode_pair(self, img0, img1):
         self.f0 = self._encode(img0)
         self.f1 = self._encode(img1)
 
@@ -304,9 +296,9 @@ def infer_config(state_dict) -> IFNetConfig:
     out_ch = int(last.shape[1]) // 4
 
     if "encode.cnn0.weight" in state_dict:
-        encode = "head4"
+        encode = "head"
     elif "encode.0.weight" in state_dict:
-        encode = "head2"
+        encode = "encoder_v47"
     else:
         encode = None
 
@@ -329,11 +321,8 @@ class RIFEModel(nn.Module):
         super().__init__()
         self.flownet = IFNet(cfg)
 
-    def cacheReset(self, frame):
-        self.flownet.cacheReset(frame)
-
-    def cachePair(self, img0, img1):
-        self.flownet.cachePair(img0, img1)
+    def encode_pair(self, img0, img1):
+        self.flownet.encode_pair(img0, img1)
 
     def forward(self, img0, img1, timestep=0.5):
         return self.flownet(img0, img1, timestep)
