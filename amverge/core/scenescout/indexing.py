@@ -497,9 +497,14 @@ def index_video(
         raise
     log(f"[diag] scene scout {video_path.name} | sampled {len(frames)} frames")
 
+    # announced only now: mid-decode it would take the sampling bar over
+    unsub_load = None
     if not is_model_loaded():
-        report("loading_model", 0, 1)
+        from .embedding import subscribe_load_progress
+
+        report("loading_model", 0, 100)
         log(f"[diag] scene scout {video_path.name} | loading SigLIP 2 model weights...")
+        unsub_load = subscribe_load_progress(lambda done, total: report("loading_model", done, total))
 
     last_log_pct = -1
 
@@ -512,7 +517,11 @@ def index_video(
                 last_log_pct = pct
                 log(f"[diag] scene scout {video_path.name} | embedding {done}/{total} ({pct}%)")
 
-    vectors = embedder.finish(len(frames), on_embed_progress)
+    try:
+        vectors = embedder.finish(len(frames), on_embed_progress)
+    finally:
+        if unsub_load is not None:
+            unsub_load()
 
     sampling_cfg = {
         "frames_per_scene": 1,
