@@ -12,9 +12,12 @@ Two rules the rest of the package depends on:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import threading
+import time
+from typing import Callable
 
 import numpy as np
 
@@ -24,6 +27,48 @@ _MODEL = None
 _PROCESSOR = None
 _DEVICE: str | None = None
 _LOAD_LOCK = threading.RLock()
+_PROGRESS_LOCK = threading.Lock()
+_PROGRESS_LISTENERS: list[Callable[[int, int], None]] = []
+_ACTIVE_LOAD = False
+_LAST_PROGRESS: tuple[int, int] = (0, 100)
+
+
+def subscribe_load_progress(cb: Callable[[int, int], None]) -> Callable[[], None]:
+    """Subscribe to ``(done, total)`` updates while the SigLIP 2 model loads/downloads."""
+    snapshot: tuple[int, int] | None = None
+    with _PROGRESS_LOCK:
+        _PROGRESS_LISTENERS.append(cb)
+        if _ACTIVE_LOAD:
+            snapshot = _LAST_PROGRESS
+    if snapshot is not None:
+        try:
+            cb(*snapshot)
+        except Exception:
+            pass
+
+    def _unsubscribe() -> None:
+        with _PROGRESS_LOCK:
+            try:
+                _PROGRESS_LISTENERS.remove(cb)
+            except ValueError:
+                pass
+
+    return _unsubscribe
+
+
+def _emit_load_progress(pct: int, *, force: bool = False) -> None:
+    global _LAST_PROGRESS
+    clamped = max(0, min(100, int(pct)))
+    with _PROGRESS_LOCK:
+        if not force and clamped <= _LAST_PROGRESS[0]:
+            return
+        _LAST_PROGRESS = (clamped, 100)
+        listeners = list(_PROGRESS_LISTENERS)
+    for cb in listeners:
+        try:
+            cb(clamped, 100)
+        except Exception:
+            pass
 
 
 class SceneScoutModelUnavailable(RuntimeError):
@@ -141,7 +186,52 @@ def ensure_loaded(device: str | None = None):
     return _load(device)
 
 
-def _model_snapshot(token: str | None) -> str:
+def _make_snapshot_tqdm_class(on_bytes: Callable[[float, float | None], None]):
+    from tqdm.std import tqdm as base_tqdm
+
+    state_lock = threading.Lock()
+    active_bar: list[object | None] = [None]
+
+    class _SnapshotProgressTqdm(base_tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs["disable"] = True
+            desc = str(kwargs.get("desc") or "")
+            unit = kwargs.get("unit")
+            super().__init__(*args, **kwargs)
+            self._is_byte_bar = unit == "B" and "Downloading bytes" not in desc
+            self._tracked_n = float(kwargs.get("initial") or 0)
+            if self._is_byte_bar:
+                with state_lock:
+                    active_bar[0] = self
+
+        def update(self, n=1):
+            if n:
+                with state_lock:
+                    self._tracked_n += float(n)
+                    tracked = self._tracked_n
+                    total = self.total
+                    is_byte = self._is_byte_bar and active_bar[0] is self
+                if is_byte:
+                    on_bytes(tracked, total)
+            return None
+
+        def refresh(self, *args, **kwargs):
+            with state_lock:
+                tracked = self._tracked_n
+                total = self.total
+                is_byte = self._is_byte_bar and active_bar[0] is self
+            if is_byte:
+                on_bytes(tracked, total)
+            return None
+
+    return _SnapshotProgressTqdm
+
+
+def _model_snapshot(
+    token: str | None,
+    on_download_progress: Callable[[int], None] | None = None,
+) -> tuple[str, bool]:
+    """Return ``(snapshot_path, downloaded_online)``; two-arg helper when progress is passed."""
     from huggingface_hub import snapshot_download
 
     kwargs = {
@@ -150,10 +240,22 @@ def _model_snapshot(token: str | None) -> str:
         "allow_patterns": ["*.json", "*.safetensors", "*.model", "*.jinja"],
     }
     try:
-        return snapshot_download(**kwargs, local_files_only=True)
+        path = snapshot_download(**kwargs, local_files_only=True)
+        return (path, False) if on_download_progress is not None else path
     except Exception:
         try:
-            return snapshot_download(**kwargs, local_files_only=False)
+            online_kwargs = dict(kwargs)
+            if on_download_progress is not None:
+                def _on_bytes(done_bytes: float, total_bytes: float | None) -> None:
+                    if not total_bytes or total_bytes <= 0:
+                        return
+                    frac = max(0.0, min(1.0, done_bytes / float(total_bytes)))
+                    # Reserve 2% -> 85% for the network download; remaining 15% is local load.
+                    on_download_progress(2 + int(frac * 83))
+
+                online_kwargs["tqdm_class"] = _make_snapshot_tqdm_class(_on_bytes)
+            path = snapshot_download(**online_kwargs, local_files_only=False)
+            return (path, True) if on_download_progress is not None else path
         except Exception as exc:
             raise SceneScoutModelUnavailable(
                 "Scene Scout's SigLIP 2 model cache is incomplete. Connect to the internet "
@@ -161,6 +263,26 @@ def _model_snapshot(token: str | None) -> str:
                 "the models--google--siglip2-so400m-patch16-naflex folder inside your "
                 "Hugging Face cache and retry."
             ) from exc
+
+
+@contextlib.contextmanager
+def _load_heartbeat(start_pct: int, ceiling_pct: int, interval_s: float = 0.25):
+    """Gently advance progress up to ``ceiling_pct`` while blocking native C++/PyTorch loads run."""
+    stop = threading.Event()
+
+    def _tick() -> None:
+        pct = start_pct
+        while not stop.wait(interval_s) and pct < ceiling_pct:
+            pct += 1
+            _emit_load_progress(pct)
+
+    t = threading.Thread(target=_tick, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join(timeout=0.5)
 
 
 def _load(device: str | None = None):
@@ -175,70 +297,102 @@ def _load(device: str | None = None):
 
     configure_app_storage()
 
-    global _MODEL, _PROCESSOR, _DEVICE
+    global _MODEL, _PROCESSOR, _DEVICE, _ACTIVE_LOAD, _LAST_PROGRESS
 
     with _LOAD_LOCK:
-        # transformers' lazy __getattr__ is not thread-safe on first import; keep it inside _LOAD_LOCK
-        # so daemon._prewarm and _BackgroundEmbedder cannot race on AutoModel/AutoProcessor.
-        import warnings
-        warnings.filterwarnings("ignore")
-
-        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-        os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-        os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-
-        import torch
-        from transformers import AutoModel, AutoProcessor
-        from transformers.utils import logging as hf_logging
-        hf_logging.set_verbosity_error()
-        hf_logging.disable_progress_bar()
-
-        device_str = resolve_device(device)
-
         if _MODEL is not None and (device is None or device == _DEVICE):
-            if device_str == "cuda" and next(_MODEL.parameters()).device.type == "cpu":
+            if _DEVICE == "cuda" and next(_MODEL.parameters()).device.type == "cpu":
                 activate_model()
             return _MODEL, _PROCESSOR, _DEVICE
 
-        if device_str == "cuda":
-            major, _ = torch.cuda.get_device_capability()
-            dtype = torch.float16 if major >= 7 else torch.float32
-        else:
-            dtype = torch.float32
+        with _PROGRESS_LOCK:
+            _ACTIVE_LOAD = True
+            _LAST_PROGRESS = (0, 100)
 
-        if device_str == "cpu":
-            _tune_cpu_threads()
+        try:
+            _emit_load_progress(2, force=True)
 
-        log(f"[diag] loading scene scout model on {device_str}...")
+            # transformers' lazy __getattr__ is not thread-safe on first import; keep it inside _LOAD_LOCK
+            # so daemon._prewarm and _BackgroundEmbedder cannot race on AutoModel/AutoProcessor.
+            import warnings
+            warnings.filterwarnings("ignore")
 
-        token = os.environ.get("HF_TOKEN") or None
-        attn_impl = (
-            "sdpa"
-            if hasattr(torch.nn.functional, "scaled_dot_product_attention")
-            else "eager"
-        )
+            os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+            os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+            os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
-        snapshot_path = _model_snapshot(token)
-        processor = AutoProcessor.from_pretrained(snapshot_path, local_files_only=True)
+            with _load_heartbeat(2, 14, interval_s=0.35):
+                import torch
+            _emit_load_progress(15)
 
-        base_kwargs: dict = {
-            "pretrained_model_name_or_path": snapshot_path,
-            "token": token,
-            "dtype": dtype,
-            "attn_implementation": attn_impl,
-            "low_cpu_mem_usage": True,
-        }
-        model = AutoModel.from_pretrained(**base_kwargs, local_files_only=True)
+            with _load_heartbeat(15, 27, interval_s=0.35):
+                from transformers import AutoModel, AutoProcessor
+                from transformers.utils import logging as hf_logging
+                hf_logging.set_verbosity_error()
+                hf_logging.disable_progress_bar()
+            _emit_load_progress(28)
 
-        if device_str != "cpu":
-            model = model.to(device_str)
+            device_str = resolve_device(device)
 
-        model.requires_grad_(False)
-        model.eval()
+            if _MODEL is not None and (device is None or device == _DEVICE):
+                if device_str == "cuda" and next(_MODEL.parameters()).device.type == "cpu":
+                    activate_model()
+                _emit_load_progress(100)
+                return _MODEL, _PROCESSOR, _DEVICE
 
-        _MODEL, _PROCESSOR, _DEVICE = model, processor, device_str
-        log(f"[diag] scene scout model ready on {device_str} ({dtype})")
-        return model, processor, device_str
+            if device_str == "cuda":
+                major, _ = torch.cuda.get_device_capability()
+                dtype = torch.float16 if major >= 7 else torch.float32
+            else:
+                dtype = torch.float32
+
+            if device_str == "cpu":
+                _tune_cpu_threads()
+
+            log(f"[diag] loading scene scout model on {device_str}...")
+
+            token = os.environ.get("HF_TOKEN") or None
+            attn_impl = (
+                "sdpa"
+                if hasattr(torch.nn.functional, "scaled_dot_product_attention")
+                else "eager"
+            )
+
+            snapshot_path, downloaded_online = _model_snapshot(
+                token,
+                on_download_progress=lambda p: _emit_load_progress(28 + int(((p - 2) / 83.0) * 57)) if p >= 2 else None,
+            )
+            _emit_load_progress(86 if downloaded_online else 32)
+            processor = AutoProcessor.from_pretrained(snapshot_path, local_files_only=True)
+            _emit_load_progress(89 if downloaded_online else 38)
+
+            base_kwargs: dict = {
+                "pretrained_model_name_or_path": snapshot_path,
+                "token": token,
+                "dtype": dtype,
+                "attn_implementation": attn_impl,
+                "low_cpu_mem_usage": True,
+            }
+            with _load_heartbeat(89 if downloaded_online else 38, 94 if downloaded_online else 88, interval_s=0.2):
+                model = AutoModel.from_pretrained(**base_kwargs, local_files_only=True)
+            _emit_load_progress(95 if downloaded_online else 90)
+
+            if device_str != "cpu":
+                with _load_heartbeat(95 if downloaded_online else 90, 98 if downloaded_online else 96, interval_s=0.2):
+                    model = model.to(device_str)
+            _emit_load_progress(99)
+
+            model.requires_grad_(False)
+            model.eval()
+
+            _MODEL, _PROCESSOR, _DEVICE = model, processor, device_str
+            _emit_load_progress(100)
+            log(f"[diag] scene scout model ready on {device_str} ({dtype})")
+            return model, processor, device_str
+        finally:
+            with _PROGRESS_LOCK:
+                _ACTIVE_LOAD = False
+                _LAST_PROGRESS = (0, 100)
 
 
 def _normalize(features):
