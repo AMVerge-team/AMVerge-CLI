@@ -24,7 +24,12 @@ from amverge.core.scenescout.fingerprint import (
     verify_content_fingerprint,
 )
 from amverge.core.scenescout.search import search
-from amverge.core.scenescout.types import SCHEMA_VERSION, SearchOptions
+from amverge.core.scenescout.types import (
+    SCHEMA_VERSION,
+    SchemaUpgradeRequiredError,
+    SearchOptions,
+    UnsupportedSchemaError,
+)
 
 
 def _unit_vec(seed: int, dim: int = 8) -> np.ndarray:
@@ -148,12 +153,34 @@ def test_v3_to_v4_migration_preserves_scenes_thumbnails_and_scene_motion_fk(tmp_
         )
         conn.commit()
 
-    info = scoutdb.open_database(db_file)
+    info_ro = scoutdb.database_info(db_file)
+    assert info_ro.schema_status == "needs_upgrade"
+    assert info_ro.schema_version == 3
+    assert info_ro.video_count == 1
+    assert info_ro.scene_count == 2
+
+    # Must NOT silently mutate v3 on open_database or search
+    with pytest.raises(SchemaUpgradeRequiredError):
+        scoutdb.open_database(db_file)
+    with pytest.raises(SchemaUpgradeRequiredError):
+        search(q, SearchOptions(databases=[str(db_file)], include_thumbnails=False))
+    with sqlite3.connect(str(db_file)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+
+    info, bak_path = scoutdb.upgrade_database(db_file, backup=True)
+    assert bak_path is not None and bak_path.exists()
+    assert bak_path.name == "legacy_v3.scoutdb.v3.bak"
+    assert info.schema_status == "ready"
     assert info.schema_version == 4
     assert info.created_by_app == "unknown"
     assert info.video_count == 1
     assert info.scene_count == 2
     assert "D:/Anime/Frieren/Season 1" in info.media_roots
+
+    # Backup itself remains a valid v3 database
+    with sqlite3.connect(str(bak_path)) as bconn:
+        assert bconn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert bconn.execute("SELECT COUNT(*) FROM scene_embeddings").fetchone()[0] == 2
 
     hits = search(q, SearchOptions(databases=[str(db_file)], include_thumbnails=True))
     assert len(hits) == 2
@@ -311,3 +338,71 @@ def test_webp_thumbnail_encode_and_fast_width_detection():
     Image.new("RGB", (160, 90)).save(small_webp, format="WEBP", quality=75)
     assert indexing._fast_image_width(small_webp.getvalue()) == 160
     assert indexing.thumbnail_needs_redo(small_webp.getvalue())
+
+
+def test_unsupported_newer_schema_reports_metadata_and_polluted_v4_self_heals(tmp_path: Path):
+    # 1. Newer schema (v5) reports updated_by_app/version read-only without mutating user_version
+    db_v5 = tmp_path / "future_v5.scoutdb"
+    with sqlite3.connect(str(db_v5)) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE processed_videos (id INTEGER PRIMARY KEY, filepath TEXT UNIQUE NOT NULL, modified_at REAL NOT NULL, scene_count INTEGER DEFAULT 0);
+            INSERT INTO db_metadata (key, value) VALUES ('schema_version', '5'), ('updated_by_app', 'amverge'), ('updated_by_version', '9.9.0');
+            PRAGMA user_version = 5;
+            """
+        )
+        conn.commit()
+
+    info_v5 = scoutdb.database_info(db_v5)
+    assert info_v5.schema_status == "unsupported_newer"
+    assert info_v5.schema_version == 5
+    assert info_v5.updated_by_app == "amverge"
+    assert info_v5.updated_by_version == "9.9.0"
+
+    with pytest.raises(UnsupportedSchemaError, match="amverge 9.9.0"):
+        scoutdb.open_database(db_v5)
+    with pytest.raises(UnsupportedSchemaError, match="v5"):
+        scoutdb.upgrade_database(db_v5)
+
+    # 2. Polluted v4 DB (if opened by a pre-v4 app that added empty v3 tables & reset user_version=3)
+    db_polluted = scoutdb.create_database("polluted", root=tmp_path)
+    q = _unit_vec(77)
+    vid = scoutdb.upsert_video(db_polluted, "D:/Anime/Ep01.mkv", 1.0, status="completed")
+    scoutdb.insert_video_scenes(db_polluted, vid, [(0, 2000)], q.reshape(1, -1))
+
+    with sqlite3.connect(str(db_polluted)) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE scene_embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id INTEGER NOT NULL,
+                scene_index INTEGER NOT NULL,
+                start_time_ms INTEGER NOT NULL,
+                end_time_ms INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                thumbnail BLOB
+            );
+            CREATE TABLE image_embeddings (
+                filepath TEXT PRIMARY KEY,
+                modified_at REAL NOT NULL,
+                embedding BLOB NOT NULL
+            );
+            PRAGMA user_version = 3;
+            """
+        )
+        conn.commit()
+
+    healed = scoutdb.open_database(db_polluted)
+    assert healed.schema_status == "ready"
+    assert healed.schema_version == 4
+    assert healed.video_count == 1
+    assert healed.scene_count == 1
+
+    hits = search(q, SearchOptions(databases=[str(db_polluted)], include_thumbnails=False))
+    assert len(hits) == 1
+    with sqlite3.connect(str(db_polluted)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        assert "scene_embeddings" not in tables
+        assert "image_embeddings" not in tables

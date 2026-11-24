@@ -256,8 +256,7 @@ def _search_one(
     path = Path(database)
     if not path.is_file():
         return []
-    if not _is_v4_database(path):
-        scoutdb.migrate_database(path)
+    scoutdb.ensure_v4_ready(path)
     return _search_one_v4(query, path, options)
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 
 # bump when the model or preprocessing changes, so older databases are re-indexed, not compared across spaces
@@ -16,6 +16,55 @@ EMBEDDING_MODEL_VERSION = "google/siglip2-so400m-patch16-naflex"
 
 # shared SQLite PRAGMA user_version across AMVerge-CLI and standalone Scene Scout
 SCHEMA_VERSION = 4
+
+SchemaStatus = Literal["ready", "needs_upgrade", "unsupported_newer"]
+
+
+class SchemaUpgradeRequiredError(ValueError):
+    """Raised when a pre-v4 database requires explicit user confirmation to upgrade."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        current_version: int,
+        supported_version: int = SCHEMA_VERSION,
+    ) -> None:
+        self.path = str(path)
+        self.current_version = current_version
+        self.supported_version = supported_version
+        name = Path(path).name
+        super().__init__(
+            f"Database '{name}' uses Scene Scout schema v{current_version} and needs to be upgraded to "
+            f"v{supported_version} before use. Older versions of AMVerge and Scene Scout cannot read v{supported_version} databases."
+        )
+
+
+class UnsupportedSchemaError(ValueError):
+    """Raised when a database uses a newer schema version than this build supports."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        schema_version: int,
+        *,
+        updated_by_app: Optional[str] = None,
+        updated_by_version: Optional[str] = None,
+        supported_version: int = SCHEMA_VERSION,
+    ) -> None:
+        self.path = str(path)
+        self.schema_version = schema_version
+        self.updated_by_app = updated_by_app
+        self.updated_by_version = updated_by_version
+        self.supported_version = supported_version
+        name = Path(path).name
+        writer = ""
+        if updated_by_app:
+            ver = f" {updated_by_version}" if updated_by_version else ""
+            writer = f" (last updated by {updated_by_app}{ver})"
+        super().__init__(
+            f"Database '{name}' uses Scene Scout schema v{schema_version}{writer}, "
+            f"which is newer than supported v{supported_version}. Please update AMVerge."
+        )
 
 
 @dataclass(frozen=True)
@@ -67,6 +116,7 @@ class DatabaseInfo:
     updated_by_version: Optional[str] = None
     updated_at: Optional[str] = None
     media_roots: list[str] = field(default_factory=list)
+    schema_status: SchemaStatus = "ready"
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -79,6 +129,7 @@ class DatabaseInfo:
             "createdAt": self.created_at,
             "databaseId": self.database_id,
             "schemaVersion": self.schema_version,
+            "schemaStatus": self.schema_status,
             "createdByApp": self.created_by_app,
             "createdByVersion": self.created_by_version,
             "updatedByApp": self.updated_by_app,

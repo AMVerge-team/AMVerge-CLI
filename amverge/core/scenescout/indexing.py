@@ -681,7 +681,7 @@ def generate_missing_thumbnails(
     if not db_path.is_file():
         raise FileNotFoundError(f"Database does not exist: {db_path}")
 
-    scoutdb.migrate_database(db_path)
+    scoutdb.ensure_v4_ready(db_path)
 
     with scoutdb.connect(db_path) as conn:
         todo_by_video: dict[int, list[tuple[int, int, int]]] = {}

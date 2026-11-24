@@ -23,7 +23,14 @@ from typing import Any, Iterator, Optional
 from .cache import invalidate_embedding_cache
 from .fingerprint import verify_content_fingerprint
 from .paths import db_path, list_db_paths, resolve_db_path
-from .types import DatabaseInfo, IndexedVideo, EMBEDDING_MODEL_VERSION, SCHEMA_VERSION
+from .types import (
+    DatabaseInfo,
+    IndexedVideo,
+    EMBEDDING_MODEL_VERSION,
+    SCHEMA_VERSION,
+    SchemaUpgradeRequiredError,
+    UnsupportedSchemaError,
+)
 
 PAGE_SIZE = 16384
 MMAP_SIZE = 268_435_456  # 256 MiB
@@ -355,7 +362,7 @@ def create_database(name: str, root: str | Path | None = None) -> Path:
     path = db_path(name, root)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file() and path.stat().st_size > 0:
-        migrate_database(path)
+        ensure_v4_ready(path)
         return path
 
     conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
@@ -403,6 +410,263 @@ def is_valid_database(path: str | Path) -> bool:
             return bool(tables.intersection({"processed_videos", "scenes", "scene_embeddings", "image_embeddings"}))
     except Exception:
         return False
+
+
+def _open_strict_ro(path: Path) -> sqlite3.Connection:
+    """Open strictly read-only without creating WAL/SHM sidecars."""
+    try:
+        return sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True, timeout=10.0)
+    except sqlite3.OperationalError:
+        return sqlite3.connect(str(path), timeout=10.0)
+
+
+def inspect_database_schema(path: str | Path) -> dict[str, Any]:
+    """Inspect schema version and metadata strictly read-only without modifying the file."""
+    p = Path(path)
+    if not p.is_file():
+        return {
+            "status": "missing",
+            "schema_version": 0,
+            "needs_self_heal": False,
+            "meta": {},
+            "roots": [],
+            "video_count": 0,
+            "scene_count": 0,
+            "model_version": EMBEDDING_MODEL_VERSION,
+        }
+
+    meta: dict[str, str] = {}
+    roots: list[str] = []
+    videos = scenes = 0
+    model_version = EMBEDDING_MODEL_VERSION
+    uv = 0
+
+    try:
+        conn = _open_strict_ro(p)
+    except sqlite3.DatabaseError:
+        return {
+            "status": "invalid",
+            "schema_version": 0,
+            "needs_self_heal": False,
+            "meta": {},
+            "roots": [],
+            "video_count": 0,
+            "scene_count": 0,
+            "model_version": EMBEDDING_MODEL_VERSION,
+        }
+
+    try:
+        tables = _table_names(conn)
+        has_core = bool(tables.intersection({"processed_videos", "scenes", "scene_embeddings", "image_embeddings"}))
+        if not has_core:
+            return {
+                "status": "invalid",
+                "schema_version": 0,
+                "needs_self_heal": False,
+                "meta": {},
+                "roots": [],
+                "video_count": 0,
+                "scene_count": 0,
+                "model_version": EMBEDDING_MODEL_VERSION,
+            }
+
+        uv = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if "db_metadata" in tables:
+            meta = dict(conn.execute("SELECT key, value FROM db_metadata").fetchall())
+        if "media_roots" in tables:
+            roots = [r[0] for r in conn.execute("SELECT root_path FROM media_roots ORDER BY root_path").fetchall()]
+
+        if "processed_videos" in tables:
+            pv_cols = _column_names(conn, "processed_videos")
+            if "scene_count" in pv_cols:
+                row = conn.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(scene_count), 0) FROM processed_videos"
+                ).fetchone()
+                videos, scenes = int(row[0]), int(row[1])
+            else:
+                videos = int(conn.execute("SELECT COUNT(*) FROM processed_videos").fetchone()[0])
+                if "scenes" in tables:
+                    scenes = int(conn.execute("SELECT COUNT(*) FROM scenes").fetchone()[0])
+                elif "scene_embeddings" in tables:
+                    scenes = int(conn.execute("SELECT COUNT(*) FROM scene_embeddings").fetchone()[0])
+
+            if "preprocessing_configs" in tables and "config_id" in pv_cols:
+                mrow = conn.execute(
+                    """
+                    SELECT pc.model_id
+                    FROM processed_videos pv
+                    JOIN preprocessing_configs pc ON pc.id = pv.config_id
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if mrow and mrow[0]:
+                    model_version = str(mrow[0])
+                else:
+                    crow = conn.execute("SELECT model_id FROM preprocessing_configs LIMIT 1").fetchone()
+                    if crow and crow[0]:
+                        model_version = str(crow[0])
+            elif "model_version" in pv_cols:
+                mrow = conn.execute("SELECT model_version FROM processed_videos LIMIT 1").fetchone()
+                if mrow and mrow[0]:
+                    model_version = str(mrow[0])
+
+        if uv > SCHEMA_VERSION:
+            return {
+                "status": "unsupported_newer",
+                "schema_version": uv,
+                "needs_self_heal": False,
+                "meta": meta,
+                "roots": roots,
+                "video_count": videos,
+                "scene_count": scenes,
+                "model_version": model_version,
+            }
+
+        has_v4_core = {
+            "processed_videos",
+            "scenes",
+            "video_embeddings",
+            "db_metadata",
+            "preprocessing_configs",
+        }.issubset(tables)
+        if has_v4_core:
+            needs_heal = (
+                uv != SCHEMA_VERSION
+                or "scene_embeddings" in tables
+                or "image_embeddings" in tables
+                or "scene_thumbnails" not in tables
+                or "media_roots" not in tables
+            )
+            return {
+                "status": "ready",
+                "schema_version": SCHEMA_VERSION,
+                "needs_self_heal": needs_heal,
+                "meta": meta,
+                "roots": roots,
+                "video_count": videos,
+                "scene_count": scenes,
+                "model_version": model_version,
+            }
+
+        inferred_ver = uv
+        if inferred_ver <= 0:
+            if "scene_embeddings" in tables and "video_id" in _column_names(conn, "scene_embeddings"):
+                inferred_ver = 3
+            elif "index_queue" in tables:
+                inferred_ver = 2
+            else:
+                inferred_ver = 1
+
+        return {
+            "status": "needs_upgrade",
+            "schema_version": inferred_ver,
+            "needs_self_heal": False,
+            "meta": meta,
+            "roots": roots,
+            "video_count": videos,
+            "scene_count": scenes,
+            "model_version": model_version,
+        }
+    except sqlite3.DatabaseError:
+        return {
+            "status": "invalid",
+            "schema_version": uv,
+            "needs_self_heal": False,
+            "meta": meta,
+            "roots": roots,
+            "video_count": videos,
+            "scene_count": scenes,
+            "model_version": model_version,
+        }
+    finally:
+        conn.close()
+
+
+def ensure_v4_ready(path: str | Path) -> bool:
+    """Verify ``path`` is a ready v4 DB (self-healing if polluted by an old v3 app).
+
+    Raises ``SchemaUpgradeRequiredError`` for pre-v4 databases instead of
+    silently mutating them, and ``UnsupportedSchemaError`` for ``v5+`` databases.
+    """
+    p = Path(path).resolve()
+    info = inspect_database_schema(p)
+    status = info["status"]
+    if status == "missing":
+        raise FileNotFoundError(f"Database file not found: {p}")
+    if status == "invalid":
+        raise ValueError(f"'{p.name}' is not a valid Scene Scout database (missing core tables).")
+    if status == "unsupported_newer":
+        meta = info["meta"]
+        raise UnsupportedSchemaError(
+            p,
+            int(info["schema_version"]),
+            updated_by_app=meta.get("updated_by_app") or meta.get("created_by_app"),
+            updated_by_version=meta.get("updated_by_version") or meta.get("created_by_version"),
+        )
+    if status == "needs_upgrade":
+        raise SchemaUpgradeRequiredError(p, int(info["schema_version"]))
+    if info["needs_self_heal"]:
+        return migrate_database(p)
+    return True
+
+
+def create_v3_backup(path: str | Path) -> Path:
+    """Create a consistent SQLite backup at ``<filename>.v3.bak`` without clobbering existing backups."""
+    p = Path(path).resolve()
+    if not p.is_file():
+        raise FileNotFoundError(f"Database file not found: {p}")
+
+    db_size = p.stat().st_size
+    try:
+        free_bytes = shutil.disk_usage(p.parent).free
+        if free_bytes < db_size + 4 * 1024 * 1024:
+            raise OSError(f"Insufficient disk space in {p.parent} to back up {p.name}.")
+    except FileNotFoundError:
+        pass
+
+    backup_path = p.with_name(f"{p.name}.v3.bak")
+    if backup_path.exists():
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup_path = p.with_name(f"{p.name}.v3.{ts}.bak")
+
+    src = sqlite3.connect(str(p), timeout=30.0)
+    dst = sqlite3.connect(str(backup_path), timeout=30.0)
+    try:
+        src.backup(dst)
+        dst.commit()
+    finally:
+        dst.close()
+        src.close()
+    return backup_path
+
+
+def upgrade_database(path: str | Path, *, backup: bool = True) -> tuple[DatabaseInfo, Optional[Path]]:
+    """Explicitly upgrade a pre-v4 database to schema v4 (optionally saving a ``.v3.bak``)."""
+    p = Path(path).resolve()
+    info = inspect_database_schema(p)
+    status = info["status"]
+    if status == "missing":
+        raise FileNotFoundError(f"Database file not found: {p}")
+    if status == "invalid":
+        raise ValueError(f"'{p.name}' is not a valid Scene Scout database (missing core tables).")
+    if status == "unsupported_newer":
+        meta = info["meta"]
+        raise UnsupportedSchemaError(
+            p,
+            int(info["schema_version"]),
+            updated_by_app=meta.get("updated_by_app") or meta.get("created_by_app"),
+            updated_by_version=meta.get("updated_by_version") or meta.get("created_by_version"),
+        )
+
+    backup_path: Optional[Path] = None
+    if status == "needs_upgrade":
+        if backup:
+            backup_path = create_v3_backup(p)
+        migrate_database(p)
+    elif info["needs_self_heal"]:
+        migrate_database(p)
+
+    return database_info(p), backup_path
 
 
 def _rebuild_scene_motion_fk(conn: sqlite3.Connection) -> None:
@@ -480,9 +744,16 @@ def migrate_database(path: str | Path) -> bool:
     with connect(p) as conn:
         current_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         if current_version > SCHEMA_VERSION:
-            raise ValueError(
-                f"'{p.name}' uses Scene Scout schema v{current_version}, which is newer than "
-                f"supported v{SCHEMA_VERSION}. Please update AMVerge."
+            meta_now = (
+                dict(conn.execute("SELECT key, value FROM db_metadata").fetchall())
+                if "db_metadata" in _table_names(conn)
+                else {}
+            )
+            raise UnsupportedSchemaError(
+                p,
+                current_version,
+                updated_by_app=meta_now.get("updated_by_app") or meta_now.get("created_by_app"),
+                updated_by_version=meta_now.get("updated_by_version") or meta_now.get("created_by_version"),
             )
 
         tables = _table_names(conn)
@@ -688,6 +959,9 @@ def migrate_database(path: str | Path) -> bool:
                 thumb_expr = "thumbnail" if "thumbnail" in se_cols else "NULL"
                 video_ids = [r[0] for r in conn.execute("SELECT id FROM processed_videos").fetchall()]
                 for vid in video_ids:
+                    # Preserve intact v4 scenes/embeddings if an old v3 app created an empty scene_embeddings table
+                    if conn.execute("SELECT 1 FROM scenes WHERE video_id = ? LIMIT 1", (vid,)).fetchone() is not None:
+                        continue
                     rows = conn.execute(
                         f"""
                         SELECT id, scene_index, start_time_ms, end_time_ms, embedding, {thumb_expr}
@@ -779,9 +1053,7 @@ def open_database(path: str | Path) -> DatabaseInfo:
     if not p.is_file():
         raise FileNotFoundError(f"Database file not found: {p}")
     ipc_log(f"scene scout {p.name} | opening database...")
-    if not is_valid_database(p):
-        raise ValueError(f"'{p.name}' is not a valid Scene Scout database.")
-    migrate_database(p)
+    ensure_v4_ready(p)
     info = database_info(p)
     ipc_log(f"scene scout {p.name} | database ready ({info.video_count} videos, {info.scene_count} scenes)")
     return info
@@ -794,76 +1066,43 @@ def open_database(path: str | Path) -> DatabaseInfo:
 
 def database_info(path: str | Path) -> DatabaseInfo:
     p = Path(path)
-    videos = scenes = 0
-    model_version = EMBEDDING_MODEL_VERSION
-    schema_version = SCHEMA_VERSION
-    meta: dict[str, str] = {}
-    roots: list[str] = []
+    if not p.is_file():
+        return DatabaseInfo(
+            name=p.stem,
+            path=str(p),
+            video_count=0,
+            scene_count=0,
+            size_bytes=0,
+            model_version=EMBEDDING_MODEL_VERSION,
+            schema_version=SCHEMA_VERSION,
+            schema_status="ready",
+        )
 
-    if p.is_file():
-        try:
-            with connect_ro(p) as conn:
-                tables = _table_names(conn)
-                uv = int(conn.execute("PRAGMA user_version").fetchone()[0])
-                schema_version = uv if uv > 0 else SCHEMA_VERSION
+    inspected = inspect_database_schema(p)
+    meta = inspected["meta"]
+    sv = int(inspected["schema_version"]) if inspected["schema_version"] else SCHEMA_VERSION
+    if inspected["status"] == "ready" and meta.get("schema_version", "").isdigit():
+        sv = int(meta["schema_version"])
 
-                if "db_metadata" in tables:
-                    meta = dict(conn.execute("SELECT key, value FROM db_metadata").fetchall())
-                if "media_roots" in tables:
-                    roots = [r[0] for r in conn.execute("SELECT root_path FROM media_roots ORDER BY root_path").fetchall()]
-
-                if "processed_videos" in tables:
-                    pv_cols = _column_names(conn, "processed_videos")
-                    if "scene_count" in pv_cols:
-                        row = conn.execute(
-                            "SELECT COUNT(*), COALESCE(SUM(scene_count), 0) FROM processed_videos"
-                        ).fetchone()
-                        videos, scenes = int(row[0]), int(row[1])
-                    else:
-                        videos = int(conn.execute("SELECT COUNT(*) FROM processed_videos").fetchone()[0])
-                        if "scenes" in tables:
-                            scenes = int(conn.execute("SELECT COUNT(*) FROM scenes").fetchone()[0])
-                        elif "scene_embeddings" in tables:
-                            scenes = int(conn.execute("SELECT COUNT(*) FROM scene_embeddings").fetchone()[0])
-
-                    if "preprocessing_configs" in tables and "config_id" in pv_cols:
-                        mrow = conn.execute(
-                            """
-                            SELECT pc.model_id
-                            FROM processed_videos pv
-                            JOIN preprocessing_configs pc ON pc.id = pv.config_id
-                            LIMIT 1
-                            """
-                        ).fetchone()
-                        if mrow and mrow[0]:
-                            model_version = str(mrow[0])
-                        else:
-                            crow = conn.execute("SELECT model_id FROM preprocessing_configs LIMIT 1").fetchone()
-                            if crow and crow[0]:
-                                model_version = str(crow[0])
-                    elif "model_version" in pv_cols:
-                        mrow = conn.execute("SELECT model_version FROM processed_videos LIMIT 1").fetchone()
-                        if mrow and mrow[0]:
-                            model_version = str(mrow[0])
-        except sqlite3.DatabaseError:
-            pass
+    schema_status = inspected["status"] if inspected["status"] in ("ready", "needs_upgrade", "unsupported_newer") else "ready"
 
     return DatabaseInfo(
         name=p.stem,
         path=str(p),
-        video_count=videos,
-        scene_count=scenes,
+        video_count=int(inspected["video_count"]),
+        scene_count=int(inspected["scene_count"]),
         size_bytes=p.stat().st_size if p.is_file() else 0,
-        model_version=model_version,
+        model_version=str(inspected["model_version"]),
         created_at=meta.get("created_at"),
         database_id=meta.get("database_id"),
-        schema_version=int(meta["schema_version"]) if meta.get("schema_version", "").isdigit() else schema_version,
+        schema_version=sv,
+        schema_status=schema_status,
         created_by_app=meta.get("created_by_app"),
         created_by_version=meta.get("created_by_version"),
         updated_by_app=meta.get("updated_by_app"),
         updated_by_version=meta.get("updated_by_version"),
         updated_at=meta.get("updated_at"),
-        media_roots=roots,
+        media_roots=list(inspected["roots"]),
     )
 
 
@@ -896,7 +1135,16 @@ def _parse_sampling_config(raw: Optional[str]) -> Optional[dict[str, Any]]:
 
 def list_videos(path: str | Path) -> list[IndexedVideo]:
     with connect_ro(path) as conn:
+        uv = int(conn.execute("PRAGMA user_version").fetchone()[0])
         tables = _table_names(conn)
+        if uv > SCHEMA_VERSION:
+            meta = dict(conn.execute("SELECT key, value FROM db_metadata").fetchall()) if "db_metadata" in tables else {}
+            raise UnsupportedSchemaError(
+                path,
+                uv,
+                updated_by_app=meta.get("updated_by_app") or meta.get("created_by_app"),
+                updated_by_version=meta.get("updated_by_version") or meta.get("created_by_version"),
+            )
         if "processed_videos" not in tables:
             return []
         pv_cols = _column_names(conn, "processed_videos")
@@ -962,7 +1210,7 @@ def remove_video(
     filepath: str | None = None,
 ) -> bool:
     p = Path(path)
-    migrate_database(p)
+    ensure_v4_ready(p)
     removed = False
     with connect(p) as conn:
         resolved_id = video_id
@@ -1040,7 +1288,7 @@ def upsert_video(
     data from two runs never mixes.
     """
     p = Path(path)
-    migrate_database(p)
+    ensure_v4_ready(p)
     with connect(p) as conn:
         config_id = get_or_create_config(
             conn,
@@ -1225,7 +1473,7 @@ def insert_scene_motion(
 ) -> int:
     """Store ``{scene_index: (start_raw, end_raw)}`` for one video. Returns rows written."""
     p = Path(path)
-    migrate_database(p)
+    ensure_v4_ready(p)
     with connect(p) as conn:
         conn.executescript(MOTION_SCHEMA)
         ids = dict(
@@ -1247,7 +1495,7 @@ def insert_scene_motion(
 def videos_missing_motion(path: str | Path, version: int) -> list[tuple[int, str, list[tuple[int, int, int]]]]:
     """Completed videos with scenes lacking current motion: ``(video_id, filepath, [(scene_index, start_ms, end_ms)])``."""
     p = Path(path)
-    migrate_database(p)
+    ensure_v4_ready(p)
     with connect(p) as conn:
         conn.executescript(MOTION_SCHEMA)
         rows = conn.execute(
@@ -1308,7 +1556,7 @@ def relink_database_paths(
 ) -> dict[str, Any]:
     """Relink missing ``processed_videos`` rows under ``search_roots``."""
     p = Path(path).resolve()
-    migrate_database(p)
+    ensure_v4_ready(p)
 
     dirs = [Path(sr).expanduser().resolve() for sr in search_roots if Path(sr).expanduser().is_dir()]
     with connect(p) as conn:

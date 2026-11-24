@@ -13,6 +13,7 @@ a table against the standalone default.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,40 @@ from typing import Optional
 import typer
 
 from ...ui import banner, console, make_table, fail
+
+
+def _ensure_db_ready_cli(path: Path, as_json: bool) -> None:
+    """Ensure ``path`` is v4-ready; prompt in interactive CLI or fail cleanly."""
+    from ...core.scenescout import db as scoutdb
+    from ...core.scenescout.types import SchemaUpgradeRequiredError, UnsupportedSchemaError
+
+    try:
+        scoutdb.ensure_v4_ready(path)
+    except UnsupportedSchemaError as exc:
+        if as_json:
+            _emit({"error": str(exc), "schemaStatus": "unsupported_newer", "path": str(path)}, True)
+            raise typer.Exit(1)
+        fail(str(exc))
+        raise typer.Exit(1)
+    except SchemaUpgradeRequiredError as exc:
+        if not as_json and sys.stdin.isatty():
+            console.print(f"[yellow]{exc}[/yellow]")
+            if typer.confirm("Upgrade this database to v4 now? (A .v3.bak backup will be saved)", default=False):
+                _, bak = scoutdb.upgrade_database(path, backup=True)
+                if bak:
+                    console.print(f"[dim]Backup saved to {bak}[/dim]")
+                return
+        if as_json:
+            _emit({"error": str(exc), "schemaStatus": "needs_upgrade", "path": str(path)}, True)
+            raise typer.Exit(1)
+        fail(f"{exc} Run: amverge scout upgrade \"{path}\"")
+        raise typer.Exit(1)
+    except ValueError as exc:
+        if as_json:
+            _emit({"error": str(exc), "path": str(path)}, True)
+            raise typer.Exit(1)
+        fail(str(exc))
+        raise typer.Exit(1)
 
 scout = typer.Typer(
     name="scout",
@@ -55,14 +90,22 @@ def databases(
 
     table = make_table(
         ("Name", "bold", {}),
+        ("Schema", None, {}),
         ("Videos", None, {"justify": "right"}),
         ("Scenes", None, {"justify": "right"}),
         ("Size", None, {"justify": "right"}),
         ("Path", "bright_black", {"overflow": "fold"}),
     )
     for info in infos:
+        if info.schema_status == "needs_upgrade":
+            schema_label = f"[yellow]v{info.schema_version} (needs upgrade)[/yellow]"
+        elif info.schema_status == "unsupported_newer":
+            schema_label = f"[red]v{info.schema_version} (unsupported)[/red]"
+        else:
+            schema_label = f"v{info.schema_version}"
         table.add_row(
             info.name,
+            schema_label,
             str(info.video_count),
             str(info.scene_count),
             f"{info.size_bytes / 1_048_576:.1f} MB",
@@ -163,14 +206,14 @@ def open_db(
     from ...core.scenescout.paths import db_path
 
     resolved = db_path(path, root)
-    try:
-        result = scoutdb.open_database(resolved)
-    except Exception as e:
+    if not resolved.is_file():
         if as_json:
-            _emit({"error": str(e), "path": str(resolved)}, True)
+            _emit({"error": f"Database file not found: {resolved}", "path": str(resolved)}, True)
             raise typer.Exit(1)
-        fail(str(e))
+        fail(f"Database file not found: {resolved}")
         raise typer.Exit(1)
+    _ensure_db_ready_cli(resolved, as_json)
+    result = scoutdb.open_database(resolved)
 
     if as_json:
         _emit({"database": result.to_json()}, True)
@@ -701,4 +744,56 @@ def relink_cmd(
         f"Checked {summary['checked']} videos ({summary['missing']} missing) -> "
         f"relinked [bold]{summary['relinked']}[/bold], unresolved {summary['unresolved']}"
     )
+
+
+@scout.command("upgrade")
+def upgrade_cmd(
+    database: str = typer.Argument(..., help="Database name or path"),
+    backup: bool = typer.Option(True, "--backup/--no-backup", help="Save a .v3.bak backup before upgrading"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Upgrade a pre-v4 Scene Scout database to schema v4."""
+    from ...core.scenescout import db as scoutdb
+    from ...core.scenescout.paths import db_path
+
+    path = db_path(database, root)
+    if not path.is_file():
+        if as_json:
+            _emit({"error": f"database not found at {path}", "path": str(path)}, True)
+            raise typer.Exit(1)
+        fail(f"No database at {path}")
+        raise typer.Exit(1)
+
+    inspected = scoutdb.inspect_database_schema(path)
+    if inspected["status"] == "needs_upgrade" and not yes and not as_json:
+        if not sys.stdin.isatty():
+            fail(f"'{path.name}' is schema v{inspected['schema_version']}. Pass --yes to upgrade non-interactively.")
+            raise typer.Exit(1)
+        console.print(
+            f"[yellow]'{path.name}' uses schema v{inspected['schema_version']}. "
+            "Older versions of AMVerge and Scene Scout cannot read v4 databases.[/yellow]"
+        )
+        if not typer.confirm("Upgrade to schema v4 now?", default=False):
+            console.print("[dim]Upgrade cancelled; database left untouched.[/dim]")
+            raise typer.Exit(0)
+
+    try:
+        info_out, bak_path = scoutdb.upgrade_database(path, backup=backup)
+    except ValueError as exc:
+        if as_json:
+            _emit({"error": str(exc), "path": str(path)}, True)
+            raise typer.Exit(1)
+        fail(str(exc))
+        raise typer.Exit(1)
+
+    if as_json:
+        _emit({"database": info_out.to_json(), "backupPath": str(bak_path) if bak_path else None}, True)
+        return
+
+    banner("scout upgrade")
+    console.print(f"Upgraded [bold]{info_out.name}[/bold] to schema v{info_out.schema_version}")
+    if bak_path:
+        console.print(f"[dim]Backup saved: {bak_path}[/dim]")
 
