@@ -37,11 +37,14 @@ DETECTOR_AI = "transnetv2_gpu"
 DETECTOR_KEYFRAME = "keyframe_detection"
 
 
-def _detect_scenes_with_label(
+def __detect_scenes_with_label_with_label(
     video: str | Path,
     *,
     method: str = DETECTOR_KEYFRAME,
     accurate: bool = False,
+    merge_short: bool = False,
+    scene_cache_dir: str | Path | None = None,
+    fps: float | None = None,
 ) -> tuple[list[tuple[int, int]], str]:
     """Return ``(scenes_ms, canonical_detector_name)`` ('transnetv2' or 'keyframe')."""
     use_ai = accurate or method in (DETECTOR_AI, "transnetv2")
@@ -49,7 +52,46 @@ def _detect_scenes_with_label(
         from ..detection.ai_scene_detection import TRANSNET_AVAILABLE, decode_and_detect_scenes
 
         if TRANSNET_AVAILABLE:
-            scenes_secs, _ = decode_and_detect_scenes(video)
+            if merge_short or scene_cache_dir is not None:
+                import numpy as np
+                from ..detection.short_scenes import merge_short_scenes
+                from ..infra.ipc import build_video_cache_prefix
+                from ..video.probe_utils import probe_video_fps
+                from ..video.scene_utils import scenes_to_objects
+
+                scenes_secs, scenes_frames, decoded_frames = decode_and_detect_scenes(
+                    video, return_frames=True
+                )
+                eff_fps = fps or probe_video_fps(video) or 24.0
+                if scene_cache_dir is not None and len(scenes_secs) > 0:
+                    cache_dir = Path(scene_cache_dir)
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    prefix = build_video_cache_prefix(Path(video))
+                    for suffix, arr in (("secs", scenes_secs), ("frames", scenes_frames)):
+                        target = cache_dir / f"{prefix}_transnet_{suffix}.npy"
+                        tmp = cache_dir / f"{prefix}_transnet_{suffix}.tmp.npy"
+                        with open(tmp, "wb") as f:
+                            np.save(f, arr)
+                        tmp.replace(target)
+                if merge_short and len(scenes_secs) > 0:
+                    scene_objs = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
+                    merged = merge_short_scenes(
+                        scene_objs, str(video), decoded_frames=decoded_frames, fps=eff_fps
+                    )
+                    del decoded_frames
+                    scenes = [
+                        (
+                            int(round(float(s["start_sec"]) * 1000)),
+                            max(int(round(float(s["start_sec"]) * 1000)) + 1, int(round(float(s["end_sec"]) * 1000))),
+                        )
+                        for s in merged
+                    ]
+                    if scenes:
+                        return scenes, "transnetv2"
+                else:
+                    del decoded_frames
+            else:
+                scenes_secs, _ = decode_and_detect_scenes(video)
             scenes = [(int(s * 1000), int(e * 1000)) for s, e in scenes_secs]
             if scenes:
                 return scenes, "transnetv2"
@@ -91,6 +133,18 @@ def probe_video_metadata(video: str | Path) -> tuple[Optional[int], Optional[flo
             return duration_ms, round(fps, 4) if fps else None, width, height
     except Exception:
         return None, None, None, None
+    return [(int(s * 1000), int(e * 1000)) for s, e in keyframe_scenes], "keyframe"
+
+
+def detect_scenes(
+    video: str | Path,
+    *,
+    method: str = DETECTOR_KEYFRAME,
+    accurate: bool = False,
+) -> list[tuple[int, int]]:
+    """Scene boundaries as ``(start_ms, end_ms)`` pairs."""
+    scenes, _ = _detect_scenes_with_label(video, method=method, accurate=accurate)
+    return scenes
 
 
 def _sample_size(width: int, height: int, max_patches: int) -> tuple[int, int]:
@@ -231,6 +285,7 @@ def sample_scene_frames(
     on_progress: Optional[Callable[[int, int], None]] = None,
     max_patches: Optional[int] = None,
     on_frame: Optional[Callable] = None,
+    packet_info: Optional[tuple[list[int], list[int], float]] = None,
 ) -> list:
     """One representative frame per scene, without decoding the whole video."""
     import av
@@ -241,7 +296,10 @@ def sample_scene_frames(
         return []
 
     total = len(scenes)
-    keyframes, times, rate = _packet_times(video)
+    if packet_info is not None:
+        keyframes, times, rate = packet_info
+    else:
+        keyframes, times, rate = _packet_times(video)
     keyframe_set = set(keyframes)
     targets = _scene_targets(scenes, keyframes, times, rate)
     wanted: dict[int, list[int]] = {}
@@ -454,6 +512,9 @@ def index_video(
     generate_thumbnails: bool = True,
     scenes: Optional[list[tuple[int, int]]] = None,
     on_progress: Optional[ProgressCallback] = None,
+    merge_short: bool = False,
+    scene_cache_dir: Optional[str | Path] = None,
+    out_scenes: Optional[list[tuple[int, int]]] = None,
 ) -> int:
     """Index one video into a database. Returns the number of scenes written."""
     from ..infra.ipc import log
@@ -473,15 +534,23 @@ def index_video(
     else:
         report("detecting", 0, 1)
         log(f"[diag] scene scout {video_path.name} | detecting scenes using {method}...")
-        scenes, effective_detector = _detect_scenes_with_label(video_path, method=method, accurate=accurate)
+        scenes, effective_detector, effective_detector = __detect_scenes_with_label_with_label(
+            video_path,
+            method=method,
+            accurate=accurate,
+            merge_short=merge_short,
+            scene_cache_dir=scene_cache_dir,
+        )
         if not scenes:
             log(f"[diag] scene scout {video_path.name} | no scenes detected")
             return 0
         log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes ({effective_detector})")
 
-    file_size, content_fp = compute_content_fingerprint(video_path)
-    duration_ms, fps, width, height = probe_video_metadata(video_path)
+    if out_scenes is not None:
+        out_scenes.extend(scenes)
 
+    keyframes, times, rate = _packet_times(video_path)
+    # embeds batches as they are sampled, so the gpu works while the decode runs
     embedder = _BackgroundEmbedder(device=device, max_patches=max_patches, batch_size=batch_size)
     report("sampling", 0, len(scenes))
     try:
@@ -491,6 +560,7 @@ def index_video(
             on_progress=lambda done, total: report("sampling", done, total),
             max_patches=max_patches,
             on_frame=embedder.add,
+            packet_info=(keyframes, times, rate),
         )
     except BaseException:
         embedder.abandon()
@@ -561,7 +631,7 @@ class _BackgroundEmbedder:
     """Embeds sampled frames on a worker thread, a batch at a time, while the decode runs."""
 
     def __init__(self, *, device: Optional[str], max_patches: int, batch_size: int):
-        self._queue: queue.Queue = queue.Queue()
+        self._queue: queue.Queue = queue.Queue(maxsize=max(16, batch_size * 3))
         self._rows: list = []
         self._order: list[int] = []
         self._done = 0

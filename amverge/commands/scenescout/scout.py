@@ -337,6 +337,8 @@ def add(
         help="JSON [[start_ms, end_ms], ...] to index instead of detecting scenes",
         exists=True,
     ),
+    merge_short: bool = typer.Option(False, "--merge-short", hidden=True),
+    scene_cache_dir: Optional[Path] = typer.Option(None, "--scene-cache-dir", hidden=True),
     as_json: bool = typer.Option(False, "--json", help="Emit progress and result as JSON lines"),
 ) -> None:
     """Index a video into a database.
@@ -407,6 +409,8 @@ def add(
             generate_thumbnails=not no_thumbnails,
             scenes=precut,
             on_progress=on_progress,
+            merge_short=merge_short,
+            scene_cache_dir=scene_cache_dir,
         )
     except (NotImplementedError, SceneScoutModelUnavailable) as exc:
         if as_json:
