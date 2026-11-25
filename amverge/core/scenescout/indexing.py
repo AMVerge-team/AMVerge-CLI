@@ -651,20 +651,21 @@ def model_version() -> str:
     return EMBEDDING_MODEL_VERSION
 
 
-def thumbnail_needs_redo(thumbnail: Optional[bytes]) -> bool:
-    """True for a missing thumbnail, or one narrower than :data:`THUMBNAIL_WIDTH`."""
-    if thumbnail is None:
+def thumbnail_needs_redo(thumbnail: Optional[bytes], *, upgrade_low_res: bool = True) -> bool:
+    """True for a missing/corrupt thumbnail, or (when ``upgrade_low_res``) narrower than :data:`THUMBNAIL_WIDTH`."""
+    if not thumbnail:
         return True
 
     fast_w = _fast_image_width(thumbnail)
     if fast_w is not None:
-        return fast_w < THUMBNAIL_WIDTH
+        return fast_w < THUMBNAIL_WIDTH if upgrade_low_res else False
 
     from PIL import Image
 
     try:
         with Image.open(io.BytesIO(thumbnail)) as image:
-            return image.width < THUMBNAIL_WIDTH
+            w = image.width
+            return w < THUMBNAIL_WIDTH if upgrade_low_res else False
     except Exception:
         return True
 
@@ -672,9 +673,10 @@ def thumbnail_needs_redo(thumbnail: Optional[bytes]) -> bool:
 def generate_missing_thumbnails(
     database: str | Path,
     *,
+    upgrade_low_res: bool = True,
     on_progress: Optional[ProgressCallback] = None,
 ) -> int:
-    """Fill in missing thumbnails and redo low-resolution ones in ``scene_thumbnails``."""
+    """Fill in missing thumbnails (and optionally redo low-resolution ones) in ``scene_thumbnails``."""
     from ..infra.ipc import log
 
     db_path = scoutdb.resolve_db_path(database)
@@ -683,17 +685,30 @@ def generate_missing_thumbnails(
 
     scoutdb.ensure_v4_ready(db_path)
 
+    updated_count = 0
     with scoutdb.connect(db_path) as conn:
         todo_by_video: dict[int, list[tuple[int, int, int]]] = {}
-        for scene_id, video_id, start_ms, end_ms, thumbnail in conn.execute(
+        # Fetch only the 64-byte image header prefix first so we never load tens of MB of BLOBs just to check width
+        for scene_id, video_id, start_ms, end_ms, header_prefix in conn.execute(
             """
-            SELECT s.id, s.video_id, s.start_time_ms, s.end_time_ms, t.thumbnail
+            SELECT s.id, s.video_id, s.start_time_ms, s.end_time_ms, SUBSTR(t.thumbnail, 1, 64)
             FROM scenes s
             LEFT JOIN scene_thumbnails t ON t.scene_id = s.id
             ORDER BY s.video_id, s.scene_index
             """
         ):
-            if thumbnail_needs_redo(thumbnail):
+            if header_prefix is None:
+                needs = True
+            else:
+                fast_w = _fast_image_width(bytes(header_prefix))
+                if fast_w is not None:
+                    needs = fast_w < THUMBNAIL_WIDTH if upgrade_low_res else False
+                else:
+                    full_row = conn.execute(
+                        "SELECT thumbnail FROM scene_thumbnails WHERE scene_id = ?", (scene_id,)
+                    ).fetchone()
+                    needs = thumbnail_needs_redo(full_row[0] if full_row else None, upgrade_low_res=upgrade_low_res)
+            if needs:
                 todo_by_video.setdefault(video_id, []).append((scene_id, start_ms, end_ms))
 
         total_missing = sum(len(rows) for rows in todo_by_video.values())
@@ -701,7 +716,6 @@ def generate_missing_thumbnails(
             return 0
 
         filepaths = dict(conn.execute("SELECT id, filepath FROM processed_videos"))
-        updated_count = 0
         handled = 0
         log(
             f"[diag] scene scout generate-thumbnails | {total_missing} thumbnails to make "
@@ -750,4 +764,9 @@ def generate_missing_thumbnails(
             if on_progress:
                 on_progress("thumbnails", handled, total_missing)
 
-        return updated_count
+        if updated_count > 0:
+            scoutdb._touch_updated_metadata(conn)
+
+    if updated_count > 0:
+        scoutdb.run_incremental_vacuum(db_path)
+    return updated_count

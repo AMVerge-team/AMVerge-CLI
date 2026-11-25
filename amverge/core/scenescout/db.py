@@ -675,7 +675,7 @@ def _rebuild_scene_motion_fk(conn: sqlite3.Connection) -> None:
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='scene_motion'"
     ).fetchone()
     if row is None:
-        conn.executescript(MOTION_SCHEMA)
+        conn.execute(MOTION_SCHEMA.strip())
         return
     sql_def = (row[0] or "").lower()
     if "scene_embeddings" not in sql_def:
@@ -751,7 +751,10 @@ def migrate_database(path: str | Path) -> bool:
     needs_compaction = False
     fallback_created = _file_time_iso(p)
 
-    with connect(p) as conn:
+    conn = sqlite3.connect(str(p), timeout=30.0, isolation_level=None)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         current_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         if current_version > SCHEMA_VERSION:
             meta_now = (
@@ -777,26 +780,34 @@ def migrate_database(path: str | Path) -> bool:
             and "image_embeddings" not in tables
         )
         if already_v4:
-            _rebuild_scene_motion_fk(conn)
-            _seed_or_touch_metadata(conn, is_fresh=False, fallback_created_at=fallback_created)
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _rebuild_scene_motion_fk(conn)
+                _seed_or_touch_metadata(conn, is_fresh=False, fallback_created_at=fallback_created)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
             return True
 
         ipc_log(f"scene scout {p.name} | migrating schema v{current_version} -> v{SCHEMA_VERSION}...")
         needs_compaction = True
 
-        # Step 1: If pre-v3 (filepath FK on scene_embeddings, no video_id), normalize to v3 first
-        if "scene_embeddings" in tables:
-            se_cols = _column_names(conn, "scene_embeddings")
-            if "thumbnail" not in se_cols:
-                try:
-                    conn.execute("ALTER TABLE scene_embeddings ADD COLUMN thumbnail BLOB")
-                except sqlite3.OperationalError:
-                    pass
+        # PRAGMA foreign_keys must be toggled OUTSIDE any active transaction
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Step 1: If pre-v3 (filepath FK on scene_embeddings, no video_id), normalize to v3 first
+            if "scene_embeddings" in tables:
                 se_cols = _column_names(conn, "scene_embeddings")
+                if "thumbnail" not in se_cols:
+                    try:
+                        conn.execute("ALTER TABLE scene_embeddings ADD COLUMN thumbnail BLOB")
+                    except sqlite3.OperationalError:
+                        pass
+                    se_cols = _column_names(conn, "scene_embeddings")
 
-            if "video_id" not in se_cols:
-                conn.execute("PRAGMA foreign_keys = OFF")
-                try:
+                if "video_id" not in se_cols:
                     pv_cols = _column_names(conn, "processed_videos") if "processed_videos" in tables else set()
                     has_mv = "model_version" in pv_cols
                     conn.execute(
@@ -852,23 +863,23 @@ def migrate_database(path: str | Path) -> bool:
                         conn.execute("DROP TABLE processed_videos")
                     conn.execute("ALTER TABLE processed_videos_v3 RENAME TO processed_videos")
                     conn.execute("ALTER TABLE scene_embeddings_v3 RENAME TO scene_embeddings")
-                finally:
-                    conn.execute("PRAGMA foreign_keys = ON")
-                tables = _table_names(conn)
+                    tables = _table_names(conn)
 
-        # Step 2: Upgrade to v4 structure
-        conn.execute("PRAGMA foreign_keys = OFF")
-        try:
-            conn.executescript(
+            # Step 2: Upgrade to v4 structure (no executescript() inside atomic transaction)
+            for ddl in (
                 """
                 CREATE TABLE IF NOT EXISTS db_metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
-                );
+                )
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS media_roots (
                     root_path TEXT PRIMARY KEY,
                     added_at TEXT NOT NULL
-                );
+                )
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS preprocessing_configs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     model_id TEXT NOT NULL,
@@ -876,7 +887,9 @@ def migrate_database(path: str | Path) -> bool:
                     sampling_strategy TEXT NOT NULL DEFAULT 'unknown',
                     sampling_config TEXT NOT NULL DEFAULT '{}',
                     UNIQUE(model_id, detector, sampling_strategy, sampling_config)
-                );
+                )
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS video_embeddings (
                     video_id INTEGER PRIMARY KEY,
                     scene_count INTEGER NOT NULL,
@@ -884,7 +897,9 @@ def migrate_database(path: str | Path) -> bool:
                     dtype TEXT NOT NULL DEFAULT 'float32',
                     embeddings BLOB NOT NULL,
                     FOREIGN KEY (video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
-                );
+                )
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS scenes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_id INTEGER NOT NULL,
@@ -892,22 +907,27 @@ def migrate_database(path: str | Path) -> bool:
                     start_time_ms INTEGER NOT NULL,
                     end_time_ms INTEGER NOT NULL,
                     FOREIGN KEY (video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_scene_video_scene ON scenes(video_id, scene_index);
+                )
+                """,
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_scene_video_scene ON scenes(video_id, scene_index)",
+                """
                 CREATE TABLE IF NOT EXISTS scene_thumbnails (
                     scene_id INTEGER PRIMARY KEY,
                     thumbnail BLOB NOT NULL,
                     FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE
-                );
+                )
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS index_queue (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     path TEXT UNIQUE NOT NULL,
                     is_directory BOOLEAN NOT NULL DEFAULT 0,
                     recursive BOOLEAN NOT NULL DEFAULT 1,
                     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """
-            )
+                )
+                """,
+            ):
+                conn.execute(ddl)
 
             if "processed_videos" not in tables:
                 conn.execute(
@@ -1046,14 +1066,38 @@ def migrate_database(path: str | Path) -> bool:
 
             _seed_or_touch_metadata(conn, is_fresh=False, fallback_created_at=fallback_created)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            conn.execute("COMMIT")
             ipc_log(f"scene scout {p.name} | v4 schema migration completed successfully")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                pass
+            raise
         finally:
-            conn.execute("PRAGMA foreign_keys = ON")
+            try:
+                conn.execute("PRAGMA foreign_keys = ON")
+            except sqlite3.OperationalError:
+                pass
+    finally:
+        conn.close()
 
     if needs_compaction:
         _compact_database_v4(p)
     invalidate_embedding_cache(p)
     return True
+
+
+def run_incremental_vacuum(path: str | Path) -> None:
+    """Reclaim freed pages under ``auto_vacuum = INCREMENTAL`` if enabled."""
+    raw_conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
+    try:
+        if raw_conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2:
+            raw_conn.execute("PRAGMA incremental_vacuum")
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        raw_conn.close()
 
 
 def open_database(path: str | Path) -> DatabaseInfo:
@@ -1262,15 +1306,7 @@ def remove_video(
             _touch_updated_metadata(conn)
 
     if removed:
-        # Reclaim freed pages immediately under auto_vacuum = INCREMENTAL
-        raw_conn = sqlite3.connect(str(p), timeout=10.0, isolation_level=None)
-        try:
-            if raw_conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2:
-                raw_conn.execute("PRAGMA incremental_vacuum")
-        except sqlite3.OperationalError:
-            pass
-        finally:
-            raw_conn.close()
+        run_incremental_vacuum(p)
         invalidate_embedding_cache(p)
     return removed
 

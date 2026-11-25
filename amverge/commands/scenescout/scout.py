@@ -685,6 +685,7 @@ def clip_motion(
 @scout.command("generate-thumbnails")
 def generate_thumbnails_cmd(
     database: str = typer.Option(..., "--db", help="Database name or path"),
+    missing_only: bool = typer.Option(False, "--missing-only", help="Only fill missing/corrupt thumbnails (keep legacy lower-res ones)"),
     root: Optional[Path] = typer.Option(None, "--root", help="Scene Scout storage folder"),
     as_json: bool = typer.Option(False, "--json", help="Emit progress and result as JSON lines"),
 ) -> None:
@@ -703,7 +704,7 @@ def generate_thumbnails_cmd(
         if as_json:
             print(json.dumps({"stage": stage, "done": done, "total": total}, separators=(",", ":")), flush=True)
 
-    count = indexing.generate_missing_thumbnails(path, on_progress=on_progress)
+    count = indexing.generate_missing_thumbnails(path, upgrade_low_res=not missing_only, on_progress=on_progress)
     log(f"[diag] scene scout generate-thumbnails | done: generated {count} thumbnails")
 
     if as_json:

@@ -439,3 +439,66 @@ def test_compact_reclaims_freelist_even_when_external_wal_holder_is_open(tmp_pat
     with sqlite3.connect(str(db_file)) as conn:
         assert conn.execute("PRAGMA freelist_count").fetchone()[0] == 0
         assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+
+
+def test_wal_write_invalidates_embedding_cache_cross_process(tmp_path: Path):
+    cache = EmbeddingCache(max_bytes=1024 * 1024)
+    db_file = scoutdb.create_database("wal_cache", root=tmp_path)
+    q = _unit_vec(88)
+    v1 = scoutdb.upsert_video(db_file, "D:/Show/ep1.mkv", 1.0, status="completed")
+    scoutdb.insert_video_scenes(db_file, v1, [(0, 1000)], q.reshape(1, -1))
+
+    from amverge.core.scenescout.search import _load_db_videos
+
+    first = cache.get_or_load(db_file, _load_db_videos)
+    assert len(first) == 1
+
+    # Hold a WAL read connection so the next write lands in -wal without checkpointing the main DB
+    ro_holder = sqlite3.connect(str(db_file))
+    ro_holder.execute("SELECT COUNT(*) FROM processed_videos").fetchone()
+    try:
+        v2 = scoutdb.upsert_video(db_file, "D:/Show/ep2.mkv", 2.0, status="completed")
+        scoutdb.insert_video_scenes(db_file, v2, [(0, 1000)], q.reshape(1, -1))
+        cache_no_local_inval = EmbeddingCache(max_bytes=1024 * 1024)
+        # Seed a cache with the old entry's stat_sig before -wal changed, or directly test stat_sig mismatch:
+        wal = db_file.with_name(f"{db_file.name}-wal")
+        assert wal.exists() and wal.stat().st_size > 0
+        second = cache.get_or_load(db_file, _load_db_videos)
+        assert len(second) == 2
+        del cache_no_local_inval
+    finally:
+        ro_holder.close()
+
+
+def test_v1_to_v4_atomic_migration_and_fk_integrity(tmp_path: Path):
+    db_file = tmp_path / "legacy_v1.scoutdb"
+    q = _unit_vec(12)
+    with sqlite3.connect(str(db_file)) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE processed_videos (
+                filepath TEXT UNIQUE NOT NULL,
+                modified_at REAL NOT NULL,
+                model_version TEXT DEFAULT 'google/siglip2-so400m-patch16-naflex'
+            );
+            CREATE TABLE scene_embeddings (
+                filepath TEXT NOT NULL,
+                scene_index INTEGER NOT NULL,
+                start_time_ms INTEGER NOT NULL,
+                end_time_ms INTEGER NOT NULL,
+                embedding BLOB NOT NULL
+            );
+            PRAGMA user_version = 1;
+            """
+        )
+        conn.execute("INSERT INTO processed_videos VALUES ('D:/Anime/Old/ep1.mp4', 5.0, 'google/siglip2-so400m-patch16-naflex')")
+        conn.execute("INSERT INTO scene_embeddings VALUES ('D:/Anime/Old/ep1.mp4', 0, 0, 2000, ?)", (q.tobytes(),))
+        conn.commit()
+
+    info, bak = scoutdb.upgrade_database(db_file, backup=True)
+    assert info.schema_version == 4
+    assert info.video_count == 1
+    assert info.scene_count == 1
+    assert bak is not None and bak.exists()
+    with sqlite3.connect(str(db_file)) as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

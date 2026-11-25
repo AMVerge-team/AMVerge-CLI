@@ -31,10 +31,24 @@ class CachedVideoEmbeddings:
 
 @dataclass
 class _CacheEntry:
-    mtime_ns: int
-    file_size: int
+    stat_sig: tuple[int, int, int, int]
     byte_cost: int
     videos: list[CachedVideoEmbeddings]
+
+
+def _db_stat_signature(resolved: Path) -> Optional[tuple[int, int, int, int]]:
+    """Return ``(db_mtime_ns, db_size, wal_mtime_ns, wal_size)`` so WAL writes invalidate too."""
+    try:
+        st = os.stat(resolved)
+    except OSError:
+        return None
+    wal = resolved.with_name(f"{resolved.name}-wal")
+    try:
+        wst = os.stat(wal)
+        wal_sig = (wst.st_mtime_ns, wst.st_size)
+    except OSError:
+        wal_sig = (0, 0)
+    return (st.st_mtime_ns, st.st_size, wal_sig[0], wal_sig[1])
 
 
 class EmbeddingCache:
@@ -75,15 +89,14 @@ class EmbeddingCache:
     ) -> list[CachedVideoEmbeddings]:
         resolved = Path(db_path).resolve()
         key = str(resolved)
-        try:
-            st = os.stat(resolved)
-        except OSError:
+        sig = _db_stat_signature(resolved)
+        if sig is None:
             self.invalidate(resolved)
             return []
 
         with self._lock:
             cached = self._entries.get(key)
-            if cached is not None and cached.mtime_ns == st.st_mtime_ns and cached.file_size == st.st_size:
+            if cached is not None and cached.stat_sig == sig:
                 self._entries.move_to_end(key)
                 return cached.videos
             if cached is not None:
@@ -96,6 +109,7 @@ class EmbeddingCache:
         if self.max_bytes <= 0 or byte_cost > self.max_bytes:
             return videos
 
+        latest_sig = _db_stat_signature(resolved) or sig
         with self._lock:
             existing = self._entries.pop(key, None)
             if existing is not None:
@@ -104,8 +118,7 @@ class EmbeddingCache:
                 _, evicted = self._entries.popitem(last=False)
                 self._used_bytes = max(0, self._used_bytes - evicted.byte_cost)
             self._entries[key] = _CacheEntry(
-                mtime_ns=st.st_mtime_ns,
-                file_size=st.st_size,
+                stat_sig=latest_sig,
                 byte_cost=byte_cost,
                 videos=videos,
             )

@@ -53,7 +53,9 @@ def _passes_motion(motion: Optional[dict[str, Any]], options: SearchOptions) -> 
 
 def _load_db_videos(db_path: Path) -> list[CachedVideoEmbeddings]:
     out: list[CachedVideoEmbeddings] = []
-    with scoutdb.connect_ro(db_path) as conn:
+    conn = scoutdb._open_strict_ro(db_path)
+    try:
+        conn.execute(f"PRAGMA mmap_size={scoutdb.MMAP_SIZE}")
         rows = conn.execute(
             """
             SELECT v.id, v.filepath, v.duration_ms, ve.scene_count, ve.dim, ve.dtype, ve.embeddings
@@ -63,6 +65,8 @@ def _load_db_videos(db_path: Path) -> list[CachedVideoEmbeddings]:
             ORDER BY v.id ASC
             """
         ).fetchall()
+    finally:
+        conn.close()
     for vid, filepath, duration_ms, scene_count, dim, dtype, blob in rows:
         if not blob or scene_count <= 0 or dim <= 0:
             continue
@@ -134,7 +138,7 @@ def _search_one_v4(
 
             if needs_scene_scan:
                 if ro_conn is None:
-                    ro_conn = scoutdb.sqlite3.connect(str(path), timeout=10.0)
+                    ro_conn = scoutdb._open_strict_ro(path)
                     ro_conn.execute(f"PRAGMA mmap_size={scoutdb.MMAP_SIZE}")
                     has_motion = scoutdb.has_motion_table(ro_conn)
 
@@ -206,24 +210,42 @@ def _search_one_v4(
         top = candidates[: options.top_k]
 
         if ro_conn is None:
-            ro_conn = scoutdb.sqlite3.connect(str(path), timeout=10.0)
+            ro_conn = scoutdb._open_strict_ro(path)
             ro_conn.execute(f"PRAGMA mmap_size={scoutdb.MMAP_SIZE}")
             has_motion = scoutdb.has_motion_table(ro_conn)
 
+        # Batch fetch metadata/thumbnails/motion per video_id instead of top_k separate queries
+        by_video: dict[int, list[int]] = {}
+        for _score, vid, s_idx, _filepath, _pre_motion in top:
+            by_video.setdefault(vid, []).append(s_idx)
+
+        fetched: dict[tuple[int, int], tuple[int, int, Any, Optional[str], Optional[str], int]] = {}
+        thumb_col = "t.thumbnail" if options.include_thumbnails else "NULL"
+        motion_cols = (
+            "m.start_raw, m.end_raw, m.scene_id IS NOT NULL"
+            if (has_motion and not filter_motion)
+            else "NULL, NULL, 0"
+        )
+        thumb_join = "LEFT JOIN scene_thumbnails t ON t.scene_id = s.id" if options.include_thumbnails else ""
+        motion_join = "LEFT JOIN scene_motion m ON m.scene_id = s.id" if (has_motion and not filter_motion) else ""
+
+        for vid, indices in by_video.items():
+            placeholders = ",".join("?" for _ in indices)
+            for row in ro_conn.execute(
+                f"""
+                SELECT s.scene_index, s.start_time_ms, s.end_time_ms, {thumb_col}, {motion_cols}
+                FROM scenes s
+                {thumb_join}
+                {motion_join}
+                WHERE s.video_id = ? AND s.scene_index IN ({placeholders})
+                """,
+                (vid, *indices),
+            ):
+                fetched[(vid, int(row[0]))] = (int(row[1]), int(row[2]), row[3], row[4], row[5], int(row[6]))
+
         hits: list[SceneHit] = []
         for score, vid, s_idx, filepath, pre_motion in top:
-            row = ro_conn.execute(
-                f"""
-                SELECT s.start_time_ms, s.end_time_ms,
-                       {"t.thumbnail" if options.include_thumbnails else "NULL"},
-                       {"m.start_raw, m.end_raw, m.scene_id IS NOT NULL" if (has_motion and not filter_motion) else "NULL, NULL, 0"}
-                FROM scenes s
-                {"LEFT JOIN scene_thumbnails t ON t.scene_id = s.id" if options.include_thumbnails else ""}
-                {"LEFT JOIN scene_motion m ON m.scene_id = s.id" if (has_motion and not filter_motion) else ""}
-                WHERE s.video_id = ? AND s.scene_index = ?
-                """,
-                (vid, s_idx),
-            ).fetchone()
+            row = fetched.get((vid, s_idx))
             if row is None:
                 continue
             start_ms, end_ms, thumb, start_raw, end_raw, has_m = row
@@ -231,8 +253,8 @@ def _search_one_v4(
                 SceneHit(
                     video_path=filepath,
                     scene_index=s_idx,
-                    start_ms=int(start_ms),
-                    end_ms=int(end_ms),
+                    start_ms=start_ms,
+                    end_ms=end_ms,
                     score=score,
                     database=path.stem,
                     thumbnail_b64=base64.b64encode(thumb).decode("ascii") if thumb else None,

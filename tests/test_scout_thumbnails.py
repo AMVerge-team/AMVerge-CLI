@@ -20,6 +20,7 @@ def test_missing_thumbnail_is_generated():
 def test_old_low_res_thumbnail_is_regenerated():
     # what scene-scout-dev databases store
     assert thumbnail_needs_redo(jpeg(160, 90))
+    assert not thumbnail_needs_redo(jpeg(160, 90), upgrade_low_res=False)
 
 
 def test_current_size_thumbnail_is_kept():
