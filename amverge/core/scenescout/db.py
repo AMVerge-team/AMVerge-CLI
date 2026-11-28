@@ -610,8 +610,8 @@ def ensure_v4_ready(path: str | Path) -> bool:
     return True
 
 
-def create_v3_backup(path: str | Path) -> Path:
-    """Create a consistent SQLite backup at ``<filename>.v3.bak`` without clobbering existing backups."""
+def create_schema_backup(path: str | Path, schema_version: int = 3) -> Path:
+    """Create a consistent SQLite backup at ``<filename>.v<version>.bak`` without clobbering existing backups."""
     p = Path(path).resolve()
     if not p.is_file():
         raise FileNotFoundError(f"Database file not found: {p}")
@@ -624,10 +624,10 @@ def create_v3_backup(path: str | Path) -> Path:
     except FileNotFoundError:
         pass
 
-    backup_path = p.with_name(f"{p.name}.v3.bak")
+    backup_path = p.with_name(f"{p.name}.v{schema_version}.bak")
     if backup_path.exists():
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_path = p.with_name(f"{p.name}.v3.{ts}.bak")
+        backup_path = p.with_name(f"{p.name}.v{schema_version}.{ts}.bak")
 
     src = sqlite3.connect(str(p), timeout=30.0)
     dst = sqlite3.connect(str(backup_path), timeout=30.0)
@@ -640,8 +640,13 @@ def create_v3_backup(path: str | Path) -> Path:
     return backup_path
 
 
+def create_v3_backup(path: str | Path) -> Path:
+    """Backward-compatible wrapper for creating a ``.v3.bak`` SQLite backup."""
+    return create_schema_backup(path, schema_version=3)
+
+
 def upgrade_database(path: str | Path, *, backup: bool = True) -> tuple[DatabaseInfo, Optional[Path]]:
-    """Explicitly upgrade a pre-v4 database to schema v4 (optionally saving a ``.v3.bak``)."""
+    """Explicitly upgrade a pre-v4 database to schema v4 (optionally saving a ``.v<N>.bak``)."""
     p = Path(path).resolve()
     info = inspect_database_schema(p)
     status = info["status"]
@@ -661,7 +666,7 @@ def upgrade_database(path: str | Path, *, backup: bool = True) -> tuple[Database
     backup_path: Optional[Path] = None
     if status == "needs_upgrade":
         if backup:
-            backup_path = create_v3_backup(p)
+            backup_path = create_schema_backup(p, int(info.get("schema_version") or 3))
         migrate_database(p)
     elif info["needs_self_heal"]:
         migrate_database(p)
