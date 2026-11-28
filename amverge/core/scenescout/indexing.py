@@ -1,45 +1,8 @@
-"""Turning a video into rows in a Scene Scout database.
-
-Feel free to create this in however way you want, what I have here
-is something to get you started.
+"""Turning a video into rows in a Scene Scout database (schema v4).
 
 Pipeline: detect scene boundaries, sample a representative frame per scene
-without decoding the rest, embed the frames, write scenes plus thumbnails.
-
-Scene detection uses AMVerge's own detectors rather than PySceneDetect, so a
-scene found here lines up with the clips the user already has from importing
-that episode. Which detector runs follows the user's Settings choice; see
-:func:`detect_scenes`.
-
-:func:`index_video` orchestrates these steps and does all the database work, so
-it is worth reading first.
-
-The data, start to finish::
-
-    detect_scenes(video, method)       -> [(start_ms, end_ms), ...]        N scenes
-    sample_scene_frames(video, scenes) -> [uint8 (H, W, 3) RGB, ...]       N frames
-    embed_frames(frames)               -> float32 (N, D), rows normalised  N vectors
-    encode_thumbnail(frame)            -> JPEG bytes                       N thumbs
-                                          |
-                                          v
-                                  one scene_embeddings row per scene
-
-All four stay the same length and the same order. `index_video` zips them
-together, so one dropped frame shifts every scene after it onto the wrong
-timestamp, with nothing to catch it.
-
-How it reaches a user in the app:
-
-1. They pick a video with Add Episode on the Scene Scout page.
-2. The app runs ``amverge scout add <video> --db <name> --root <dir>
-   --detector <their Settings choice> --json``.
-3. Each ``on_progress`` call becomes one JSON line, which Rust forwards to the
-   UI as a ``scout_progress`` event and the toolbar draws as progress. Call it
-   often enough that a long video does not look frozen.
-4. When it finishes, the rows written here are what every later search reads.
-
-Nothing in this file talks to the app directly. Its only obligations are to
-write correct rows and to report progress.
+without decoding the rest, embed the frames, write scenes + contiguous float32
+``video_embeddings`` + 320w WebP ``scene_thumbnails``.
 """
 
 from __future__ import annotations
@@ -47,18 +10,22 @@ from __future__ import annotations
 import bisect
 import io
 import queue
+import struct
 import threading
 from pathlib import Path
 from typing import Callable, Optional
 
 from . import db as scoutdb
+from .fingerprint import compute_content_fingerprint
 from .types import EMBEDDING_MODEL_VERSION
 
 ProgressCallback = Callable[[str, int, int], None]
 
-# small jpegs keep a season's database in the tens of MB
+# 320w WebP keeps multi-season databases compact while looking sharp across both apps
 THUMBNAIL_WIDTH = 320
-THUMBNAIL_QUALITY = 80
+THUMBNAIL_QUALITY = 75
+
+SAMPLING_STRATEGY_V1 = "first_or_midpoint_v1"
 
 KEYFRAME_SNAP_FRAMES = 2
 BLANK_CHECK_WIDTH = 320
@@ -70,56 +37,118 @@ DETECTOR_AI = "transnetv2_gpu"
 DETECTOR_KEYFRAME = "keyframe_detection"
 
 
+def __detect_scenes_with_label_with_label(
+    video: str | Path,
+    *,
+    method: str = DETECTOR_KEYFRAME,
+    accurate: bool = False,
+    merge_short: bool = False,
+    scene_cache_dir: str | Path | None = None,
+    fps: float | None = None,
+) -> tuple[list[tuple[int, int]], str]:
+    """Return ``(scenes_ms, canonical_detector_name)`` ('transnetv2' or 'keyframe')."""
+    use_ai = accurate or method in (DETECTOR_AI, "transnetv2")
+    if use_ai:
+        from ..detection.ai_scene_detection import TRANSNET_AVAILABLE, decode_and_detect_scenes
+
+        if TRANSNET_AVAILABLE:
+            if merge_short or scene_cache_dir is not None:
+                import numpy as np
+                from ..detection.short_scenes import merge_short_scenes
+                from ..infra.ipc import build_video_cache_prefix
+                from ..video.probe_utils import probe_video_fps
+                from ..video.scene_utils import scenes_to_objects
+
+                scenes_secs, scenes_frames, decoded_frames = decode_and_detect_scenes(
+                    video, return_frames=True
+                )
+                eff_fps = fps or probe_video_fps(video) or 24.0
+                if scene_cache_dir is not None and len(scenes_secs) > 0:
+                    cache_dir = Path(scene_cache_dir)
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    prefix = build_video_cache_prefix(Path(video))
+                    for suffix, arr in (("secs", scenes_secs), ("frames", scenes_frames)):
+                        target = cache_dir / f"{prefix}_transnet_{suffix}.npy"
+                        tmp = cache_dir / f"{prefix}_transnet_{suffix}.tmp.npy"
+                        with open(tmp, "wb") as f:
+                            np.save(f, arr)
+                        tmp.replace(target)
+                if merge_short and len(scenes_secs) > 0:
+                    scene_objs = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
+                    merged = merge_short_scenes(
+                        scene_objs, str(video), decoded_frames=decoded_frames, fps=eff_fps
+                    )
+                    del decoded_frames
+                    scenes = [
+                        (
+                            int(round(float(s["start_sec"]) * 1000)),
+                            max(int(round(float(s["start_sec"]) * 1000)) + 1, int(round(float(s["end_sec"]) * 1000))),
+                        )
+                        for s in merged
+                    ]
+                    if scenes:
+                        return scenes, "transnetv2"
+                else:
+                    del decoded_frames
+            else:
+                scenes_secs, _ = decode_and_detect_scenes(video)
+            scenes = [(int(s * 1000), int(e * 1000)) for s, e in scenes_secs]
+            if scenes:
+                return scenes, "transnetv2"
+
+    from ..detection.keyframe import detect_scenes_by_keyframe
+
+    keyframe_scenes = detect_scenes_by_keyframe(video)
+    return [(int(s * 1000), int(e * 1000)) for s, e in keyframe_scenes], "keyframe"
+
+
 def detect_scenes(
     video: str | Path,
     *,
     method: str = DETECTOR_KEYFRAME,
     accurate: bool = False,
 ) -> list[tuple[int, int]]:
-    """Scene boundaries as ``(start_ms, end_ms)`` pairs.
+    """Scene boundaries as ``(start_ms, end_ms)`` pairs."""
+    scenes, _ = _detect_scenes_with_label(video, method=method, accurate=accurate)
+    return scenes
 
-    Use AMVerge's own detectors, not PySceneDetect. Scene boundaries then match the clips the user already has from importing that episode, so a search
-    result points at a scene they can actually see in their grid.
 
-    Which one runs follows the user's Settings choice, which arrives here as
-    ``method``:
+def probe_video_metadata(video: str | Path) -> tuple[Optional[int], Optional[float], Optional[int], Optional[int]]:
+    """Return ``(duration_ms, fps, width, height)`` from container headers without decoding."""
+    import av
 
-    * ``transnetv2_gpu`` -> ``amverge.core.detection.ai_scene_detection``,
-      entry point ``decode_and_detect_scenes``. Needs the ``ml`` pack.
-    * ``keyframe_detection`` -> ``amverge.core.detection.keyframe``, entry point
-      ``detect_scenes_by_keyframe``.
+    try:
+        with av.open(str(video), options={"err_detect": "ignore_err"}) as container:
+            if not container.streams.video:
+                return None, None, None, None
+            stream = container.streams.video[0]
+            fps = float(stream.average_rate) if stream.average_rate and stream.average_rate > 0 else None
+            width = int(stream.codec_context.width or stream.width or 0) or None
+            height = int(stream.codec_context.height or stream.height or 0) or None
+            duration_ms: Optional[int] = None
+            if stream.duration is not None and stream.time_base is not None:
+                duration_ms = int(float(stream.duration * stream.time_base) * 1000)
+            elif container.duration is not None:
+                duration_ms = int((container.duration / av.time_base) * 1000)
+            return duration_ms, round(fps, 4) if fps else None, width, height
+    except Exception:
+        return None, None, None, None
+    return [(int(s * 1000), int(e * 1000)) for s, e in keyframe_scenes], "keyframe"
 
-    Fall back to keyframe for an unknown value, and for ``transnetv2_gpu`` when
-    the ``ml`` pack turns out to be missing. Indexing should still work rather
-    than fail, since keyframe detection needs nothing extra.
 
-    Both AMVerge detectors return seconds; this returns milliseconds, because
-    that is what the database columns and the upstream schema use.
-    """
-    use_ai = accurate or method == DETECTOR_AI
-    if use_ai:
-        from ..detection.ai_scene_detection import TRANSNET_AVAILABLE, decode_and_detect_scenes
-
-        if TRANSNET_AVAILABLE:
-            scenes_secs, _ = decode_and_detect_scenes(video)
-            scenes = [(int(s * 1000), int(e * 1000)) for s, e in scenes_secs]
-            if scenes:
-                return scenes
-
-    from ..detection.keyframe import detect_scenes_by_keyframe
-
-    keyframe_scenes = detect_scenes_by_keyframe(video)
-    return [(int(s * 1000), int(e * 1000)) for s, e in keyframe_scenes]
+def detect_scenes(
+    video: str | Path,
+    *,
+    method: str = DETECTOR_KEYFRAME,
+    accurate: bool = False,
+) -> list[tuple[int, int]]:
+    """Scene boundaries as ``(start_ms, end_ms)`` pairs."""
+    scenes, _ = _detect_scenes_with_label(video, method=method, accurate=accurate)
+    return scenes
 
 
 def _sample_size(width: int, height: int, max_patches: int) -> tuple[int, int]:
-    """The size a sampled frame is shrunk to: never bigger than the source.
-
-    SigLIP 2 resizes every frame onto a grid of at most ``max_patches`` 16 px
-    patches, so a full-resolution frame only costs CPU time and memory. Four times
-    the grid's pixels keeps the resize quality, and a thumbnail is never narrower
-    than :data:`THUMBNAIL_WIDTH`.
-    """
+    """The size a sampled frame is shrunk to: never bigger than the source."""
     target_area = max_patches * 16 * 16 * 4
     scale = min(1.0, max((target_area / (width * height)) ** 0.5, THUMBNAIL_WIDTH / width))
     return max(1, round(width * scale)), max(1, round(height * scale))
@@ -131,32 +160,14 @@ def sample_frames(
     on_progress: Optional[Callable[[int, int], None]] = None,
     max_patches: Optional[int] = None,
 ) -> list:
-    """The middle frame of each scene, decoding the video in full.
-
-    Used for thumbnails, where a midpoint reads better than a scene's opening. Indexing
-    uses the much faster :func:`sample_scene_frames` instead.
-
-    In:  the video path, and the scene list :func:`detect_scenes` returned.
-    Out: a list of exactly ``len(scenes)`` frames, in the same order. Each frame
-         is ``np.uint8`` of shape ``(H, W, 3)`` in **RGB** order.
-
-    Decode with PyAV (``av``), which is already a base dependency. Do not add
-    OpenCV for this, and if you use it anyway remember it returns BGR while the
-    embedding step expects RGB.
-
-    ``on_progress(done, total)`` fires as frames are collected, about once per
-    percent, so a caller can show how far the decode has got.
-
-    ``max_patches`` shrinks each frame to what that SigLIP patch budget can use
-    (see :func:`_sample_size`) during the RGB conversion; ``None`` keeps full size.
-    """
+    """The middle frame of each scene, decoding the video in full."""
     import av
 
     if not scenes:
         return []
 
     total = len(scenes)
-    step = max(1, total // 100) # for progress bar % updates
+    step = max(1, total // 100)
     last_reported = 0
 
     def report(done: int) -> None:
@@ -176,13 +187,11 @@ def sample_frames(
     def to_rgb(frame):
         if max_patches is None:
             return frame.to_ndarray(format="rgb24")
-        # scaled in the same swscale pass as the rgb conversion, so the full-size frame is never built
         width, height = _sample_size(frame.width, frame.height, max_patches)
         return frame.reformat(width=width, height=height, format="rgb24", interpolation="AREA").to_ndarray()
 
     out: list = []
     next_midpoint = 0
-    # kept raw: converting is the expensive part, and only the end-of-video padding needs it
     last_raw = None
 
     try:
@@ -193,13 +202,11 @@ def sample_frames(
                 continue
             last_raw = frame
 
-            # only the frame reaching the next scene's midpoint is converted to rgb
             if current_ms < midpoints_ms[next_midpoint]:
                 continue
             try:
                 nd = to_rgb(frame)
             except (av.FFmpegError, ValueError):
-                # an unconvertible frame leaves the midpoint pending for the next one
                 continue
 
             while next_midpoint < len(midpoints_ms) and current_ms >= midpoints_ms[next_midpoint]:
@@ -225,11 +232,7 @@ def sample_frames(
 
 
 def is_blank_frame(frame) -> bool:
-    """True for a frame with little to search for: a flash, black, or an empty background.
-
-    Measures fine detail rather than contrast, so a plain two-tone background still
-    counts as empty. A false positive only costs one extra decode.
-    """
+    """True for a frame with little to search for: a flash, black, or an empty background."""
     import numpy as np
 
     stride = max(1, frame.shape[1] // BLANK_CHECK_WIDTH)
@@ -239,7 +242,7 @@ def is_blank_frame(frame) -> bool:
 
 
 def _packet_times(video: str | Path) -> tuple[list[int], list[int], float]:
-    """Keyframe times and all frame times in ms, sorted, plus the frame rate. Reads packets only, no decode."""
+    """Keyframe times and all frame times in ms, sorted, plus the frame rate."""
     import av
 
     keyframes: set[int] = set()
@@ -262,11 +265,7 @@ def _frame_ms(pts: int, time_base) -> int:
 
 
 def _scene_targets(scenes: list[tuple[int, int]], keyframes: list[int], times: list[int], rate: float) -> list[int]:
-    """The exact frame time to sample for each scene: its first frame, or the keyframe it sits on.
-
-    Detectors can be a frame or two off a cut, while an encoder puts its keyframe on
-    the cut itself, so a nearby keyframe is the better first frame and costs less.
-    """
+    """The exact frame time to sample for each scene: its first frame, or the keyframe it sits on."""
     tolerance = KEYFRAME_SNAP_FRAMES * 1000 / rate
     targets = []
     for start_ms, _ in scenes:
@@ -286,31 +285,9 @@ def sample_scene_frames(
     on_progress: Optional[Callable[[int, int], None]] = None,
     max_patches: Optional[int] = None,
     on_frame: Optional[Callable] = None,
+    packet_info: Optional[tuple[list[int], list[int], float]] = None,
 ) -> list:
-    """One representative frame per scene, without decoding the whole video.
-
-    Returns exactly ``len(scenes)`` RGB ``np.uint8`` frames in scene order:
-    :func:`index_video` zips them against ``scenes`` and the embeddings, so a dropped
-    frame would shift every later scene onto the wrong timestamp. Scenes past the last
-    decodable frame get that last frame; a video with no decodable frames raises.
-
-    Each scene gets its first frame, or its midpoint when that first frame is blank
-    (see :func:`is_blank_frame`).
-
-    Packets are dropped whenever no wanted frame remains before the next keyframe. A
-    wanted keyframe needs only its own packet; any other frame needs every packet up
-    to it, including leading pictures decoded after the following keyframe. Empty
-    packets flush the decoder's delayed frames, so they are always sent.
-
-    A decoder fed only some packets outputs frames out of order and can omit some, so
-    frames are matched to scenes by exact time, never by arrival. Frames that never
-    appear and the midpoints of blank scenes are then fetched with a seek each.
-
-    ``on_progress(done, total)`` fires about once per percent. ``max_patches`` is as in
-    :func:`sample_frames`. ``on_frame(index, frame)`` sees each frame as it is ready, so
-    embedding can start while the decode runs; blank scenes arrive after the rest, so it
-    is not in scene order.
-    """
+    """One representative frame per scene, without decoding the whole video."""
     import av
 
     from .decode import close_video, open_video
@@ -319,7 +296,10 @@ def sample_scene_frames(
         return []
 
     total = len(scenes)
-    keyframes, times, rate = _packet_times(video)
+    if packet_info is not None:
+        keyframes, times, rate = packet_info
+    else:
+        keyframes, times, rate = _packet_times(video)
     keyframe_set = set(keyframes)
     targets = _scene_targets(scenes, keyframes, times, rate)
     wanted: dict[int, list[int]] = {}
@@ -447,27 +427,61 @@ def sample_scene_frames(
 
 
 def encode_thumbnail(frame) -> bytes:
-    """JPEG bytes for the ``thumbnail`` BLOB column."""
+    """320w WebP bytes for the ``scene_thumbnails.thumbnail`` BLOB column."""
     from PIL import Image
 
     image = Image.fromarray(frame)
     if image.width > THUMBNAIL_WIDTH:
-        height = round(image.height * THUMBNAIL_WIDTH / image.width)
+        height = max(1, round(image.height * THUMBNAIL_WIDTH / image.width))
         image = image.resize((THUMBNAIL_WIDTH, height), Image.LANCZOS)
 
     buffer = io.BytesIO()
-    image.convert("RGB").save(buffer, format="JPEG", quality=THUMBNAIL_QUALITY)
+    image.convert("RGB").save(buffer, format="WEBP", quality=THUMBNAIL_QUALITY, method=0)
     return buffer.getvalue()
 
 
-def precut_scenes(raw) -> list[tuple[int, int]]:
-    """Scene ranges handed in by the caller instead of detected, as ``(start_ms, end_ms)``.
+def _fast_image_width(blob: bytes) -> Optional[int]:
+    """Read WebP or JPEG width directly from header bytes without full image decode."""
+    n = len(blob)
+    # WebP: RIFF <size> WEBP <chunk>
+    if n >= 30 and blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+        chunk = blob[12:16]
+        if chunk == b"VP8 " and n >= 30 and blob[23:26] == b"\x9d\x01\x2a":
+            return struct.unpack_from("<H", blob, 26)[0] & 0x3FFF
+        if chunk == b"VP8L" and n >= 25 and blob[20] == 0x2F:
+            bits = struct.unpack_from("<I", blob, 21)[0]
+            return (bits & 0x3FFF) + 1
+        if chunk == b"VP8X" and n >= 30:
+            return (blob[24] | (blob[25] << 8) | (blob[26] << 16)) + 1
+    # JPEG: FF D8 ... SOF marker
+    if n >= 4 and blob[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < n:
+            if blob[i] != 0xFF:
+                break
+            while i < n and blob[i] == 0xFF:
+                i += 1
+            if i >= n:
+                break
+            marker = blob[i]
+            i += 1
+            if marker in (0xD8, 0xD9) or (0xD0 <= marker <= 0xD7):
+                continue
+            if i + 2 > n:
+                break
+            seg_len = struct.unpack_from(">H", blob, i)[0]
+            if seg_len < 2 or i + seg_len > n:
+                break
+            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                if i + 7 <= n:
+                    return struct.unpack_from(">H", blob, i + 5)[0]
+                break
+            i += seg_len
+    return None
 
-    The app passes these for an episode it has already imported and cut, read from
-    that episode's manifest, so the database's scenes match the clips exactly and
-    detection is skipped. Accepts ``[[start_ms, end_ms], ...]``; ranges that are
-    not numbers or are empty are dropped, and the rest are sorted by start.
-    """
+
+def precut_scenes(raw) -> list[tuple[int, int]]:
+    """Scene ranges handed in by the caller instead of detected, as ``(start_ms, end_ms)``."""
     scenes: list[tuple[int, int]] = []
     for item in raw or []:
         try:
@@ -498,21 +512,13 @@ def index_video(
     generate_thumbnails: bool = True,
     scenes: Optional[list[tuple[int, int]]] = None,
     on_progress: Optional[ProgressCallback] = None,
+    merge_short: bool = False,
+    scene_cache_dir: Optional[str | Path] = None,
+    out_scenes: Optional[list[tuple[int, int]]] = None,
 ) -> int:
-    """Index one video into a database. Returns the number of scenes written.
-
-    The video row is written with ``status='indexing'`` up front and only flipped
-    to ``completed`` at the end, so a run interrupted halfway leaves a row that
-    is visibly incomplete rather than one that looks finished but has no scenes.
-
-    ``scenes`` (from :func:`precut_scenes`) skips detection and indexes exactly
-    those ranges, for an episode the app already cut; ``method`` is then unused.
-
-    Motion tags need every scene's last frames, so they are not measured here;
-    ``amverge scout motion`` adds them afterward (see :func:`backfill_motion`).
-    """
+    """Index one video into a database. Returns the number of scenes written."""
     from ..infra.ipc import log
-    from .embedding import is_model_loaded, pack_embedding
+    from .embedding import is_model_loaded
 
     video_path = Path(video).resolve()
     if not video_path.is_file():
@@ -523,15 +529,27 @@ def index_video(
             on_progress(stage, done, total)
 
     if scenes:
+        effective_detector = "precut"
         log(f"[diag] scene scout {video_path.name} | using {len(scenes)} pre-cut scenes, detection skipped")
     else:
         report("detecting", 0, 1)
         log(f"[diag] scene scout {video_path.name} | detecting scenes using {method}...")
-        scenes = detect_scenes(video_path, method=method, accurate=accurate)
+        scenes, effective_detector, effective_detector = __detect_scenes_with_label_with_label(
+            video_path,
+            method=method,
+            accurate=accurate,
+            merge_short=merge_short,
+            scene_cache_dir=scene_cache_dir,
+        )
         if not scenes:
             log(f"[diag] scene scout {video_path.name} | no scenes detected")
             return 0
-        log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes")
+        log(f"[diag] scene scout {video_path.name} | detected {len(scenes)} scenes ({effective_detector})")
+
+    if out_scenes is not None:
+        out_scenes.extend(scenes)
+
+    keyframes, times, rate = _packet_times(video_path)
     # embeds batches as they are sampled, so the gpu works while the decode runs
     embedder = _BackgroundEmbedder(device=device, max_patches=max_patches, batch_size=batch_size)
     report("sampling", 0, len(scenes))
@@ -542,6 +560,7 @@ def index_video(
             on_progress=lambda done, total: report("sampling", done, total),
             max_patches=max_patches,
             on_frame=embedder.add,
+            packet_info=(keyframes, times, rate),
         )
     except BaseException:
         embedder.abandon()
@@ -574,35 +593,45 @@ def index_video(
         if unsub_load is not None:
             unsub_load()
 
+    sampling_cfg = {
+        "frames_per_scene": 1,
+        "pooling": "none",
+        "max_patches": int(max_patches),
+    }
     video_id = scoutdb.upsert_video(
-        database, str(video_path), video_path.stat().st_mtime, status="indexing"
+        database,
+        str(video_path),
+        video_path.stat().st_mtime,
+        status="indexing",
+        model_id=EMBEDDING_MODEL_VERSION,
+        detector=effective_detector,
+        sampling_strategy=SAMPLING_STRATEGY_V1,
+        sampling_config=sampling_cfg,
+        file_size=file_size,
+        content_fingerprint=content_fp,
+        duration_ms=duration_ms,
+        fps=fps,
+        width=width,
+        height=height,
     )
 
-    rows = []
-    for index, ((start_ms, end_ms), vector) in enumerate(zip(scenes, vectors)):
-        thumbnail = encode_thumbnail(frames[index]) if generate_thumbnails else None
-        rows.append((index, start_ms, end_ms, pack_embedding(vector), thumbnail))
-
-    scoutdb.insert_scenes(database, video_id, rows)
+    thumbnails = [encode_thumbnail(f) for f in frames] if generate_thumbnails else None
+    scoutdb.insert_video_scenes(database, video_id, scenes, vectors, thumbnails)
     scoutdb.mark_video_complete(database, video_id)
-    report("done", len(rows), len(rows))
-    log(f"[diag] scene scout {video_path.name} | indexed {len(rows)} scenes successfully")
+    report("done", len(scenes), len(scenes))
+    log(f"[diag] scene scout {video_path.name} | indexed {len(scenes)} scenes successfully")
 
-    return len(rows)
+    return len(scenes)
 
 
 _END = object()
 
 
 class _BackgroundEmbedder:
-    """Embeds sampled frames on a worker thread, a batch at a time, while the decode runs.
-
-    Frames may arrive in any order; :meth:`finish` returns their vectors in scene
-    order. The model loads on the worker too, so that wait overlaps the decode as well.
-    """
+    """Embeds sampled frames on a worker thread, a batch at a time, while the decode runs."""
 
     def __init__(self, *, device: Optional[str], max_patches: int, batch_size: int):
-        self._queue: queue.Queue = queue.Queue()
+        self._queue: queue.Queue = queue.Queue(maxsize=max(16, batch_size * 3))
         self._rows: list = []
         self._order: list[int] = []
         self._done = 0
@@ -664,11 +693,7 @@ def backfill_motion(
     database: str | Path,
     on_progress: Optional[ProgressCallback] = None,
 ) -> int:
-    """Measures motion for every indexed video that lacks it. Returns scenes written.
-
-    Needs no model, only the source videos still on disk; a moved or deleted
-    source is skipped with a log line.
-    """
+    """Measures motion for every indexed video that lacks it. Returns scenes written."""
     from ..infra.ipc import log
     from .motion import MOTION_VERSION, collect_scene_motion
 
@@ -705,20 +730,21 @@ def model_version() -> str:
     return EMBEDDING_MODEL_VERSION
 
 
-def thumbnail_needs_redo(thumbnail: Optional[bytes]) -> bool:
-    """True for a missing thumbnail, or one smaller than this version stores.
-
-    Databases from older tools (scene-scout-dev) stored 160x90 thumbnails, which
-    look blurry stretched over a result tile; regenerating them is the upgrade.
-    An unreadable blob counts as missing.
-    """
-    if thumbnail is None:
+def thumbnail_needs_redo(thumbnail: Optional[bytes], *, upgrade_low_res: bool = True) -> bool:
+    """True for a missing/corrupt thumbnail, or (when ``upgrade_low_res``) narrower than :data:`THUMBNAIL_WIDTH`."""
+    if not thumbnail:
         return True
+
+    fast_w = _fast_image_width(thumbnail)
+    if fast_w is not None:
+        return fast_w < THUMBNAIL_WIDTH if upgrade_low_res else False
+
     from PIL import Image
 
     try:
         with Image.open(io.BytesIO(thumbnail)) as image:
-            return image.width < THUMBNAIL_WIDTH
+            w = image.width
+            return w < THUMBNAIL_WIDTH if upgrade_low_res else False
     except Exception:
         return True
 
@@ -726,29 +752,42 @@ def thumbnail_needs_redo(thumbnail: Optional[bytes]) -> bool:
 def generate_missing_thumbnails(
     database: str | Path,
     *,
+    upgrade_low_res: bool = True,
     on_progress: Optional[ProgressCallback] = None,
 ) -> int:
-    """Fill in missing thumbnails and redo low-resolution ones.
-
-    Returns how many thumbnails were written.
-    """
+    """Fill in missing thumbnails (and optionally redo low-resolution ones) in ``scene_thumbnails``."""
     from ..infra.ipc import log
 
     db_path = scoutdb.resolve_db_path(database)
     if not db_path.is_file():
         raise FileNotFoundError(f"Database does not exist: {db_path}")
 
+    scoutdb.ensure_v4_ready(db_path)
+
+    updated_count = 0
     with scoutdb.connect(db_path) as conn:
-        # the blobs are small; reading them all is what lets old low-res ones be found
         todo_by_video: dict[int, list[tuple[int, int, int]]] = {}
-        for scene_id, video_id, start_ms, end_ms, thumbnail in conn.execute(
+        # Fetch only the 64-byte image header prefix first so we never load tens of MB of BLOBs just to check width
+        for scene_id, video_id, start_ms, end_ms, header_prefix in conn.execute(
             """
-            SELECT id, video_id, start_time_ms, end_time_ms, thumbnail
-            FROM scene_embeddings
-            ORDER BY video_id, scene_index
+            SELECT s.id, s.video_id, s.start_time_ms, s.end_time_ms, SUBSTR(t.thumbnail, 1, 64)
+            FROM scenes s
+            LEFT JOIN scene_thumbnails t ON t.scene_id = s.id
+            ORDER BY s.video_id, s.scene_index
             """
         ):
-            if thumbnail_needs_redo(thumbnail):
+            if header_prefix is None:
+                needs = True
+            else:
+                fast_w = _fast_image_width(bytes(header_prefix))
+                if fast_w is not None:
+                    needs = fast_w < THUMBNAIL_WIDTH if upgrade_low_res else False
+                else:
+                    full_row = conn.execute(
+                        "SELECT thumbnail FROM scene_thumbnails WHERE scene_id = ?", (scene_id,)
+                    ).fetchone()
+                    needs = thumbnail_needs_redo(full_row[0] if full_row else None, upgrade_low_res=upgrade_low_res)
+            if needs:
                 todo_by_video.setdefault(video_id, []).append((scene_id, start_ms, end_ms))
 
         total_missing = sum(len(rows) for rows in todo_by_video.values())
@@ -756,8 +795,6 @@ def generate_missing_thumbnails(
             return 0
 
         filepaths = dict(conn.execute("SELECT id, filepath FROM processed_videos"))
-        updated_count = 0
-        # scenes dealt with so far, written or skipped, so the bar always reaches the end
         handled = 0
         log(
             f"[diag] scene scout generate-thumbnails | {total_missing} thumbnails to make "
@@ -778,14 +815,12 @@ def generate_missing_thumbnails(
 
             log(f"[diag] scene scout generate-thumbnails | {v_path.name}: {len(scene_rows)} thumbnails")
 
-            # decoding is the slow part, so progress follows the frames as they come
             def report_frames(done: int, _total: int, offset: int = handled) -> None:
                 if on_progress:
                     on_progress("thumbnails", offset + done, total_missing)
 
             scenes = [(row[1], row[2]) for row in scene_rows]
             try:
-                # thumbnails only: the default patch budget already keeps every frame thumbnail-wide
                 frames = sample_frames(v_path, scenes, on_progress=report_frames, max_patches=256)
             except Exception as e:
                 log(f"[diag] scene scout generate-thumbnails | decode error on {v_path.name}: {e}")
@@ -795,10 +830,10 @@ def generate_missing_thumbnails(
             batch_updates = []
             for (scene_id, _, _), frame in zip(scene_rows, frames):
                 thumb_bytes = encode_thumbnail(frame)
-                batch_updates.append((thumb_bytes, scene_id))
+                batch_updates.append((scene_id, thumb_bytes))
 
             conn.executemany(
-                "UPDATE scene_embeddings SET thumbnail = ? WHERE id = ?",
+                "INSERT OR REPLACE INTO scene_thumbnails (scene_id, thumbnail) VALUES (?, ?)",
                 batch_updates,
             )
             conn.commit()
@@ -808,4 +843,9 @@ def generate_missing_thumbnails(
             if on_progress:
                 on_progress("thumbnails", handled, total_missing)
 
-        return updated_count
+        if updated_count > 0:
+            scoutdb._touch_updated_metadata(conn)
+
+    if updated_count > 0:
+        scoutdb.run_incremental_vacuum(db_path)
+    return updated_count

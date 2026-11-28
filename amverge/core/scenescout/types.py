@@ -8,11 +8,63 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 
 # bump when the model or preprocessing changes, so older databases are re-indexed, not compared across spaces
 EMBEDDING_MODEL_VERSION = "google/siglip2-so400m-patch16-naflex"
+
+# shared SQLite PRAGMA user_version across AMVerge-CLI and standalone Scene Scout
+SCHEMA_VERSION = 4
+
+SchemaStatus = Literal["ready", "needs_upgrade", "unsupported_newer"]
+
+
+class SchemaUpgradeRequiredError(ValueError):
+    """Raised when a pre-v4 database requires explicit user confirmation to upgrade."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        current_version: int,
+        supported_version: int = SCHEMA_VERSION,
+    ) -> None:
+        self.path = str(path)
+        self.current_version = current_version
+        self.supported_version = supported_version
+        name = Path(path).name
+        super().__init__(
+            f"Database '{name}' uses Scene Scout schema v{current_version} and needs to be upgraded to "
+            f"v{supported_version} before use. Older versions of AMVerge and Scene Scout cannot read v{supported_version} databases."
+        )
+
+
+class UnsupportedSchemaError(ValueError):
+    """Raised when a database uses a newer schema version than this build supports."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        schema_version: int,
+        *,
+        updated_by_app: Optional[str] = None,
+        updated_by_version: Optional[str] = None,
+        supported_version: int = SCHEMA_VERSION,
+    ) -> None:
+        self.path = str(path)
+        self.schema_version = schema_version
+        self.updated_by_app = updated_by_app
+        self.updated_by_version = updated_by_version
+        self.supported_version = supported_version
+        name = Path(path).name
+        writer = ""
+        if updated_by_app:
+            ver = f" {updated_by_version}" if updated_by_version else ""
+            writer = f" (last updated by {updated_by_app}{ver})"
+        super().__init__(
+            f"Database '{name}' uses Scene Scout schema v{schema_version}{writer}, "
+            f"which is newer than supported v{supported_version}. Please update AMVerge."
+        )
 
 
 @dataclass(frozen=True)
@@ -25,7 +77,7 @@ class SceneHit:
     end_ms: int
     score: float
     database: str
-    # base64 jpeg, only when thumbnails are asked for
+    # base64 webp/jpeg, only when thumbnails are asked for
     thumbnail_b64: Optional[str] = None
     # {"start": tags, "end": tags}; None when indexed without motion
     motion: Optional[dict[str, Any]] = None
@@ -56,6 +108,15 @@ class DatabaseInfo:
     size_bytes: int = 0
     model_version: str = EMBEDDING_MODEL_VERSION
     created_at: Optional[str] = None
+    database_id: Optional[str] = None
+    schema_version: int = SCHEMA_VERSION
+    created_by_app: Optional[str] = None
+    created_by_version: Optional[str] = None
+    updated_by_app: Optional[str] = None
+    updated_by_version: Optional[str] = None
+    updated_at: Optional[str] = None
+    media_roots: list[str] = field(default_factory=list)
+    schema_status: SchemaStatus = "ready"
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -66,6 +127,15 @@ class DatabaseInfo:
             "sizeBytes": self.size_bytes,
             "modelVersion": self.model_version,
             "createdAt": self.created_at,
+            "databaseId": self.database_id,
+            "schemaVersion": self.schema_version,
+            "schemaStatus": self.schema_status,
+            "createdByApp": self.created_by_app,
+            "createdByVersion": self.created_by_version,
+            "updatedByApp": self.updated_by_app,
+            "updatedByVersion": self.updated_by_version,
+            "updatedAt": self.updated_at,
+            "mediaRoots": list(self.media_roots),
         }
 
 
@@ -78,6 +148,16 @@ class IndexedVideo:
     scene_count: int
     status: str = "completed"
     modified_at: float = 0.0
+    model_id: Optional[str] = None
+    detector: Optional[str] = None
+    sampling_strategy: Optional[str] = None
+    sampling_config: Optional[dict[str, Any]] = None
+    file_size: Optional[int] = None
+    content_fingerprint: Optional[str] = None
+    duration_ms: Optional[int] = None
+    fps: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -87,6 +167,16 @@ class IndexedVideo:
             "sceneCount": self.scene_count,
             "status": self.status,
             "modifiedAt": self.modified_at,
+            "modelId": self.model_id,
+            "detector": self.detector,
+            "samplingStrategy": self.sampling_strategy,
+            "samplingConfig": self.sampling_config,
+            "fileSize": self.file_size,
+            "contentFingerprint": self.content_fingerprint,
+            "durationMs": self.duration_ms,
+            "fps": self.fps,
+            "width": self.width,
+            "height": self.height,
         }
 
 
@@ -107,6 +197,7 @@ class SearchOptions:
     device: Optional[str] = None
     databases: list[str] = field(default_factory=list)
     video_paths: list[str] = field(default_factory=list)
+    exclude_video_paths: list[str] = field(default_factory=list)
     # keep only scenes whose start subject moves one of these ways (motion.SUBJECT_TAGS)
     start_subjects: list[str] = field(default_factory=list)
     # whether a scene with no readable motion survives the start_subjects filter

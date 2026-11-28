@@ -136,6 +136,9 @@ def is_model_loaded() -> bool:
 
 def standby_model() -> bool:
     global _MODEL, _DEVICE
+    from .cache import clear_embedding_cache
+
+    clear_embedding_cache()
     with _LOAD_LOCK:
         if _MODEL is None:
             return False
@@ -166,6 +169,9 @@ def activate_model() -> bool:
 
 def unload_model() -> bool:
     global _MODEL, _PROCESSOR, _DEVICE
+    from .cache import clear_embedding_cache
+
+    clear_embedding_cache()
     with _LOAD_LOCK:
         if _MODEL is None and _PROCESSOR is None:
             return False

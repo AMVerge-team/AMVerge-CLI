@@ -41,15 +41,26 @@ def backend(
     method = (scene_detection_method or "transnetv2_gpu").lower()
     use_keyframe = method.startswith("keyframe")
 
-    if use_keyframe:
+    input_video = Path(video_path)
+    out_dir = Path(output_dir)
+
+    cache_prefix = build_video_cache_prefix(input_video) if input_video.exists() else ""
+    scenes_secs_path = out_dir / f"{cache_prefix}_{'keyframe' if use_keyframe else 'transnet'}_secs.npy"
+    scenes_frames_path = out_dir / f"{cache_prefix}_{'keyframe' if use_keyframe else 'transnet'}_frames.npy"
+    early_cache_hit = bool(cache_prefix and scenes_secs_path.exists() and scenes_frames_path.exists())
+
+    if use_keyframe or early_cache_hit:
         device = "cpu"
         use_cuda = False
-        detector_tag = "keyframe"
-        detector_name = "detect_scenes_by_keyframe"
-        log("[diag] scene backend via AMVerge CLI | method=keyframe_detection")
+        detector_tag = "keyframe" if use_keyframe else "transnet"
+        detector_name = "detect_scenes_by_keyframe" if use_keyframe else "run_model_one_pass"
+        log(
+            "[diag] scene backend via AMVerge CLI | "
+            + ("method=keyframe_detection" if use_keyframe else "cache_hit=True (skipping torch import)")
+        )
     else:
         from ...core.detection.ai_scene_detection import (
-            decode_video_frames_ffmpeg,
+            decode_and_detect_scenes,
             decode_video_frames_nelux,
             run_model_one_pass,
         )
@@ -114,10 +125,8 @@ def backend(
         check_if_path_exists(str(input_video))
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        cache_prefix = build_video_cache_prefix(input_video)
-        scenes_secs_path = out_dir / f"{cache_prefix}_{detector_tag}_secs.npy"
-        scenes_frames_path = out_dir / f"{cache_prefix}_{detector_tag}_frames.npy"
         cache_hit = False
+        decoded_frames = None
 
         emit_progress(5, "Preparing scene detection cache...")
 
@@ -147,31 +156,26 @@ def backend(
                     f"{_time.perf_counter() - _t_kf:.2f}s"
                 )
             else:
-                emit_progress(20, "Decoding frames for TransNetV2...")
-                _t_decode = _time.perf_counter()
-                frames = None
+                emit_progress(20, "Detecting scenes (TransNetV2)...")
+                _t_detect = _time.perf_counter()
+                used_nelux = False
                 if use_nelux:
                     try:
-                        frames = decode_video_frames_nelux(input_video)
+                        decoded_frames = decode_video_frames_nelux(input_video)
+                        emit_progress(55, "Running TransNetV2 scene detection...")
+                        scenes_secs, scenes_frames = run_model_one_pass(decoded_frames, input_video, device=device)
+                        used_nelux = True
                     except Exception as exc:
                         # per-file, not per-machine: NVDEC cannot do 10-bit H.264 at all
                         log(f"NVDEC decode unavailable for this file ({exc}), using FFmpeg")
                         emit_progress(20, "Decoding frames for TransNetV2 (FFmpeg)...")
-                if frames is None:
-                    frames = decode_video_frames_ffmpeg(input_video)
+                if not used_nelux:
+                    scenes_secs, scenes_frames, decoded_frames = decode_and_detect_scenes(
+                        input_video, device=device, return_frames=True
+                    )
                 log(
-                    f"[diag] decode done: {len(frames)} frames in "
-                    f"{_time.perf_counter() - _t_decode:.2f}s (device={device})"
-                )
-
-                emit_progress(55, "Running TransNetV2 scene detection...")
-                _t_infer = _time.perf_counter()
-                scenes_secs, scenes_frames = run_model_one_pass(frames, input_video, device=device)
-                del frames
-                gc.collect()
-                log(
-                    f"[diag] inference done: {len(scenes_secs)} scenes in "
-                    f"{_time.perf_counter() - _t_infer:.2f}s (device={device})"
+                    f"[diag] TransNetV2 detect done: {len(scenes_secs)} scenes in "
+                    f"{_time.perf_counter() - _t_detect:.2f}s (device={device})"
                 )
 
             np.save(scenes_secs_path, scenes_secs)
@@ -186,7 +190,12 @@ def backend(
         scenes = scenes_to_objects(scenes_secs=scenes_secs, scenes_frames=scenes_frames)
         # a few-frame scene stream-copies to a whole GOP, so it plays far too fast
         before_merge = len(scenes)
-        scenes = merge_short_scenes(scenes, str(input_video))
+        scenes = merge_short_scenes(
+            scenes, str(input_video), decoded_frames=decoded_frames, fps=input_video_fps
+        )
+        if decoded_frames is not None:
+            del decoded_frames
+            gc.collect()
         if len(scenes) != before_merge:
             log(f"Merged {before_merge - len(scenes)} ultra-short scene(s) into neighbours")
 

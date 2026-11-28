@@ -1,13 +1,8 @@
-"""Similarity search over one or more Scene Scout databases.
+"""Similarity search over one or more Scene Scout databases (v4 + v3 fallback).
 
-The scoring is a dot product over normalised vectors, and the only part that
-needs the model is turning the query into a vector, which :mod:`embedding` owns.
-
-Motion tags (see :mod:`motion`) ride along on every hit for display, and can
-filter by start direction; they never change the ranking. A flow search ranks
-purely by visual similarity to the clip's last frame: in a blind judging round,
-scenes ranked by motion direction flowed less often than random ones, while the
-most visually similar ones flowed most often.
+Scoring runs over contiguous per-video ``float32`` matrices from ``video_embeddings``
+(cached on-demand up to 512 MiB in persistent workers via :mod:`cache`), and fetches
+timestamps, WebP/JPEG thumbnails, and motion tags only for the final ``top_k`` hits.
 """
 
 from __future__ import annotations
@@ -21,11 +16,19 @@ import numpy as np
 
 from . import db as scoutdb
 from . import motion as scoutmotion
+from .cache import CachedVideoEmbeddings, EMBEDDING_CACHE
 from .types import SceneHit, SearchOptions
 
 
 def _norm_path(path: str) -> str:
-    return str(Path(path).resolve()).replace("\\", "/").lower()
+    try:
+        return str(Path(path).resolve()).replace("\\", "/").lower()
+    except OSError:
+        return str(path).replace("\\", "/").lower()
+
+
+def _norm_raw(path: str) -> str:
+    return str(path).replace("\\", "/").lower()
 
 
 def _scene_motion(start_raw: Optional[str], end_raw: Optional[str], has_row: bool) -> Optional[dict[str, Any]]:
@@ -48,20 +51,220 @@ def _passes_motion(motion: Optional[dict[str, Any]], options: SearchOptions) -> 
     return subject in options.start_subjects or (options.include_unclear and subject == "unclear")
 
 
-_CHUNK_ROWS = 4096
+def _load_db_videos(db_path: Path) -> list[CachedVideoEmbeddings]:
+    out: list[CachedVideoEmbeddings] = []
+    conn = scoutdb._open_strict_ro(db_path)
+    try:
+        conn.execute(f"PRAGMA mmap_size={scoutdb.MMAP_SIZE}")
+        rows = conn.execute(
+            """
+            SELECT v.id, v.filepath, v.duration_ms, ve.scene_count, ve.dim, ve.dtype, ve.embeddings
+            FROM video_embeddings ve
+            JOIN processed_videos v ON v.id = ve.video_id
+            WHERE v.status = 'completed'
+            ORDER BY v.id ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    for vid, filepath, duration_ms, scene_count, dim, dtype, blob in rows:
+        if not blob or scene_count <= 0 or dim <= 0:
+            continue
+        itemsize = 2 if dtype == "float16" else 4
+        if len(blob) != int(scene_count) * int(dim) * itemsize:
+            continue
+        out.append(
+            CachedVideoEmbeddings(
+                video_id=int(vid),
+                filepath=str(filepath),
+                norm_filepath=_norm_raw(filepath),
+                duration_ms=int(duration_ms) if duration_ms is not None else None,
+                scene_count=int(scene_count),
+                dim=int(dim),
+                dtype=str(dtype),
+                blob=bytes(blob),
+            )
+        )
+    return out
 
-_EDGE_JOIN = """
-            JOIN (SELECT video_id, MAX(end_time_ms) AS total_ms FROM scene_embeddings GROUP BY video_id) lengths
-              ON lengths.video_id = s.video_id
-"""
-_EDGE_FILTER = """
-              AND (lengths.total_ms <= 2 * :skip
-                   OR (s.start_time_ms >= :skip AND s.end_time_ms <= lengths.total_ms - :skip))
-"""
+
+def _is_v4_database(path: Path) -> bool:
+    try:
+        with scoutdb.connect_ro(path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='video_embeddings'"
+            ).fetchone()
+            return row is not None
+    except Exception:
+        return False
 
 
-def _motion_columns(motion_join: bool) -> str:
-    return "m.start_raw, m.end_raw, m.scene_id IS NOT NULL" if motion_join else "NULL, NULL, 0"
+def _search_one_v4(
+    query: np.ndarray,
+    path: Path,
+    options: SearchOptions,
+) -> list[SceneHit]:
+    videos = EMBEDDING_CACHE.get_or_load(path, _load_db_videos)
+    if not videos:
+        return []
+
+    q_dim = int(query.shape[0])
+    include_set = {_norm_raw(p) for p in options.video_paths} if options.video_paths else None
+    exclude_set = {_norm_raw(p) for p in options.exclude_video_paths} if options.exclude_video_paths else None
+    excluded = options.exclude_range
+    excluded_norm = _norm_path(excluded[0]) if excluded else None
+    filter_motion = bool(options.start_subjects)
+    skip_ms = max(0, int(options.skip_edges_ms))
+
+    # Candidate tuple: (score, video_id, scene_index, filepath, precomputed_motion)
+    candidates: list[tuple[float, int, int, str, Optional[dict[str, Any]]]] = []
+
+    ro_conn = None
+    has_motion = False
+    try:
+        for ep in videos:
+            if ep.dim != q_dim:
+                continue
+            if include_set is not None and ep.norm_filepath not in include_set:
+                continue
+            if exclude_set is not None and ep.norm_filepath in exclude_set:
+                continue
+
+            ep_excluded = excluded is not None and _norm_path(ep.filepath) == excluded_norm
+            needs_scene_scan = skip_ms > 0 or ep_excluded or filter_motion
+
+            keep_mask: Optional[np.ndarray] = None
+            motion_map: dict[int, Optional[dict[str, Any]]] = {}
+
+            if needs_scene_scan:
+                if ro_conn is None:
+                    ro_conn = scoutdb._open_strict_ro(path)
+                    ro_conn.execute(f"PRAGMA mmap_size={scoutdb.MMAP_SIZE}")
+                    has_motion = scoutdb.has_motion_table(ro_conn)
+
+                join_motion = filter_motion and has_motion
+                scene_rows = ro_conn.execute(
+                    f"""
+                    SELECT s.scene_index, s.start_time_ms, s.end_time_ms,
+                           {"m.start_raw, m.end_raw, m.scene_id IS NOT NULL" if join_motion else "NULL, NULL, 0"}
+                    FROM scenes s
+                    {"LEFT JOIN scene_motion m ON m.scene_id = s.id" if join_motion else ""}
+                    WHERE s.video_id = ?
+                    ORDER BY s.scene_index ASC
+                    """,
+                    (ep.video_id,),
+                ).fetchall()
+
+                total_ms = ep.duration_ms
+                if total_ms is None and scene_rows:
+                    total_ms = max(int(r[2]) for r in scene_rows)
+                apply_edge_cut = skip_ms > 0 and total_ms is not None and total_ms > 2 * skip_ms
+
+                keep_mask = np.zeros(ep.scene_count, dtype=bool)
+                for s_idx, start_ms, end_ms, start_raw, end_raw, has_m in scene_rows:
+                    idx = int(s_idx)
+                    if idx < 0 or idx >= ep.scene_count:
+                        continue
+                    if apply_edge_cut and (start_ms < skip_ms or end_ms > total_ms - skip_ms):  # type: ignore[operator]
+                        continue
+                    if ep_excluded and excluded is not None and start_ms < excluded[2] and end_ms > excluded[1]:
+                        continue
+                    if filter_motion:
+                        m_tags = _scene_motion(start_raw, end_raw, bool(has_m))
+                        if not _passes_motion(m_tags, options):
+                            continue
+                        motion_map[idx] = m_tags
+                    keep_mask[idx] = True
+
+                if not np.any(keep_mask):
+                    continue
+
+            np_dtype = np.float16 if ep.dtype == "float16" else np.float32
+            mat = np.frombuffer(ep.blob, dtype=np_dtype).reshape(ep.scene_count, ep.dim)
+            scores = (mat if mat.dtype == np.float32 else mat.astype(np.float32)) @ query
+
+            if keep_mask is not None:
+                scores = scores.copy()
+                scores[~keep_mask] = -np.inf
+
+            if options.similarity_threshold >= 0:
+                picks = np.flatnonzero(scores >= options.similarity_threshold)
+            else:
+                picks = np.flatnonzero(np.isfinite(scores))
+
+            if picks.size == 0:
+                continue
+            if len(picks) > options.top_k:
+                picks = picks[np.argpartition(-scores[picks], options.top_k - 1)[: options.top_k]]
+
+            for i in picks:
+                idx = int(i)
+                candidates.append(
+                    (float(scores[idx]), ep.video_id, idx, ep.filepath, motion_map.get(idx))
+                )
+
+        if not candidates:
+            return []
+
+        candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
+        top = candidates[: options.top_k]
+
+        if ro_conn is None:
+            ro_conn = scoutdb._open_strict_ro(path)
+            ro_conn.execute(f"PRAGMA mmap_size={scoutdb.MMAP_SIZE}")
+            has_motion = scoutdb.has_motion_table(ro_conn)
+
+        # Batch fetch metadata/thumbnails/motion per video_id instead of top_k separate queries
+        by_video: dict[int, list[int]] = {}
+        for _score, vid, s_idx, _filepath, _pre_motion in top:
+            by_video.setdefault(vid, []).append(s_idx)
+
+        fetched: dict[tuple[int, int], tuple[int, int, Any, Optional[str], Optional[str], int]] = {}
+        thumb_col = "t.thumbnail" if options.include_thumbnails else "NULL"
+        motion_cols = (
+            "m.start_raw, m.end_raw, m.scene_id IS NOT NULL"
+            if (has_motion and not filter_motion)
+            else "NULL, NULL, 0"
+        )
+        thumb_join = "LEFT JOIN scene_thumbnails t ON t.scene_id = s.id" if options.include_thumbnails else ""
+        motion_join = "LEFT JOIN scene_motion m ON m.scene_id = s.id" if (has_motion and not filter_motion) else ""
+
+        for vid, indices in by_video.items():
+            placeholders = ",".join("?" for _ in indices)
+            for row in ro_conn.execute(
+                f"""
+                SELECT s.scene_index, s.start_time_ms, s.end_time_ms, {thumb_col}, {motion_cols}
+                FROM scenes s
+                {thumb_join}
+                {motion_join}
+                WHERE s.video_id = ? AND s.scene_index IN ({placeholders})
+                """,
+                (vid, *indices),
+            ):
+                fetched[(vid, int(row[0]))] = (int(row[1]), int(row[2]), row[3], row[4], row[5], int(row[6]))
+
+        hits: list[SceneHit] = []
+        for score, vid, s_idx, filepath, pre_motion in top:
+            row = fetched.get((vid, s_idx))
+            if row is None:
+                continue
+            start_ms, end_ms, thumb, start_raw, end_raw, has_m = row
+            hits.append(
+                SceneHit(
+                    video_path=filepath,
+                    scene_index=s_idx,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    score=score,
+                    database=path.stem,
+                    thumbnail_b64=base64.b64encode(thumb).decode("ascii") if thumb else None,
+                    motion=pre_motion if filter_motion else _scene_motion(start_raw, end_raw, bool(has_m)),
+                )
+            )
+        return hits
+    finally:
+        if ro_conn is not None:
+            ro_conn.close()
 
 
 def _search_one(
@@ -69,122 +272,18 @@ def _search_one(
     database: str | Path,
     options: SearchOptions,
 ) -> list[SceneHit]:
-    """Score every scene in one database against the query.
-
-    Two passes: embeddings are scored in chunks with one matrix product each, and
-    only the top hits then read their thumbnails and motion, so a search never
-    loads the thumbnail of every scene in the database.
-    """
+    """Score every scene in one database against ``query``."""
     if options.top_k <= 0:
         return []
     path = Path(database)
-    norm_videos = {p.replace("\\", "/").lower() for p in options.video_paths} if options.video_paths else None
-    excluded = options.exclude_range
-    excluded_path = _norm_path(excluded[0]) if excluded else None
-    blob_size = query.shape[0] * 4
-    filter_motion = bool(options.start_subjects)
-
-    candidates: list[tuple[float, int, int, int, int, str, Optional[dict[str, Any]]]] = []
-    order = 0
-
-    with scoutdb.connect(path) as conn:
-        motion_join = scoutdb.has_motion_table(conn)
-        join_motion = filter_motion and motion_join
-        skip = options.skip_edges_ms
-        cursor = conn.execute(
-            f"""
-            SELECT s.id, s.start_time_ms, s.end_time_ms, s.embedding, v.filepath,
-                   {_motion_columns(join_motion)}
-            FROM scene_embeddings s
-            JOIN processed_videos v ON v.id = s.video_id
-            {"LEFT JOIN scene_motion m ON m.scene_id = s.id" if join_motion else ""}
-            {_EDGE_JOIN if skip > 0 else ""}
-            WHERE v.status = 'completed'
-            {_EDGE_FILTER if skip > 0 else ""}
-            """,
-            {"skip": skip} if skip > 0 else {},
-        )
-
-        while rows := cursor.fetchmany(_CHUNK_ROWS):
-            kept = []
-            for scene_id, start_ms, end_ms, blob, filepath, start_raw, end_raw, has_motion in rows:
-                order += 1
-                if len(blob) != blob_size:
-                    continue
-                if norm_videos is not None and filepath.replace("\\", "/").lower() not in norm_videos:
-                    continue
-                if (
-                    excluded
-                    and start_ms < excluded[2]
-                    and end_ms > excluded[1]
-                    and _norm_path(filepath) == excluded_path
-                ):
-                    continue
-                motion = _scene_motion(start_raw, end_raw, bool(has_motion)) if filter_motion else None
-                if filter_motion and not _passes_motion(motion, options):
-                    continue
-                kept.append((order, scene_id, start_ms, end_ms, blob, filepath, motion))
-            if not kept:
-                continue
-
-            matrix = np.frombuffer(b"".join(row[4] for row in kept), dtype=np.float32).reshape(len(kept), -1)
-            scores = matrix @ query
-            picks = np.flatnonzero(scores >= options.similarity_threshold) if options.similarity_threshold >= 0 else np.arange(len(kept))
-            if len(picks) > options.top_k:
-                picks = picks[np.argpartition(-scores[picks], options.top_k - 1)[: options.top_k]]
-            for i in picks:
-                row_order, scene_id, start_ms, end_ms, _, filepath, motion = kept[i]
-                candidates.append((float(scores[i]), row_order, scene_id, start_ms, end_ms, filepath, motion))
-
-        candidates.sort(key=lambda c: (-c[0], c[1]))
-        top = candidates[: options.top_k]
-        details = _scene_details(conn, [c[2] for c in top], motion_join, options.include_thumbnails)
-
-    hits = []
-    for score, _, scene_id, start_ms, end_ms, filepath, motion in top:
-        scene_index, thumb, start_raw, end_raw, has_motion = details[scene_id]
-        hits.append(
-            SceneHit(
-                video_path=filepath,
-                scene_index=scene_index,
-                start_ms=start_ms,
-                end_ms=end_ms,
-                score=score,
-                database=path.stem,
-                thumbnail_b64=base64.b64encode(thumb).decode("ascii") if thumb else None,
-                motion=motion if filter_motion else _scene_motion(start_raw, end_raw, bool(has_motion)),
-            )
-        )
-    return hits
-
-
-def _scene_details(
-    conn, scene_ids: list[int], motion_join: bool, include_thumbnails: bool
-) -> dict[int, tuple[int, Optional[bytes], Optional[str], Optional[str], int]]:
-    """scene index, thumbnail and motion for the given scenes, by scene id."""
-    if not scene_ids:
-        return {}
-    marks = ",".join("?" * len(scene_ids))
-    rows = conn.execute(
-        f"""
-        SELECT s.id, s.scene_index, {"s.thumbnail" if include_thumbnails else "NULL"},
-               {_motion_columns(motion_join)}
-        FROM scene_embeddings s
-        {"LEFT JOIN scene_motion m ON m.scene_id = s.id" if motion_join else ""}
-        WHERE s.id IN ({marks})
-        """,
-        scene_ids,
-    ).fetchall()
-    return {row[0]: row[1:] for row in rows}
+    if not path.is_file():
+        return []
+    scoutdb.ensure_v4_ready(path)
+    return _search_one_v4(query, path, options)
 
 
 def search(query: np.ndarray, options: SearchOptions) -> list[SceneHit]:
-    """Search every selected database and merge the results.
-
-    Each database is reduced to its own top_k first, then the merged list is cut
-    again, so one large database cannot crowd out a small one before scores are
-    compared.
-    """
+    """Search every selected database and merge the results."""
     hits: list[SceneHit] = []
     for database in options.databases:
         if Path(database).is_file():
@@ -215,12 +314,7 @@ def search_flow(
     start_ms: Optional[int] = None,
     end_ms: Optional[int] = None,
 ) -> tuple[list[SceneHit], dict[str, Any]]:
-    """Scenes that flow out of the end of a clip, most visually similar first.
-
-    The query is the clip's last frame (or the text, when given). The clip's
-    own motion tags are measured too, but only returned for display. Returns
-    the hits and those tags.
-    """
+    """Scenes that flow out of the end of a clip, most visually similar first."""
     from .embedding import embed_frames, embed_text
 
     measured = scoutmotion.measure_clip(clip_path, start_ms, end_ms)

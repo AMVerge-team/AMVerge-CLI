@@ -54,12 +54,37 @@ def _grab_frame(video_path: str, at_sec: float) -> np.ndarray | None:
     return np.frombuffer(result.stdout[:_SAMPLE_BYTES], dtype=np.uint8).astype(np.float32)
 
 
+def _grab_frame_in_memory(
+    decoded_frames: np.ndarray,
+    fps: float,
+    at_sec: float,
+) -> np.ndarray | None:
+    if len(decoded_frames) == 0 or fps <= 0:
+        return None
+    idx = min(len(decoded_frames) - 1, max(0, int(round(at_sec * fps))))
+    return decoded_frames[idx].astype(np.float32, copy=False)
+
+
+def _grab_frame_pyav(container, stream, at_sec: float) -> np.ndarray | None:
+    try:
+        target_pts = int(max(0.0, at_sec) / float(stream.time_base))
+        container.seek(target_pts, stream=stream, backward=True, any_frame=False)
+        for frame in container.decode(stream):
+            if frame.pts is not None and float(frame.pts * stream.time_base) + 1e-3 >= max(0.0, at_sec):
+                return frame.reformat(width=_SAMPLE_W, height=_SAMPLE_H, format="rgb24", interpolation="FAST_BILINEAR").to_ndarray().astype(np.float32)
+    except Exception:
+        return None
+    return None
+
+
 def _similarity(a: np.ndarray | None, b: np.ndarray | None) -> float:
     """Cosine similarity of two frames; -1 when either is missing."""
     if a is None or b is None:
         return -1.0
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    return float(np.dot(a, b) / denom) if denom else -1.0
+    a_flat = a.reshape(-1)
+    b_flat = b.reshape(-1)
+    denom = float(np.linalg.norm(a_flat) * np.linalg.norm(b_flat))
+    return float(np.dot(a_flat, b_flat) / denom) if denom else -1.0
 
 
 def _midpoint(scene: dict) -> float:
@@ -70,6 +95,9 @@ def merge_short_scenes(
     scenes: list[dict],
     video_path: str,
     min_sec: float = MIN_SCENE_SEC,
+    *,
+    decoded_frames: np.ndarray | None = None,
+    fps: float | None = None,
 ) -> list[dict]:
     """Merge scenes shorter than ``min_sec`` into their closest-looking neighbour.
 
@@ -80,6 +108,9 @@ def merge_short_scenes(
         scenes: Scene dicts from :func:`scenes_to_objects`.
         video_path: Source video, sampled for the comparison frames.
         min_sec: Scenes shorter than this are merged away.
+        decoded_frames: Optional pre-decoded ``(N, H, W, 3)`` array to sample
+            from in RAM without spawning ``ffmpeg``.
+        fps: Frame rate for indexing ``decoded_frames``.
 
     Returns:
         A new scene list. Returned unchanged when nothing is short enough.
@@ -90,40 +121,65 @@ def merge_short_scenes(
     if all(float(s["end_sec"]) - float(s["start_sec"]) >= min_sec for s in scenes):
         return scenes
 
-    merged: list[dict] = []
-    for scene in scenes:
-        duration = float(scene["end_sec"]) - float(scene["start_sec"])
-        has_next = scene is not scenes[-1]
+    use_memory = decoded_frames is not None and len(decoded_frames) > 0 and (fps or 0) > 0
+    pyav_container = None
+    pyav_stream = None
+    if not use_memory:
+        try:
+            import av
+            pyav_container = av.open(video_path, options={"err_detect": "ignore_err"})
+            pyav_stream = pyav_container.streams.video[0]
+            pyav_stream.thread_type = "AUTO"
+        except Exception:
+            pyav_container = None
+            pyav_stream = None
 
-        if duration >= min_sec or (not merged and not has_next):
-            merged.append(dict(scene))
-            continue
+    def grab(at_sec: float) -> np.ndarray | None:
+        if use_memory:
+            return _grab_frame_in_memory(decoded_frames, float(fps), at_sec)
+        if pyav_container is not None and pyav_stream is not None:
+            res = _grab_frame_pyav(pyav_container, pyav_stream, at_sec)
+            if res is not None:
+                return res
+        return _grab_frame(video_path, at_sec)
 
-        index = scenes.index(scene)
-        prev_scene = merged[-1] if merged else None
-        next_scene = scenes[index + 1] if index + 1 < len(scenes) else None
+    try:
+        merged: list[dict] = []
+        for index, scene in enumerate(scenes):
+            duration = float(scene["end_sec"]) - float(scene["start_sec"])
+            has_next = index + 1 < len(scenes)
 
-        if prev_scene is None:
-            _extend_into_next(scene, next_scene)
-            continue
-        if next_scene is None:
-            _extend_into_prev(prev_scene, scene)
-            continue
+            if duration >= min_sec or (not merged and not has_next):
+                merged.append(dict(scene))
+                continue
 
-        sample = _grab_frame(video_path, _midpoint(scene))
-        to_prev = _similarity(sample, _grab_frame(video_path, _midpoint(prev_scene)))
-        to_next = _similarity(sample, _grab_frame(video_path, _midpoint(next_scene)))
+            prev_scene = merged[-1] if merged else None
+            next_scene = scenes[index + 1] if has_next else None
 
-        if to_prev >= to_next:
-            _extend_into_prev(prev_scene, scene)
-        else:
-            _extend_into_next(scene, next_scene)
+            if prev_scene is None:
+                _extend_into_next(scene, next_scene)
+                continue
+            if next_scene is None:
+                _extend_into_prev(prev_scene, scene)
+                continue
 
-    for position, scene in enumerate(merged):
-        scene["scene_index"] = position
-        scene["duration_sec"] = float(scene["end_sec"]) - float(scene["start_sec"])
+            sample = grab(_midpoint(scene))
+            to_prev = _similarity(sample, grab(_midpoint(prev_scene)))
+            to_next = _similarity(sample, grab(_midpoint(next_scene)))
 
-    return merged
+            if to_prev >= to_next:
+                _extend_into_prev(prev_scene, scene)
+            else:
+                _extend_into_next(scene, next_scene)
+
+        for position, scene in enumerate(merged):
+            scene["scene_index"] = position
+            scene["duration_sec"] = float(scene["end_sec"]) - float(scene["start_sec"])
+
+        return merged
+    finally:
+        if pyav_container is not None:
+            pyav_container.close()
 
 
 def _extend_into_prev(prev_scene: dict, short: dict) -> None:

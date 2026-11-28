@@ -55,6 +55,7 @@ def _search(req: dict, root: Optional[Path], device: Optional[str]) -> dict:
         device=req.get("device") or embedding.resolve_device(device),
         databases=targets,
         video_paths=_as_list(req.get("videos") or req.get("video")),
+        exclude_video_paths=_as_list(req.get("exclude_videos") or req.get("exclude_video")),
         start_subjects=list(req.get("start_subjects") or []),
         include_unclear=bool(req.get("include_unclear", False)),
         skip_edges_ms=int(req.get("skip_edges_ms", 0)),
@@ -92,6 +93,7 @@ def _add(req: dict, root: Optional[Path], device: Optional[str], on_progress: Ca
     if not path.is_file():
         return {"status": "error", "error": f"Database not found at {path}"}
 
+    detected_ranges: list[tuple[int, int]] = []
     count = indexing.index_video(
         path,
         video,
@@ -103,8 +105,17 @@ def _add(req: dict, root: Optional[Path], device: Optional[str], on_progress: Ca
         generate_thumbnails=not bool(req.get("no_thumbnails", False)),
         scenes=indexing.precut_scenes(req.get("scenes")) or None,
         on_progress=on_progress,
+        merge_short=bool(req.get("merge_short", False)),
+        scene_cache_dir=req.get("scene_cache_dir"),
+        out_scenes=detected_ranges,
     )
-    return {"status": "ok", "done": True, "scenes": count, "video": video}
+    return {
+        "status": "ok",
+        "done": True,
+        "scenes": count,
+        "video": video,
+        "scenes_ranges": [[s, e] for s, e in detected_ranges],
+    }
 
 
 def run_daemon(
@@ -198,6 +209,8 @@ def run_daemon(
             elif action == "unload":
                 with lock:
                     embedding.unload_model()
+                    from ...core.detection.ai_scene_detection import unload_transnet_model
+                    unload_transnet_model()
                     in_standby = False
                 reply = {"status": "ok", "state": "unloaded"}
             elif action == "status":
@@ -227,4 +240,6 @@ def run_daemon(
 
     stop_event.set()
     embedding.unload_model()
+    from ...core.detection.ai_scene_detection import unload_transnet_model
+    unload_transnet_model()
     log("[diag] scene scout daemon exited cleanly")
