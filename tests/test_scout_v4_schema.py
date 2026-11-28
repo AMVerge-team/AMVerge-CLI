@@ -500,5 +500,38 @@ def test_v1_to_v4_atomic_migration_and_fk_integrity(tmp_path: Path):
     assert info.video_count == 1
     assert info.scene_count == 1
     assert bak is not None and bak.exists()
+    assert bak.name == "legacy_v1.scoutdb.v1.bak"
     with sqlite3.connect(str(db_file)) as conn:
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_upgrade_database_without_backup_skips_bak_file(tmp_path: Path):
+    db_file = tmp_path / "legacy_v3_nobak.scoutdb"
+    q = _unit_vec(14)
+    with sqlite3.connect(str(db_file)) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE processed_videos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filepath TEXT UNIQUE NOT NULL,
+                modified_at REAL NOT NULL
+            );
+            CREATE TABLE scene_embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id INTEGER NOT NULL,
+                scene_index INTEGER NOT NULL,
+                start_time_ms INTEGER NOT NULL,
+                end_time_ms INTEGER NOT NULL,
+                embedding BLOB NOT NULL
+            );
+            PRAGMA user_version = 3;
+            """
+        )
+        conn.execute("INSERT INTO processed_videos (filepath, modified_at) VALUES ('D:/Anime/ep1.mp4', 5.0)")
+        conn.execute("INSERT INTO scene_embeddings (video_id, scene_index, start_time_ms, end_time_ms, embedding) VALUES (1, 0, 0, 1500, ?)", (q.tobytes(),))
+        conn.commit()
+
+    info, bak = scoutdb.upgrade_database(db_file, backup=False)
+    assert info.schema_version == 4
+    assert bak is None
+    assert not list(tmp_path.glob("*.bak"))
